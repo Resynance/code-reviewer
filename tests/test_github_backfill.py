@@ -158,35 +158,60 @@ def test_list_prs_includes_state(monkeypatch):
     assert {p["number"]: p["state"] for p in prs} == {1: "open", 2: "closed"}
 
 
+class RouteClient:
+    """Fake httpx.Client that dispatches by URL/headers (call order independent)."""
+
+    def __init__(self, meta, diff_resp, files_pages):
+        self.meta = meta
+        self.diff_resp = diff_resp
+        self.files_pages = files_pages
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def get(self, url, params=None, headers=None):
+        if url.endswith("/files"):
+            return self.files_pages.get((params or {}).get("page", 1), FakeResp(200, []))
+        if headers and "diff" in headers.get("Accept", ""):
+            return self.diff_resp
+        return self.meta
+
+
 def test_fetch_pr_shapes_form_data(monkeypatch):
     meta = FakeResp(200, {"number": 196, "title": "T", "body": "B",
                           "user": {"login": "dev"}, "base": {"ref": "develop"}})
     diff = FakeResp(200, None, "DIFF-TEXT")
-    files = FakeResp(200, [{"filename": "a.py"}, {"filename": "b.py"}])
-    seq, state = [meta, diff, files], {"i": 0}
-
-    class SeqClient:
-        def __init__(self, **kw):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-        def get(self, url, params=None, headers=None):
-            r = seq[state["i"]]
-            state["i"] += 1
-            return r
-
-    monkeypatch.setattr(httpx, "Client", lambda **kw: SeqClient(**kw))
+    files = {1: FakeResp(200, [{"filename": "a.py"}, {"filename": "b.py"}]), 2: FakeResp(200, [])}
+    monkeypatch.setattr(httpx, "Client", lambda **kw: RouteClient(meta, diff, files))
     data = gb.fetch_pr("org/repo", 196, token="t")
     assert data["pr_number"] == 196
     assert data["title"] == "T" and data["description"] == "B"
     assert data["author"] == "dev" and data["base_branch"] == "develop"
     assert data["diff"] == "DIFF-TEXT"
     assert data["files_changed"] == ["a.py", "b.py"]
+
+
+def test_fetch_pr_builds_diff_from_files_on_406(monkeypatch):
+    # GitHub 406s the .diff media type on PRs with >300 files.
+    meta = FakeResp(200, {"number": 1, "title": "big", "body": "",
+                          "user": {"login": "d"}, "base": {"ref": "main"}})
+    diff406 = FakeResp(406, {"message": "Sorry, the diff exceeded the maximum number of files (300)."}, "")
+    files = {
+        1: FakeResp(200, [
+            {"filename": "a.py", "status": "modified", "patch": "@@ -1 +1 @@\n-x\n+y"},
+            {"filename": "big.bin", "status": "added"},  # no patch
+        ]),
+        2: FakeResp(200, []),
+    }
+    monkeypatch.setattr(httpx, "Client", lambda **kw: RouteClient(meta, diff406, files))
+    data = gb.fetch_pr("org/repo", 1, token="t")
+    assert "diff --git a/a.py b/a.py" in data["diff"]
+    assert "+y" in data["diff"]
+    assert "no textual diff available" in data["diff"]  # binary file
+    assert data["files_changed"] == ["a.py", "big.bin"]
 
 
 def test_fetch_pr_missing_token():

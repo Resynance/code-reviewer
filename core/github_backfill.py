@@ -157,9 +157,31 @@ def list_open_prs(repo: str, token: str, pages: int = 5) -> list:
     return list_prs(repo, token, state="open", pages=pages)
 
 
-def fetch_pr(repo: str, number, token: str) -> dict:
+def _diff_from_files(files: list) -> str:
+    """Reconstruct a unified diff from the List-PR-files payload.
+
+    Used when GitHub's `.diff` media type returns 406 (it caps at 300 files).
+    Each file object carries a `patch` (the per-file hunks); binary/oversize
+    files have none.
+    """
+    parts = []
+    for f in files:
+        name = f.get("filename", "?")
+        status = f.get("status")
+        header = f"diff --git a/{name} b/{name}"
+        if status:
+            header += f"  ({status})"
+        patch = f.get("patch")
+        parts.append(f"{header}\n{patch}" if patch else f"{header}\n(no textual diff available)")
+    return "\n\n".join(parts)
+
+
+def fetch_pr(repo: str, number, token: str, max_file_pages: int = 20) -> dict:
     """Fetch one PR's metadata + unified diff + changed files, shaped for the
     review form. Raises ValueError / RuntimeError on the usual conditions.
+
+    Large PRs (>300 files) 406 on GitHub's `.diff` media type; in that case the
+    diff is reconstructed from the paginated List-PR-files endpoint.
     """
     import httpx
 
@@ -171,15 +193,26 @@ def fetch_pr(repo: str, number, token: str) -> dict:
         _raise_for_status(meta_resp, repo)
         meta = meta_resp.json()
 
-        diff_resp = client.get(base, headers={"Accept": "application/vnd.github.v3.diff"})
-        _raise_for_status(diff_resp, repo)
-        diff = diff_resp.text
+        # Changed files (paginated). Needed for files_changed and as the diff
+        # fallback when the .diff endpoint refuses an oversize PR.
+        files = []
+        for page in range(1, max_file_pages + 1):
+            fr = client.get(f"{base}/files", params={"per_page": PER_PAGE, "page": page})
+            if fr.status_code != 200:
+                break
+            batch = fr.json()
+            if not batch:
+                break
+            files.extend(batch)
 
-        files_resp = client.get(f"{base}/files", params={"per_page": PER_PAGE})
-        files = (
-            [f.get("filename") for f in files_resp.json()]
-            if files_resp.status_code == 200 else []
-        )
+        diff_resp = client.get(base, headers={"Accept": "application/vnd.github.v3.diff"})
+        if diff_resp.status_code == 200:
+            diff = diff_resp.text
+        elif diff_resp.status_code == 406:
+            diff = _diff_from_files(files)  # too many files for the .diff endpoint
+        else:
+            _raise_for_status(diff_resp, repo)
+            diff = ""  # unreachable — _raise_for_status raises on non-200
 
     return {
         "pr_number": meta.get("number", number),
@@ -189,5 +222,5 @@ def fetch_pr(repo: str, number, token: str) -> dict:
         "author": (meta.get("user") or {}).get("login", "unknown"),
         "base_branch": (meta.get("base") or {}).get("ref", "main"),
         "diff": diff,
-        "files_changed": files,
+        "files_changed": [f.get("filename") for f in files],
     }
