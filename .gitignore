@@ -6,7 +6,9 @@ __pycache__/
 
 # Secrets & local config
 .env
+.env.*
 config.json
+reviews.json
 
 # Vector store
 .chroma/

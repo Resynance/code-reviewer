@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import Sidebar from './components/Sidebar.jsx'
 import ReviewPage from './pages/ReviewPage.jsx'
+import ReviewsPage from './pages/ReviewsPage.jsx'
 import DecisionsPage from './pages/DecisionsPage.jsx'
 import SettingsPage from './pages/SettingsPage.jsx'
 import LoginPage from './pages/LoginPage.jsx'
@@ -29,7 +30,7 @@ export default function App() {
     return <LoginPage />
   }
 
-  const pages = { review: ReviewPage, decisions: DecisionsPage, settings: SettingsPage }
+  const pages = { review: ReviewPage, history: ReviewsPage, decisions: DecisionsPage, settings: SettingsPage }
   const Page = pages[page] || ReviewPage
 
   return (

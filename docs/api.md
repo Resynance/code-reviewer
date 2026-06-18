@@ -55,7 +55,22 @@ Response:
 `issue.severity` ∈ `critical|high|medium|low`. `suggestion.type` ∈
 `security|performance|architecture|style|test_coverage`.
 
-Errors: `400` if `OPENROUTER_API_KEY` is not set; `500` on engine/LLM failure.
+Each successful review is also **saved to history** (best-effort — a save failure
+never fails the review). Errors: `400` if `OPENROUTER_API_KEY` is not set; `500`
+on engine/LLM failure.
+
+### `GET /api/reviews?repo=&pr_number=&limit=50`
+Saved review runs, newest first (full history — every run is kept, including
+re-reviews of the same PR). All query params optional.
+```json
+{ "reviews": [
+  { "id": 12, "repo": "org/a", "pr_number": 88, "title": "…", "author": "dev",
+    "approved": false, "confidence": 0.82, "summary": "…",
+    "issues": [...], "suggestions": [...], "past_decisions": [...],
+    "source": "api", "created_at": "2026-06-18T…" }
+], "count": 1 }
+```
+`source` is `api` (UI) or `webhook` (GitHub PR event).
 
 ## Decisions
 

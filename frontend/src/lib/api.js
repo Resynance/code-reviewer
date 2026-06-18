@@ -72,4 +72,12 @@ export const api = {
 
   repoPr: (repo, number) =>
     request(`/api/repos/pr?repo=${encodeURIComponent(repo)}&number=${encodeURIComponent(number)}`),
+
+  reviews: ({ repo = '', prNumber, limit = 50 } = {}) => {
+    const q = new URLSearchParams()
+    if (repo) q.set('repo', repo)
+    if (prNumber != null && prNumber !== '') q.set('pr_number', prNumber)
+    q.set('limit', String(limit))
+    return request(`/api/reviews?${q.toString()}`)
+  },
 }

@@ -139,6 +139,24 @@ def test_review_returns_engine_result(client, monkeypatch):
     assert body["pr_number"] == 7 and body["approved"] is True and body["confidence"] == 0.8
 
 
+def test_review_is_saved_to_history(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+
+    class FakeEngine:
+        def review(self, req):
+            return ReviewResult(pr_number=req.pr_number, summary="ok", approved=True,
+                                confidence=0.9, issues=[], suggestions=[], past_decisions_applied=[])
+
+    monkeypatch.setattr(main, "get_engine", lambda: FakeEngine())
+    assert tc.get("/api/reviews").json()["count"] == 0
+    tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+x"})
+    hist = tc.get("/api/reviews").json()
+    assert hist["count"] == 1
+    r = hist["reviews"][0]
+    assert r["pr_number"] == 7 and r["repo"] == "org/a" and r["source"] == "api"
+
+
 # ----- backfill ----- #
 
 def test_backfill_requires_token(client):

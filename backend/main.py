@@ -25,6 +25,7 @@ from backend.auth import require_user
 sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
 
 import config_store
+import review_store
 from decision_store import create_store, ChromaDecisionStore
 from review_engine import CodeReviewEngine, ReviewRequest
 from github_backfill import (
@@ -150,6 +151,7 @@ async def run_review(body: ReviewRequestBody):
 
     try:
         result = engine.review(request)
+        _save_review(request, result, source="api")
         return {
             "pr_number": result.pr_number,
             "summary": result.summary,
@@ -161,6 +163,33 @@ async def run_review(body: ReviewRequestBody):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _save_review(request, result, source):
+    """Persist a review run (best-effort — never fail the review on a save error)."""
+    try:
+        review_store.save_review({
+            "repo": request.repo,
+            "pr_number": request.pr_number,
+            "title": request.title,
+            "author": request.author,
+            "approved": result.approved,
+            "confidence": result.confidence,
+            "summary": result.summary,
+            "issues": result.issues,
+            "suggestions": result.suggestions,
+            "past_decisions": result.past_decisions_applied,
+            "source": source,
+        })
+    except Exception:
+        pass
+
+
+@app.get("/api/reviews")
+def list_review_history(repo: Optional[str] = None, pr_number: Optional[int] = None, limit: int = 50):
+    """Return saved review runs (full history), newest first."""
+    reviews = review_store.list_reviews(repo=repo, pr_number=pr_number, limit=limit)
+    return {"reviews": reviews, "count": len(reviews)}
 
 
 @app.post("/api/decisions/search")
@@ -460,6 +489,7 @@ async def github_webhook(request: Request):
         files_changed=[],
     )
     result = engine.review(request_obj)
+    _save_review(request_obj, result, source="webhook")
     return {
         "pr_number": result.pr_number,
         "approved": result.approved,
