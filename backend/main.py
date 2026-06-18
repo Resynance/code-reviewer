@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
 
 import config_store
 import review_store
+import review_jobs
 import access_store
 from decision_store import create_store, ChromaDecisionStore
 from review_engine import CodeReviewEngine, ReviewRequest
@@ -164,12 +165,12 @@ def health():
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
 
 
-@app.post("/api/review")
-async def run_review(body: ReviewRequestBody):
-    """Run an AI code review on the provided diff."""
-    if not os.getenv("OPENROUTER_API_KEY"):
-        raise HTTPException(status_code=400, detail="OPENROUTER_API_KEY not set")
+def _execute_review(body: ReviewRequestBody, source: str) -> dict:
+    """Run the review synchronously and return the response payload.
 
+    Shared by the async job runner and the GitHub webhook so the review logic
+    lives in one place.
+    """
     engine = get_engine()
     request = ReviewRequest(
         pr_number=body.pr_number,
@@ -181,21 +182,61 @@ async def run_review(body: ReviewRequestBody):
         base_branch=body.base_branch,
         files_changed=body.files_changed,
     )
+    result = engine.review(request)
+    _save_review(request, result, source=source)
+    return {
+        "pr_number": result.pr_number,
+        "summary": result.summary,
+        "approved": result.approved,
+        "confidence": result.confidence,
+        "issues": result.issues,
+        "suggestions": result.suggestions,
+        "past_decisions_applied": result.past_decisions_applied,
+    }
 
+
+@app.post("/api/review")
+def create_review(body: ReviewRequestBody):
+    """Enqueue an async review and return its job id.
+
+    The model call can take long enough to exceed the serverless function limit
+    if held in one request (a 504). Instead the client enqueues here, kicks off
+    POST /api/review/{id}/run, and polls GET /api/review/{id} for the result.
+    """
+    if not os.getenv("OPENROUTER_API_KEY"):
+        raise HTTPException(status_code=400, detail="OPENROUTER_API_KEY not set")
+    job = review_jobs.create_job(body.model_dump())
+    return {"id": job["id"], "status": job["status"]}
+
+
+@app.post("/api/review/{job_id}/run")
+def run_review_job(job_id: str):
+    """Execute a queued review job, persisting the outcome to the job record.
+
+    Called by the client right after enqueue. The work runs in this request, but
+    the result is written to the job so polling recovers it even if this
+    connection drops. Idempotent: a job already running/finished is returned as-is.
+    """
+    job = review_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Review job not found")
+    if job["status"] != "queued":
+        return job
+    review_jobs.update_job(job_id, status="running")
     try:
-        result = engine.review(request)
-        _save_review(request, result, source="api")
-        return {
-            "pr_number": result.pr_number,
-            "summary": result.summary,
-            "approved": result.approved,
-            "confidence": result.confidence,
-            "issues": result.issues,
-            "suggestions": result.suggestions,
-            "past_decisions_applied": result.past_decisions_applied,
-        }
+        result = _execute_review(ReviewRequestBody(**job["request"]), source="api")
+        return review_jobs.update_job(job_id, status="done", result=result)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return review_jobs.update_job(job_id, status="error", error=str(e))
+
+
+@app.get("/api/review/{job_id}")
+def get_review_job(job_id: str):
+    """Poll a review job's status/result."""
+    job = review_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Review job not found")
+    return job
 
 
 def _save_review(request, result, source):

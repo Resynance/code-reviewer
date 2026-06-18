@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { api } from '../lib/api.js'
 
 export default function ReviewPage() {
@@ -21,6 +21,9 @@ export default function ReviewPage() {
   const [loadingPr, setLoadingPr] = useState(false)
   const [prError, setPrError] = useState(null)
   const [selectedPr, setSelectedPr] = useState('')
+  // Tracks the in-flight review job so a superseded/unmounted poll stops.
+  const jobRef = useRef(null)
+  useEffect(() => () => { jobRef.current = null }, [])
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
@@ -77,15 +80,40 @@ export default function ReviewPage() {
     setResult(null)
     setError(null)
     try {
-      const res = await api.review({
+      const { id } = await api.createReview({
         ...form,
         files_changed: form.files_changed.filter(Boolean),
       })
-      setResult(res)
+      jobRef.current = id
+      // Drive the work in the background; the result is read via polling, so a
+      // dropped run connection still recovers once the job finishes.
+      api.runReview(id).catch(() => {})
+      poll(id)
     } catch (e) {
       setError(e.message)
-    } finally {
       setLoading(false)
+    }
+  }
+
+  // Poll a review job until it finishes, ignoring results for superseded jobs.
+  async function poll(id) {
+    if (jobRef.current !== id) return
+    let job
+    try {
+      job = await api.getReviewJob(id)
+    } catch (e) {
+      if (jobRef.current === id) { setError(e.message); setLoading(false) }
+      return
+    }
+    if (jobRef.current !== id) return
+    if (job.status === 'done') {
+      setResult(job.result)
+      setLoading(false)
+    } else if (job.status === 'error') {
+      setError(job.error || 'Review failed')
+      setLoading(false)
+    } else {
+      setTimeout(() => poll(id), 1500)
     }
   }
 

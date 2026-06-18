@@ -32,7 +32,10 @@ async function request(path, { method = 'GET', body } = {}) {
 }
 
 export const api = {
-  review: (body) => request('/api/review', { method: 'POST', body }),
+  // Async review: enqueue, kick off the run, then poll the job for the result.
+  createReview: (body) => request('/api/review', { method: 'POST', body }),
+  runReview: (id) => request(`/api/review/${encodeURIComponent(id)}/run`, { method: 'POST' }),
+  getReviewJob: (id) => request(`/api/review/${encodeURIComponent(id)}`),
 
   postPrComment: ({ repo, pr_number, body }) =>
     request('/api/pr-comment', { method: 'POST', body: { repo, pr_number, body } }),

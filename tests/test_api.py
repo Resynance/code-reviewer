@@ -123,7 +123,7 @@ def test_review_requires_api_key(client):
     assert resp.status_code == 400
 
 
-def test_review_returns_engine_result(client, monkeypatch):
+def test_review_enqueues_and_runs(client, monkeypatch):
     tc, main = client
     monkeypatch.setenv("OPENROUTER_API_KEY", "key")
 
@@ -133,10 +133,26 @@ def test_review_returns_engine_result(client, monkeypatch):
                                 confidence=0.8, issues=[], suggestions=[], past_decisions_applied=[])
 
     monkeypatch.setattr(main, "get_engine", lambda: FakeEngine())
-    resp = tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+x"})
-    assert resp.status_code == 200
-    body = resp.json()
+
+    # Enqueue → a queued job with an id.
+    job = tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+x"}).json()
+    assert job["status"] == "queued" and job["id"]
+
+    # Run → the job completes with the engine result.
+    run = tc.post(f"/api/review/{job['id']}/run").json()
+    assert run["status"] == "done"
+    body = run["result"]
     assert body["pr_number"] == 7 and body["approved"] is True and body["confidence"] == 0.8
+
+    # Poll → the same finished job.
+    polled = tc.get(f"/api/review/{job['id']}").json()
+    assert polled["status"] == "done" and polled["result"]["pr_number"] == 7
+
+
+def test_review_job_not_found(client):
+    tc, _ = client
+    assert tc.get("/api/review/00000000-0000-0000-0000-000000000000").status_code == 404
+    assert tc.post("/api/review/nope/run").status_code == 404
 
 
 def test_pr_comment_requires_token(client):
@@ -164,7 +180,8 @@ def test_review_is_saved_to_history(client, monkeypatch):
 
     monkeypatch.setattr(main, "get_engine", lambda: FakeEngine())
     assert tc.get("/api/reviews").json()["count"] == 0
-    tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+x"})
+    job = tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+x"}).json()
+    tc.post(f"/api/review/{job['id']}/run")
     hist = tc.get("/api/reviews").json()
     assert hist["count"] == 1
     r = hist["reviews"][0]

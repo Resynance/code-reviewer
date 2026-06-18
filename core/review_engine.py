@@ -187,7 +187,9 @@ class CodeReviewEngine:
         model = self._model_override or config_store.get_model()
         kwargs = dict(
             model=model,
-            max_tokens=8000,
+            # Enough for a thorough structured review; kept modest so generation
+            # finishes well inside the serverless function window.
+            max_tokens=2500,
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
