@@ -25,9 +25,10 @@ JSONB row for settings), with embeddings via **OpenRouter** and access gated by
    - Authentication → Providers → Email (enabled).
    - Authentication → Sign In / Providers → **disable open sign-ups** (so only
      people you invite can access the app). Create your user(s) under
-     Authentication → Users → *Add user*.
-   - Grab the **Project URL**, the **anon (publishable) key**, and the **JWT
-     secret** (Project Settings → API → JWT Settings).
+     Authentication → Users → *Add user* (set "Auto Confirm User").
+   - Grab the **Project URL** and the **anon / publishable key** (Project
+     Settings → API). Backend token verification uses the project's JWKS
+     (derived from `SUPABASE_URL`) — no JWT secret needed for asymmetric keys.
 
 ## 2. Vercel
 
@@ -45,7 +46,8 @@ configures the build, the Python function, and routing). Then set env vars under
 | `OPENROUTER_API_KEY` | your OpenRouter key — Sensitive |
 | `EMBEDDING_MODEL` | e.g. `openai/text-embedding-3-small` (must be served by your embeddings endpoint) |
 | `EMBEDDING_DIM` | `1536` — **must match** the `vector(N)` in the migration |
-| `SUPABASE_JWT_SECRET` | Supabase JWT secret — Sensitive |
+| `SUPABASE_URL` | `https://<ref>.supabase.co` — used to verify login tokens via the project JWKS (current projects sign tokens with asymmetric ES256/RS256 keys) |
+| `SUPABASE_JWT_SECRET` | *(alternative)* only if your project still uses the legacy HS256 secret instead of asymmetric signing keys — Sensitive |
 | `ALLOWED_EMAILS` | *(optional)* comma-separated allowlist, e.g. `you@co.com` |
 | `OPENROUTER_MODEL` / `OPENROUTER_PROVIDER` | *(optional)* defaults apply |
 | `EMBEDDINGS_BASE_URL` / `EMBEDDINGS_API_KEY` | *(optional)* override if OpenRouter doesn't serve your embeddings model (e.g. point at OpenAI) |
