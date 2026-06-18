@@ -22,6 +22,13 @@ export function signIn(email, password) {
   return supabase.auth.signInWithPassword({ email, password })
 }
 
+export function signInWithGitHub() {
+  return supabase.auth.signInWithOAuth({
+    provider: 'github',
+    options: { redirectTo: window.location.origin },
+  })
+}
+
 export function signOut() {
   return supabase.auth.signOut()
 }

@@ -21,14 +21,22 @@ JSONB row for settings), with embeddings via **OpenRouter** and access gated by
    Connection string → **Transaction pooler** (Supavisor, port **6543**). This is
    the serverless-safe pooled connection. Example:
    `postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres`
-4. **Auth**:
-   - Authentication → Providers → Email (enabled).
-   - Authentication → Sign In / Providers → **disable open sign-ups** (so only
-     people you invite can access the app). Create your user(s) under
-     Authentication → Users → *Add user* (set "Auto Confirm User").
-   - Grab the **Project URL** and the **anon / publishable key** (Project
-     Settings → API). Backend token verification uses the project's JWKS
-     (derived from `SUPABASE_URL`) — no JWT secret needed for asymmetric keys.
+4. **Auth (GitHub OAuth)**:
+   - Create a **GitHub OAuth App**: GitHub → Settings → Developer settings →
+     OAuth Apps → *New OAuth App*.
+     - **Homepage URL**: your Vercel app URL.
+     - **Authorization callback URL**: `https://<ref>.supabase.co/auth/v1/callback`
+       (Supabase shows this exact URL on the GitHub provider page).
+     - Copy the **Client ID** and generate a **Client Secret**.
+   - Supabase → Authentication → **Providers → GitHub** → enable, paste the
+     Client ID + Secret.
+   - Supabase → Authentication → **URL Configuration** → set **Site URL** to your
+     Vercel app URL, and add that URL (and the preview domain) under **Redirect URLs**.
+   - ⚠️ GitHub OAuth lets **any** GitHub user sign in, so the real authorization
+     gate is **`ALLOWED_EMAILS`** (set it to your GitHub account email — Supabase
+     includes the GitHub email in the token).
+   - Grab the **Project URL** and **anon / publishable key** (Project Settings →
+     API). Backend token verification uses the project's JWKS (from `SUPABASE_URL`).
 
 ## 2. Vercel
 

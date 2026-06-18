@@ -1,9 +1,14 @@
 """Shared pytest fixtures and path setup for the test suite."""
 
+import os
 import sys
 from pathlib import Path
 
 import pytest
+
+# Disable ChromaDB's anonymous telemetry before chromadb is imported anywhere —
+# its opentelemetry path can intermittently crash during upsert/query.
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 
 ROOT = Path(__file__).parent
 # Make the core modules importable the same way the backend does.

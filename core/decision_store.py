@@ -101,9 +101,15 @@ class ChromaDecisionStore:
 
     def __init__(self, persist_dir: Optional[str] = None, collection: str = "decisions"):
         import chromadb
+        from chromadb.config import Settings
 
         self.persist_dir = persist_dir or os.getenv("CHROMA_PERSIST_DIR", ".chroma")
-        self._client = chromadb.PersistentClient(path=self.persist_dir)
+        # Disable Chroma's anonymous telemetry — it's noisy and its opentelemetry
+        # path can crash on some environments during upsert/query.
+        self._client = chromadb.PersistentClient(
+            path=self.persist_dir,
+            settings=Settings(anonymized_telemetry=False),
+        )
         # Cosine space keeps distances in [0, 2]; we map that to a 0..1 score.
         self._collection = self._client.get_or_create_collection(
             name=collection,
