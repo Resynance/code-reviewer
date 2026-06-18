@@ -1,0 +1,83 @@
+/* ReviewBot theme — dark, terminal-adjacent. The component files reference
+   these CSS variables directly, so they all live here. */
+
+:root {
+  --bg: #0d1017;
+  --surface: #151a23;
+  --surface2: #1c222d;
+  --border: #262d3a;
+  --border2: #323b4a;
+
+  --text: #e6e9ef;
+  --text-2: #9aa3b8;
+  --text-3: #6b7385;
+
+  --accent: #5b8def;
+  --accent-glow: rgba(91, 141, 239, 0.12);
+
+  --red: #ef4444;
+  --green: #22c55e;
+  --yellow: #eab308;
+  --blue: #3b82f6;
+
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--accent) !important;
+}
+
+pre {
+  margin: 0;
+}
+
+code {
+  font-family: var(--font-mono);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border2);
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
