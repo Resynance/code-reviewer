@@ -139,6 +139,20 @@ def test_review_returns_engine_result(client, monkeypatch):
     assert body["pr_number"] == 7 and body["approved"] is True and body["confidence"] == 0.8
 
 
+def test_pr_comment_requires_token(client):
+    tc, _ = client
+    assert tc.post("/api/pr-comment", json={"repo": "org/a", "pr_number": 5, "body": "hi"}).status_code == 400
+
+
+def test_pr_comment_posts(client, monkeypatch):
+    tc, main = client
+    config_store.save_config({"github_token": "t"})
+    monkeypatch.setattr(main, "post_pr_comment",
+                        lambda repo, pr_number, body, token: "https://github.com/org/a/pull/5#c1")
+    res = tc.post("/api/pr-comment", json={"repo": "org/a", "pr_number": 5, "body": "hi"}).json()
+    assert res["html_url"].endswith("#c1")
+
+
 def test_review_is_saved_to_history(client, monkeypatch):
     tc, main = client
     monkeypatch.setenv("OPENROUTER_API_KEY", "key")

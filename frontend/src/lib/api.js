@@ -34,6 +34,9 @@ async function request(path, { method = 'GET', body } = {}) {
 export const api = {
   review: (body) => request('/api/review', { method: 'POST', body }),
 
+  postPrComment: ({ repo, pr_number, body }) =>
+    request('/api/pr-comment', { method: 'POST', body: { repo, pr_number, body } }),
+
   listDecisions: (k = 20, repo = '') =>
     request(`/api/decisions?k=${encodeURIComponent(k)}${repo ? `&repo=${encodeURIComponent(repo)}` : ''}`),
 

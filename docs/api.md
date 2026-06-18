@@ -72,6 +72,15 @@ re-reviews of the same PR). All query params optional.
 ```
 `source` is `api` (UI) or `webhook` (GitHub PR event).
 
+### `POST /api/pr-comment`
+Post selected review findings as a comment on the PR.
+```json
+{ "repo": "org/a", "pr_number": 88, "body": "## 🤖 ReviewBot\n**Issues**\n- …" }
+```
+Returns `{ "html_url": "https://github.com/org/a/pull/88#issuecomment-…" }`. The
+GitHub token needs **write** access (`repo` / `pull_requests:write`); `400`
+without a token or empty body, `502` on GitHub errors (incl. a permissions hint).
+
 ## Decisions
 
 ### `GET /api/decisions?k=20&repo=`

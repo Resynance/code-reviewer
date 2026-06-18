@@ -37,6 +37,7 @@ from github_backfill import (
     pr_doc_id,
     list_owners,
     list_owner_repos,
+    post_pr_comment,
 )
 
 
@@ -124,6 +125,12 @@ class EmailBody(BaseModel):
     email: str
 
 
+class PrCommentBody(BaseModel):
+    repo: str
+    pr_number: int
+    body: str
+
+
 class BackfillBody(BaseModel):
     repo: str
     pages: int = 5
@@ -197,6 +204,21 @@ def list_review_history(repo: Optional[str] = None, pr_number: Optional[int] = N
     """Return saved review runs (full history), newest first."""
     reviews = review_store.list_reviews(repo=repo, pr_number=pr_number, limit=limit)
     return {"reviews": reviews, "count": len(reviews)}
+
+
+@app.post("/api/pr-comment")
+def pr_comment(body: PrCommentBody):
+    """Post selected review findings as a comment on the PR."""
+    token = config_store.get_github_token()
+    if not token:
+        raise HTTPException(status_code=400, detail="GitHub token not configured")
+    try:
+        url = post_pr_comment(body.repo, body.pr_number, body.body, token)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"html_url": url}
 
 
 @app.post("/api/decisions/search")

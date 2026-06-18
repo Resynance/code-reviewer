@@ -290,3 +290,44 @@ def test_list_owners_auth_error(monkeypatch):
     _client_from(lambda url, params: FakeResp(403, {}, "forbidden"), monkeypatch)
     with pytest.raises(RuntimeError, match="authentication failed"):
         gb.list_owners("t")
+
+
+# ----- post_pr_comment ----- #
+
+def _post_client(monkeypatch, resp, captured=None):
+    class C:
+        def __init__(self, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, url, json=None):
+            if captured is not None:
+                captured["url"], captured["json"] = url, json
+            return resp
+
+    monkeypatch.setattr(httpx, "Client", lambda **k: C())
+
+
+def test_post_pr_comment(monkeypatch):
+    captured = {}
+    _post_client(monkeypatch, FakeResp(201, {"html_url": "https://github.com/org/repo/pull/5#issuecomment-1"}), captured)
+    url = gb.post_pr_comment("org/repo", 5, "hello", token="t")
+    assert url.endswith("issuecomment-1")
+    assert captured["json"] == {"body": "hello"}
+    assert "/repos/org/repo/issues/5/comments" in captured["url"]
+
+
+def test_post_pr_comment_empty_body():
+    with pytest.raises(ValueError, match="empty"):
+        gb.post_pr_comment("org/repo", 5, "  ", token="t")
+
+
+def test_post_pr_comment_auth_error(monkeypatch):
+    _post_client(monkeypatch, FakeResp(403, {}, "forbidden"))
+    with pytest.raises(RuntimeError, match="write access"):
+        gb.post_pr_comment("org/repo", 5, "hi", token="t")

@@ -231,6 +231,34 @@ def _require_token(token: str):
         raise ValueError("GitHub token is not configured")
 
 
+def post_pr_comment(repo: str, pr_number, body: str, token: str) -> str:
+    """Post a comment on a PR (an issue comment). Returns the comment's html_url.
+
+    Requires a token with write access (repo / pull_requests:write).
+    """
+    import httpx
+
+    _validate(repo, token)
+    if not (body or "").strip():
+        raise ValueError("comment body is empty")
+
+    with httpx.Client(timeout=30.0, headers=_headers(token)) as client:
+        resp = client.post(
+            f"{GITHUB_API}/repos/{repo}/issues/{pr_number}/comments",
+            json={"body": body},
+        )
+    if resp.status_code in (401, 403):
+        raise RuntimeError(
+            "GitHub authentication failed. The token needs write access "
+            "(repo / pull_requests:write) to comment on PRs."
+        )
+    if resp.status_code == 404:
+        raise RuntimeError(f"PR {repo}#{pr_number} not found, or the token lacks access.")
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(f"GitHub returned {resp.status_code}: {resp.text[:200]}")
+    return resp.json().get("html_url", "")
+
+
 def _raise_status(resp):
     if resp.status_code in (401, 403):
         raise RuntimeError(

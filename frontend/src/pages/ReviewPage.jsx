@@ -179,14 +179,62 @@ export default function ReviewPage() {
         {error && <span style={{ color: 'var(--red)', fontSize: 13 }}>⚠ {error}</span>}
       </div>
 
-      {result && <ReviewResult result={result} />}
+      {result && <ReviewResult result={result} repo={form.repo} />}
     </div>
   )
 }
 
-function ReviewResult({ result }) {
+function ReviewResult({ result, repo }) {
   const statusColor = result.approved ? 'var(--green)' : 'var(--yellow)'
   const statusLabel = result.approved ? 'Approved' : 'Changes Requested'
+
+  const [selIssues, setSelIssues] = useState(new Set())
+  const [selSugg, setSelSugg] = useState(new Set())
+  const [commenting, setCommenting] = useState(false)
+  const [commentUrl, setCommentUrl] = useState(null)
+  const [commentErr, setCommentErr] = useState(null)
+
+  const toggle = (set, setter, i) => {
+    const n = new Set(set)
+    n.has(i) ? n.delete(i) : n.add(i)
+    setter(n)
+  }
+  const selCount = selIssues.size + selSugg.size
+  const hasFindings = (result.issues?.length || 0) + (result.suggestions?.length || 0) > 0
+
+  function buildBody() {
+    const issues = [...selIssues].sort((a, b) => a - b).map(i => result.issues[i]).filter(Boolean)
+    const suggs = [...selSugg].sort((a, b) => a - b).map(i => result.suggestions[i]).filter(Boolean)
+    if (!issues.length && !suggs.length) return ''
+    const lines = ['## 🤖 ReviewBot', '']
+    if (issues.length) {
+      lines.push('**Issues**')
+      issues.forEach(it => {
+        lines.push(`- **[${(it.severity || '').toUpperCase()}]** \`${it.file}\` — ${it.description}`)
+        if (it.suggestion) lines.push(`  - 💡 ${it.suggestion}`)
+      })
+      lines.push('')
+    }
+    if (suggs.length) {
+      lines.push('**Suggestions**')
+      suggs.forEach(s => lines.push(`- _${(s.type || '').replace('_', ' ')}_ — ${s.description}`))
+    }
+    return lines.join('\n')
+  }
+
+  async function postComment() {
+    const body = buildBody()
+    if (!body) return
+    setCommenting(true); setCommentErr(null); setCommentUrl(null)
+    try {
+      const res = await api.postPrComment({ repo, pr_number: result.pr_number, body })
+      setCommentUrl(res.html_url)
+    } catch (e) {
+      setCommentErr(e.message)
+    } finally {
+      setCommenting(false)
+    }
+  }
 
   return (
     <div style={{ animation: 'fadeIn 0.3s ease' }}>
@@ -207,6 +255,25 @@ function ReviewResult({ result }) {
         </div>
         <ConfidencePill value={result.confidence} />
       </div>
+
+      {/* Comment-on-PR bar */}
+      {hasFindings && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, padding: '10px 16px',
+          background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10,
+        }}>
+          <span style={{ fontSize: 13, color: 'var(--text-2)' }}>
+            {selCount} selected — tick issues/suggestions to post to <code style={{ fontFamily: 'var(--font-mono)' }}>{repo}#{result.pr_number}</code>
+          </span>
+          <button onClick={postComment} disabled={!selCount || commenting} style={{
+            marginLeft: 'auto', background: (!selCount || commenting) ? 'var(--surface2)' : 'var(--accent)',
+            color: (!selCount || commenting) ? 'var(--text-3)' : '#fff', border: 'none', borderRadius: 8,
+            padding: '8px 16px', fontSize: 13, fontWeight: 500,
+          }}>{commenting ? 'Posting…' : '💬 Comment on PR'}</button>
+          {commentUrl && <a href={commentUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: 'var(--green)' }}>✓ Posted ↗</a>}
+          {commentErr && <span style={{ fontSize: 12, color: 'var(--red)' }}>⚠ {commentErr}</span>}
+        </div>
+      )}
 
       {/* Decision trail */}
       {result.past_decisions_applied?.length > 0 && (
@@ -229,7 +296,7 @@ function ReviewResult({ result }) {
       {result.issues?.length > 0 && (
         <Section title={`🔍 Issues (${result.issues.length})`}>
           {result.issues.map((issue, i) => (
-            <IssueCard key={i} issue={issue} />
+            <IssueCard key={i} issue={issue} selected={selIssues.has(i)} onToggle={() => toggle(selIssues, setSelIssues, i)} />
           ))}
         </Section>
       )}
@@ -242,6 +309,8 @@ function ReviewResult({ result }) {
               padding: '10px 14px', background: 'var(--surface2)', borderRadius: 6, marginBottom: 6,
               display: 'flex', gap: 10, alignItems: 'flex-start',
             }}>
+              <input type="checkbox" checked={selSugg.has(i)} onChange={() => toggle(selSugg, setSelSugg, i)}
+                style={{ marginTop: 2, accentColor: 'var(--accent)', cursor: 'pointer' }} />
               <TypeBadge type={s.type} />
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 13, color: 'var(--text)' }}>{s.description}</div>
@@ -257,7 +326,7 @@ function ReviewResult({ result }) {
   )
 }
 
-function IssueCard({ issue }) {
+function IssueCard({ issue, selected, onToggle }) {
   const sevColors = { critical: '#EF4444', high: '#F97316', medium: '#EAB308', low: '#6366F1' }
   const color = sevColors[issue.severity] || 'var(--text-2)'
   return (
@@ -267,6 +336,8 @@ function IssueCard({ issue }) {
       background: `${color}08`,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+        <input type="checkbox" checked={selected} onChange={onToggle}
+          style={{ accentColor: 'var(--accent)', cursor: 'pointer' }} />
         <span style={{
           fontSize: 10, fontWeight: 600, letterSpacing: '0.05em',
           color, background: `${color}20`, padding: '2px 6px', borderRadius: 4,
