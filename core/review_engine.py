@@ -171,6 +171,10 @@ class CodeReviewEngine:
                 "HTTP-Referer": os.getenv("OPENROUTER_APP_URL", "http://localhost:1500"),
                 "X-Title": "ReviewBot",
             },
+            # Fail with a clear error just under the serverless function limit
+            # (vercel.json maxDuration) rather than letting the platform kill a
+            # slow model call with an opaque 504.
+            timeout=280,
         )
 
     def review(self, request: ReviewRequest) -> ReviewResult:

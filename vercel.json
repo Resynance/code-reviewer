@@ -6,7 +6,7 @@
   "installCommand": "echo skip-root-install",
   "functions": {
     "api/index.py": {
-      "maxDuration": 60,
+      "maxDuration": 300,
       "includeFiles": "{core,backend}/**"
     }
   },
