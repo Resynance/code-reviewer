@@ -171,10 +171,13 @@ class CodeReviewEngine:
                 "HTTP-Referer": os.getenv("OPENROUTER_APP_URL", "http://localhost:1500"),
                 "X-Title": "ReviewBot",
             },
-            # Fail with a clear error just under the serverless function limit
-            # (vercel.json maxDuration) rather than letting the platform kill a
-            # slow model call with an opaque 504.
-            timeout=280,
+            # Fail with a clear error inside the serverless function limit
+            # (vercel.json maxDuration=300) rather than letting the platform kill
+            # a slow model call with an opaque 504. max_retries=0 is essential:
+            # the SDK's default retries would re-fire a timed-out call and push
+            # total time past the limit anyway.
+            timeout=240,
+            max_retries=0,
         )
 
     def review(self, request: ReviewRequest) -> ReviewResult:

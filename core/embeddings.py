@@ -36,6 +36,10 @@ def _get_client():
                 "HTTP-Referer": os.getenv("OPENROUTER_APP_URL", "http://localhost:1500"),
                 "X-Title": "ReviewBot",
             },
+            # Context retrieval must never hang the whole review: fail fast and
+            # let _retrieve_context() fall back to an empty context.
+            timeout=30,
+            max_retries=0,
         )
     return _client
 
