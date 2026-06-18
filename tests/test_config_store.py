@@ -11,7 +11,34 @@ def test_defaults_when_no_file(cfg):
         "repos": [],
         "openrouter_model": "",
         "openrouter_provider": "",
+        "embedding_model": "",
     }
+
+
+def test_embedding_model_default_and_config(cfg, monkeypatch):
+    assert cfg.get_embedding_model() == cfg.DEFAULT_EMBEDDING_MODEL
+    monkeypatch.setenv("EMBEDDING_MODEL", "env/embed")
+    assert cfg.get_embedding_model() == "env/embed"
+    cfg.save_config({"embedding_model": "cfg/embed"})
+    assert cfg.get_embedding_model() == "cfg/embed"
+
+
+def test_postgres_backend_dispatch(cfg, monkeypatch):
+    # With CONFIG_STORE_BACKEND=postgres, load/save route to the pg helpers
+    # (here backed by an in-memory dict) and the public API works unchanged.
+    import config_store
+    store = {"data": {}}
+    monkeypatch.setenv("CONFIG_STORE_BACKEND", "postgres")
+    monkeypatch.setattr(config_store, "_pg_read", lambda: config_store._merge(store["data"]))
+    monkeypatch.setattr(config_store, "_pg_write", lambda data: store.__setitem__("data", data))
+
+    cfg.save_config({"github_token": "t", "repos": ["org/a"]})
+    assert store["data"]["github_token"] == "t"
+    assert cfg.get_github_token() == "t"
+    assert cfg.get_repos() == ["org/a"]
+
+    cfg.add_repo("org/b")
+    assert set(cfg.get_repos()) == {"org/a", "org/b"}
 
 
 def test_save_and_load_roundtrip(cfg):

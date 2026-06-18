@@ -11,6 +11,9 @@ approve/changes verdict — informed by semantically-similar prior PRs and ADRs.
 - **Per-repo + global** decision scoping — a review sees its repo's precedent plus org-wide policies.
 - GitHub **webhook** for automatic reviews on new PRs.
 - All settings (model, provider, GitHub creds, repos) managed from the web UI.
+- Runs locally (ChromaDB, no auth) **or** on **Vercel + Supabase** (pgvector,
+  Supabase Auth) — same codebase, switched by env vars. See
+  [docs/deployment.md](docs/deployment.md).
 
 ## Documentation
 
@@ -19,6 +22,7 @@ approve/changes verdict — informed by semantically-similar prior PRs and ADRs.
 | [docs/architecture.md](docs/architecture.md) | System design, components, the decision model, request lifecycle |
 | [docs/api.md](docs/api.md) | Full REST API reference (also auto-served at `/docs` and `/redoc`) |
 | [docs/development.md](docs/development.md) | Dev setup, project layout, tests, how to extend |
+| [docs/deployment.md](docs/deployment.md) | Deploying on Vercel + Supabase (pgvector, Auth, env vars) |
 
 ## Quick Start
 

@@ -1,10 +1,12 @@
 """
 config_store.py — server-side persisted settings.
 
-Holds the GitHub token, webhook secret, and the list of configured repositories
-in a JSON file at the project root (config.json, gitignored). The frontend
-Settings page reads and writes these through the API, so no .env editing is
-required. Environment variables remain as fallback defaults.
+Holds the GitHub token, webhook secret, repo list, and model settings. Two
+backends, selected by CONFIG_STORE_BACKEND:
+  - "file" (default): a JSON file at the project root (config.json, gitignored).
+  - "postgres": a single-row app_settings(id=1, data jsonb) table — used on
+    Vercel, where the filesystem is read-only.
+Environment variables remain as fallback defaults.
 
 Secrets live in plaintext on disk — appropriate for this local, single-user
 tool. Never echo the raw token/secret back to the client; expose booleans only.
@@ -24,10 +26,27 @@ _DEFAULTS = {
     "repos": [],
     "openrouter_model": "",
     "openrouter_provider": "",
+    "embedding_model": "",
 }
 
 DEFAULT_MODEL = "anthropic/claude-sonnet-4.5"
+DEFAULT_EMBEDDING_MODEL = "openai/text-embedding-3-small"
 
+
+def _is_postgres() -> bool:
+    return os.getenv("CONFIG_STORE_BACKEND", "file").lower() == "postgres"
+
+
+def _merge(data: dict) -> dict:
+    """Merge a raw config dict onto the defaults and normalize."""
+    merged = dict(_DEFAULTS)
+    for key in _DEFAULTS:
+        merged[key] = data.get(key, merged[key])
+    merged["repos"] = [r for r in (merged.get("repos") or []) if isinstance(r, str)]
+    return merged
+
+
+# ----- file backend ----- #
 
 def _read():
     """Read config.json, falling back to defaults on missing/corrupt file."""
@@ -38,11 +57,7 @@ def _read():
             data = json.load(f)
     except (ValueError, OSError):
         return dict(_DEFAULTS)
-    merged = dict(_DEFAULTS)
-    for key in _DEFAULTS:
-        merged[key] = data.get(key, merged[key])
-    merged["repos"] = [r for r in (merged.get("repos") or []) if isinstance(r, str)]
-    return merged
+    return _merge(data)
 
 
 def _write(data):
@@ -53,13 +68,43 @@ def _write(data):
     tmp.replace(_CONFIG_PATH)
 
 
+# ----- postgres backend (single-row app_settings JSONB) ----- #
+
+def _pg_read():
+    import db
+
+    with db.connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT data FROM app_settings WHERE id = 1")
+        row = cur.fetchone()
+    return _merge(row[0] if row and row[0] else {})
+
+
+def _pg_write(data):
+    import db
+
+    with db.connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO app_settings (id, data) VALUES (1, %s) "
+            "ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data",
+            (json.dumps(data),),
+        )
+
+
 def load_config():
+    if _is_postgres():
+        return _pg_read()
     with _LOCK:
         return _read()
 
 
 def save_config(update: dict):
     """Merge `update` into the stored config and persist. Returns the new config."""
+    if _is_postgres():
+        current = _pg_read()
+        current.update(update)
+        current["repos"] = [r for r in (current.get("repos") or []) if isinstance(r, str)]
+        _pg_write(current)
+        return current
     with _LOCK:
         current = _read()
         current.update(update)
@@ -87,6 +132,10 @@ def get_model() -> str:
 def get_provider() -> str:
     """Optional OpenRouter provider to pin (e.g. 'Anthropic'). Empty = auto-route."""
     return load_config().get("openrouter_provider") or os.getenv("OPENROUTER_PROVIDER") or ""
+
+
+def get_embedding_model() -> str:
+    return load_config().get("embedding_model") or os.getenv("EMBEDDING_MODEL") or DEFAULT_EMBEDDING_MODEL
 
 
 def add_repo(repo: str) -> list:

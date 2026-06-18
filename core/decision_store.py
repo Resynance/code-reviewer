@@ -19,6 +19,9 @@ import os
 import json
 from typing import Optional
 
+import db
+import embeddings
+
 
 # Fields we promote to first-class columns / metadata. Anything else the caller
 # passes in `metadata` is JSON-encoded into a single side field.
@@ -151,65 +154,51 @@ class ChromaDecisionStore:
 
 
 class PgVectorDecisionStore:
-    """Postgres + pgvector backend for production deployments.
+    """Postgres + pgvector backend for production / serverless deployments.
 
-    Embeddings are produced with Chroma's default embedding function so that the
-    pgvector and Chroma backends stay interchangeable. Requires `psycopg` and a
-    DATABASE_URL pointing at a database with the `vector` extension enabled.
+    Embeddings come from `core/embeddings.py` (an OpenAI-compatible API, default
+    OpenRouter) — no local model. Connections are opened per-operation via
+    `core/db.py` (use the Supabase transaction pooler on serverless). Requires
+    `psycopg`, `pgvector`, and DATABASE_URL. The schema is normally created by the
+    Supabase migration; `EMBEDDING_DIM` must match the `vector(N)` column.
     """
 
-    def __init__(self, database_url: Optional[str] = None, table: str = "decisions"):
-        try:
-            import psycopg
-        except ImportError as e:  # pragma: no cover - optional dependency
-            raise RuntimeError(
-                "pgvector backend requires psycopg. Install it with "
-                "`pip install 'psycopg[binary]' pgvector`, or set "
-                "DECISION_STORE_BACKEND=chroma."
-            ) from e
-
-        from chromadb.utils import embedding_functions
-
-        self.database_url = database_url or os.getenv("DATABASE_URL")
-        if not self.database_url:
+    def __init__(self, table: str = "decisions"):
+        if not os.getenv("DATABASE_URL"):
             raise RuntimeError("DATABASE_URL must be set for the pgvector backend.")
-
         self._table = table
-        self._embed = embedding_functions.DefaultEmbeddingFunction()
-        self._conn = psycopg.connect(self.database_url, autocommit=True)
-        self._dim = len(self._embed(["dimension probe"])[0])
-        self._ensure_schema()
+        self._dim = embeddings.get_dim()
+        # Schema is normally applied once via the Supabase migration. Locally we
+        # create it on demand for convenience; on Vercel we never run DDL.
+        if os.getenv("PGVECTOR_ENSURE_SCHEMA", "1") == "1" and not os.getenv("VERCEL"):
+            try:
+                self.ensure_schema()
+            except Exception:
+                pass
 
-    def _ensure_schema(self):
-        with self._conn.cursor() as cur:
+    def ensure_schema(self):
+        with db.connect() as conn, conn.cursor() as cur:
             cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
             cur.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {self._table} (
-                    doc_id    TEXT PRIMARY KEY,
-                    metadata  JSONB NOT NULL,
-                    embedding vector({self._dim}) NOT NULL
-                )
-                """
+                f"CREATE TABLE IF NOT EXISTS {self._table} ("
+                "doc_id TEXT PRIMARY KEY, metadata JSONB NOT NULL, "
+                f"embedding vector({self._dim}) NOT NULL)"
             )
 
     def upsert(self, doc_id, ref, summary, reasoning, outcome, date, metadata=None):
         document = "\n\n".join(p for p in (summary, reasoning) if p) or ref or doc_id
-        embedding = self._embed([document])[0]
+        embedding = embeddings.embed([document])[0]
         meta = _flatten_metadata(ref, summary, reasoning, outcome, date, metadata)
-        with self._conn.cursor() as cur:
+        with db.connect() as conn, conn.cursor() as cur:
             cur.execute(
-                f"""
-                INSERT INTO {self._table} (doc_id, metadata, embedding)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (doc_id)
-                DO UPDATE SET metadata = EXCLUDED.metadata, embedding = EXCLUDED.embedding
-                """,
+                f"INSERT INTO {self._table} (doc_id, metadata, embedding) VALUES (%s, %s, %s) "
+                "ON CONFLICT (doc_id) DO UPDATE SET "
+                "metadata = EXCLUDED.metadata, embedding = EXCLUDED.embedding",
                 (doc_id, json.dumps(meta), str(list(embedding))),
             )
 
     def retrieve(self, query, k=10, repo=None, include_global=False):
-        embedding = self._embed([query])[0]
+        embedding = embeddings.embed([query])[0]
         emb = str(list(embedding))
         where = ""
         params = [emb]
@@ -221,15 +210,10 @@ class PgVectorDecisionStore:
                 where = "WHERE metadata->>'repo' = %s"
                 params.append(repo)
         params.extend([emb, k])
-        with self._conn.cursor() as cur:
+        with db.connect() as conn, conn.cursor() as cur:
             cur.execute(
-                f"""
-                SELECT doc_id, metadata, 1 - (embedding <=> %s) AS score
-                FROM {self._table}
-                {where}
-                ORDER BY embedding <=> %s
-                LIMIT %s
-                """,
+                f"SELECT doc_id, metadata, 1 - (embedding <=> %s) AS score "
+                f"FROM {self._table} {where} ORDER BY embedding <=> %s LIMIT %s",
                 params,
             )
             rows = cur.fetchall()
@@ -239,7 +223,7 @@ class PgVectorDecisionStore:
         ]
 
     def delete(self, doc_id):
-        with self._conn.cursor() as cur:
+        with db.connect() as conn, conn.cursor() as cur:
             cur.execute(f"DELETE FROM {self._table} WHERE doc_id = %s", (doc_id,))
 
     def existing_ids(self, doc_ids):
@@ -247,7 +231,7 @@ class PgVectorDecisionStore:
         ids = [d for d in doc_ids if d]
         if not ids:
             return set()
-        with self._conn.cursor() as cur:
+        with db.connect() as conn, conn.cursor() as cur:
             cur.execute(
                 f"SELECT doc_id FROM {self._table} WHERE doc_id = ANY(%s)", (ids,)
             )

@@ -8,6 +8,7 @@ export default function SettingsPage() {
   // Model / provider form (prefilled from the server's effective values)
   const [modelInput, setModelInput] = useState('')
   const [providerInput, setProviderInput] = useState('')
+  const [embeddingInput, setEmbeddingInput] = useState('')
   const [savingModel, setSavingModel] = useState(false)
   const [modelMsg, setModelMsg] = useState(null)
 
@@ -34,6 +35,7 @@ export default function SettingsPage() {
       setSettings(s)
       setModelInput(s.openrouter_model || '')
       setProviderInput(s.openrouter_provider || '')
+      setEmbeddingInput(s.embedding_model || '')
     }).catch(() => {})
   }, [])
 
@@ -44,10 +46,12 @@ export default function SettingsPage() {
       const s = await api.saveSettings({
         openrouter_model: modelInput.trim(),
         openrouter_provider: providerInput.trim(),
+        embedding_model: embeddingInput.trim(),
       })
       setSettings(s)
       setModelInput(s.openrouter_model || '')
       setProviderInput(s.openrouter_provider || '')
+      setEmbeddingInput(s.embedding_model || '')
       setModelMsg('Saved ✓')
       refreshStats()
     } catch (e) {
@@ -141,6 +145,7 @@ export default function SettingsPage() {
             <StatRow label="GitHub token" value={stats.github_token_configured ? 'Configured ✓' : 'Not set ✗'} ok={stats.github_token_configured} />
             <StatRow label="Model" value={stats.model || '—'} />
             <StatRow label="Provider" value={stats.provider || 'auto'} />
+            <StatRow label="Embedding model" value={stats.embedding_model || '—'} />
             <StatRow label="Vector backend" value={stats.backend} />
             <StatRow label="Repositories" value={`${repos.length}`} />
             <StatRow label="Decisions stored (sample)" value={`~${stats.decisions_sampled}`} />
@@ -164,6 +169,11 @@ export default function SettingsPage() {
             <label style={labelStyle}>Provider (optional) — e.g. Anthropic, Google, Fireworks</label>
             <input value={providerInput} onChange={e => setProviderInput(e.target.value)}
               placeholder="auto-route (no preference)" style={inputStyle} />
+          </div>
+          <div>
+            <label style={labelStyle}>Embedding model — used to index/search decisions (pgvector backend)</label>
+            <input value={embeddingInput} onChange={e => setEmbeddingInput(e.target.value)}
+              placeholder="openai/text-embedding-3-small" style={inputStyle} />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <button onClick={saveModel} disabled={savingModel} style={primaryBtn(savingModel)}>

@@ -31,7 +31,10 @@ OpenRouter) grounded in a searchable store of past decisions.
 | `backend/main.py` | FastAPI app: REST endpoints, GitHub webhook, static-file serving. Holds lazily-built singletons for the store and engine. |
 | `core/review_engine.py` | Builds the review prompt, retrieves repo-scoped + global context, calls OpenRouter with a **forced `submit_review` tool call**, and maps the structured output to a `ReviewResult`. |
 | `core/decision_store.py` | Vector storage abstraction. `ChromaDecisionStore` (local, default) and `PgVectorDecisionStore` (Postgres + pgvector). Both implement `upsert` / `retrieve` / `delete`. |
-| `core/config_store.py` | Server-side settings persisted to `config.json` (GitHub token, webhook secret, repo list, model, provider). Env vars are fallbacks. Secrets are never returned to clients. |
+| `core/config_store.py` | Server-side settings (GitHub token, webhook secret, repo list, models). Two backends: a `config.json` file (local) or a single-row `app_settings` JSONB table (Postgres/Supabase), per `CONFIG_STORE_BACKEND`. Secrets are never returned to clients. |
+| `core/embeddings.py` | Text embeddings via an OpenAI-compatible API (default OpenRouter), used by the pgvector store. No local model. |
+| `core/db.py` | Per-operation Postgres connection helper (Supabase transaction pooler on serverless). |
+| `backend/auth.py` | Optional Supabase Auth gate (`require_user`). No-op unless `SUPABASE_JWT_SECRET` is set. |
 | `core/github_backfill.py` | Imports a repo's closed PRs from the GitHub API into the decision store. Shared by the CLI and the API. |
 | `cli.py` | `python cli.py backfill <owner/repo> [pages]` — command-line seeding. |
 | `frontend/` | React + Vite SPA. Built to `frontend/dist/` and served by FastAPI in production; proxies `/api` to `:1500` in dev. |
@@ -90,7 +93,25 @@ diff from the GitHub API, and runs a review. See [api.md](api.md#post-webhookgit
 ## Storage backends
 
 - **Chroma** (default) — local, persistent, zero external services. Data lives in
-  `CHROMA_PERSIST_DIR` (default `.chroma`).
-- **pgvector** — Postgres with the `vector` extension for production. Select with
-  `DECISION_STORE_BACKEND=pgvector` and set `DATABASE_URL`. Embeddings use the
-  same default function as Chroma, so the two are interchangeable.
+  `CHROMA_PERSIST_DIR` (default `.chroma`). Embeds with a local ONNX model.
+- **pgvector** — Postgres (Supabase) with the `vector` extension. Select with
+  `DECISION_STORE_BACKEND=pgvector` + `DATABASE_URL`. Embeds via OpenRouter
+  (`core/embeddings.py`), so there's no local model — which is what makes it fit a
+  serverless function.
+
+## Deployment topology (Vercel + Supabase)
+
+The same app runs two ways, switched purely by env vars:
+
+| | Local | Vercel + Supabase |
+|---|---|---|
+| Process | one FastAPI server (`./start.sh`) serving API + SPA | SPA on Vercel CDN; API as a Python serverless function (`api/index.py` → `backend.main:app`) |
+| Decisions | ChromaDB (`.chroma`) | Supabase pgvector (`decisions` table) |
+| Settings | `config.json` file | Supabase `app_settings` JSONB row |
+| Embeddings | local ONNX | OpenRouter API |
+| Auth | none | Supabase Auth (JWT-gated `/api/*`) |
+
+`vercel.json` builds `frontend/dist`, routes `/api/*` and `/webhook/*` to the
+function, and serves the SPA for everything else. The function bundle
+(`api/requirements.txt`) excludes chromadb/onnxruntime to stay under Vercel's size
+limit. See [deployment.md](deployment.md).

@@ -1,9 +1,8 @@
 fastapi
-uvicorn[standard]
-chromadb
 openai
 httpx
 python-multipart
 pydantic
+psycopg[binary]
+pgvector
 pyjwt[crypto]
-pytest

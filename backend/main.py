@@ -13,11 +13,13 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
+
+from backend.auth import require_user
 
 # Add parent dir so we can import the core modules
 sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
@@ -38,7 +40,12 @@ from github_backfill import (
 # App setup
 # ------------------------------------------------------------------ #
 
-app = FastAPI(title="Code Review Tool API", version="1.0.0")
+app = FastAPI(
+    title="Code Review Tool API",
+    version="1.0.0",
+    # No-op unless SUPABASE_JWT_SECRET is set (gates /api/* with Supabase Auth).
+    dependencies=[Depends(require_user)],
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -102,6 +109,7 @@ class SettingsBody(BaseModel):
     repos: Optional[list[str]] = None
     openrouter_model: Optional[str] = None
     openrouter_provider: Optional[str] = None
+    embedding_model: Optional[str] = None
 
 
 class RepoBody(BaseModel):
@@ -211,6 +219,7 @@ def get_stats():
         "backend": os.getenv("DECISION_STORE_BACKEND", "chroma"),
         "model": config_store.get_model(),
         "provider": config_store.get_provider(),
+        "embedding_model": config_store.get_embedding_model(),
         "api_key_configured": bool(os.getenv("OPENROUTER_API_KEY")),
         "github_token_configured": bool(config_store.get_github_token()),
     }
@@ -231,6 +240,7 @@ def get_settings():
         # Model/provider are not secret — return the effective values.
         "openrouter_model": config_store.get_model(),
         "openrouter_provider": config_store.get_provider(),
+        "embedding_model": config_store.get_embedding_model(),
     }
 
 
@@ -248,6 +258,8 @@ def update_settings(body: SettingsBody):
         update["openrouter_model"] = body.openrouter_model.strip()
     if body.openrouter_provider is not None:
         update["openrouter_provider"] = body.openrouter_provider.strip()
+    if body.embedding_model is not None:
+        update["embedding_model"] = body.embedding_model.strip()
     if update:
         config_store.save_config(update)
     return get_settings()
@@ -462,7 +474,9 @@ async def github_webhook(request: Request):
 
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 
-if FRONTEND_DIST.exists():
+# On Vercel the SPA is served by the CDN, not this function — skip static serving
+# (the bundle is API-only and the filesystem has no frontend/dist).
+if not os.getenv("VERCEL") and FRONTEND_DIST.exists():
     app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIST / "assets")), name="assets")
 
     @app.get("/{full_path:path}")

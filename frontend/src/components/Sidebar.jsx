@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { api } from '../lib/api.js'
+import { authEnabled, signOut } from '../lib/auth.js'
 
 const NAV = [
   { key: 'review', label: 'Review', icon: '▶' },
@@ -59,8 +60,17 @@ export default function Sidebar({ current, onNav }) {
 
       <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
         <BalanceBadge />
+        {authEnabled && (
+          <button onClick={() => signOut()} style={{
+            margin: '0 10px', background: 'transparent', border: '1px solid var(--border)',
+            color: 'var(--text-2)', borderRadius: 8, padding: '7px 10px', fontSize: 12,
+            display: 'flex', alignItems: 'center', gap: 8,
+          }}>
+            <span style={{ color: 'var(--text-3)' }}>⎋</span> Sign out
+          </button>
+        )}
         <div style={{ padding: '0 10px', fontSize: 11, color: 'var(--text-3)' }}>
-          Listening on :1500
+          ReviewBot
         </div>
       </div>
     </aside>

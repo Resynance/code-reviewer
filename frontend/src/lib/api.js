@@ -1,10 +1,17 @@
 // Thin client for the ReviewBot REST API. All calls are same-origin in
 // production (FastAPI serves this bundle) and proxied to :1500 in dev.
 
+import { accessToken } from './auth.js'
+
 async function request(path, { method = 'GET', body } = {}) {
+  const headers = {}
+  if (body) headers['Content-Type'] = 'application/json'
+  const token = accessToken()
+  if (token) headers['Authorization'] = `Bearer ${token}`
+
   const res = await fetch(path, {
     method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    headers: Object.keys(headers).length ? headers : undefined,
     body: body ? JSON.stringify(body) : undefined,
   })
 
