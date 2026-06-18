@@ -110,6 +110,37 @@ def test_allowlist(monkeypatch):
     assert e.value.status_code == 403
 
 
+def test_gmail_dots_and_tags_are_ignored(monkeypatch):
+    # Allowlisted under the no-dot spelling; a dotted/+tagged Gmail login (e.g.
+    # via OAuth) must still match the same mailbox.
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", SECRET)
+    monkeypatch.setenv("ALLOWED_EMAILS", "maxwellturner@gmail.com")
+    assert run(auth.require_user(req("/api/settings", make_token(email="maxwell.turner@gmail.com")))) is None
+    assert run(auth.require_user(req("/api/settings", make_token(email="maxwell.turner+ci@gmail.com")))) is None
+    # A genuinely different Gmail mailbox is still denied.
+    with pytest.raises(HTTPException) as e:
+        run(auth.require_user(req("/api/settings", make_token(email="someone.else@gmail.com"))))
+    assert e.value.status_code == 403
+
+
+def test_non_gmail_dots_are_significant(monkeypatch):
+    # Dots only collapse for Gmail; other providers keep them.
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", SECRET)
+    monkeypatch.setenv("ALLOWED_EMAILS", "first.last@corp.com")
+    assert run(auth.require_user(req("/api/settings", make_token(email="first.last@corp.com")))) is None
+    with pytest.raises(HTTPException) as e:
+        run(auth.require_user(req("/api/settings", make_token(email="firstlast@corp.com"))))
+    assert e.value.status_code == 403
+
+
+def test_canonical_email():
+    assert auth._canonical_email("Maxwell.Turner+ci@Gmail.com") == "maxwellturner@gmail.com"
+    assert auth._canonical_email("a.b@googlemail.com") == "ab@googlemail.com"
+    assert auth._canonical_email("first.last@corp.com") == "first.last@corp.com"
+    assert auth._canonical_email("  Bob@Example.COM ") == "bob@example.com"
+    assert auth._canonical_email("not-an-email") == "not-an-email"
+
+
 def test_asymmetric_token_via_jwks(monkeypatch):
     # Mirrors a current Supabase project: ES256-signed access tokens verified
     # against the JWKS. We generate an EC keypair, sign a token, and stub the

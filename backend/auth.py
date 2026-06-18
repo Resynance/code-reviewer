@@ -55,21 +55,44 @@ def _jwk_client(url: str):
     return jwt.PyJWKClient(url)
 
 
+_GMAIL_DOMAINS = {"gmail.com", "googlemail.com"}
+
+
+def _canonical_email(email: str) -> str:
+    """Lowercase + trim, and canonicalize Gmail addresses.
+
+    Gmail ignores dots in the local part and anything after a ``+``, so
+    ``Maxwell.Turner+ci@gmail.com`` and ``maxwellturner@gmail.com`` are the same
+    mailbox. Without this, a user added under one spelling is denied when they
+    sign in (e.g. via OAuth) under another. Non-Gmail addresses are only
+    lowercased/trimmed — dots and ``+`` can be significant elsewhere.
+    """
+    e = (email or "").strip().lower()
+    if "@" not in e:
+        return e
+    local, _, domain = e.partition("@")
+    if domain in _GMAIL_DOMAINS:
+        local = local.split("+", 1)[0].replace(".", "")
+    return f"{local}@{domain}"
+
+
 def _check_allowlist(email: str):
     """Authorize a verified user — **fail closed**.
 
     A user is allowed if their email is in the runtime allowlist table
     (managed in the app, no redeploy) OR in the ALLOWED_EMAILS env bootstrap
     (comma-separated, or `*` for any authenticated user). If neither lists them —
-    and the lists are empty — access is denied.
+    and the lists are empty — access is denied. Matching is Gmail-aware (dots and
+    ``+tags`` are ignored for Gmail), so the same person isn't locked out by a
+    cosmetically different spelling of their address.
     """
-    email_l = (email or "").lower()
+    canon = _canonical_email(email)
 
     env_allow = os.getenv("ALLOWED_EMAILS", "").strip()
     if env_allow == "*":
         return
     env_set = {e.strip().lower() for e in env_allow.split(",") if e.strip()}
-    if email_l and email_l in env_set:
+    if canon and canon in {_canonical_email(e) for e in env_set}:
         return
 
     try:
@@ -77,7 +100,7 @@ def _check_allowlist(email: str):
         db_set = access_store.allowed_emails_cached()
     except Exception:
         db_set = set()
-    if email_l and email_l in db_set:
+    if canon and canon in {_canonical_email(e) for e in db_set}:
         return
 
     if not env_set and not db_set:
