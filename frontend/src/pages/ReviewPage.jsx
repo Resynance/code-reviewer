@@ -1,41 +1,16 @@
 import { useState, useEffect } from 'react'
 import { api } from '../lib/api.js'
 
-const SAMPLE_DIFF = `diff --git a/src/auth/middleware.py b/src/auth/middleware.py
-index 8a3f2c1..d4e9b7a 100644
---- a/src/auth/middleware.py
-+++ b/src/auth/middleware.py
-@@ -12,6 +12,18 @@ class AuthMiddleware:
-     def __init__(self, secret_key: str):
-         self.secret_key = secret_key
- 
-+    def validate_token(self, token: str) -> dict:
-+        try:
-+            payload = jwt.decode(token, self.secret_key, algorithms=["HS256"])
-+            return payload
-+        except jwt.ExpiredSignatureError:
-+            raise HTTPException(status_code=401, detail="Token expired")
-+        except jwt.InvalidTokenError:
-+            raise HTTPException(status_code=401, detail="Invalid token")
-+
-+    def get_user_id(self, token: str) -> str:
-+        payload = self.validate_token(token)
-+        return payload.get("sub")
-+
-     def __call__(self, request: Request, call_next):
-         token = request.headers.get("Authorization", "").replace("Bearer ", "")
-         if not token:`
-
 export default function ReviewPage() {
   const [form, setForm] = useState({
-    pr_number: 201,
-    repo: 'my-org/my-repo',
-    title: 'Add JWT validation to auth middleware',
-    description: 'Implements token validation and user extraction methods on the auth middleware class.',
-    diff: SAMPLE_DIFF,
-    author: 'dev',
-    base_branch: 'main',
-    files_changed: ['src/auth/middleware.py'],
+    pr_number: '',
+    repo: '',
+    title: '',
+    description: '',
+    diff: '',
+    author: '',
+    base_branch: '',
+    files_changed: [],
   })
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
@@ -49,14 +24,14 @@ export default function ReviewPage() {
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
-  // Load configured repos so the repo field can be a dropdown. If the form
-  // still holds the placeholder default, switch it to the first real repo.
+  // Load configured repos so the repo field can be a dropdown. Default the
+  // empty repo field to the first real repo so the PR picker has something.
   useEffect(() => {
     api.listRepos().then(r => {
       const list = r.repos || []
       setRepos(list)
       if (list.length) {
-        setForm(f => (f.repo === 'my-org/my-repo' ? { ...f, repo: list[0] } : f))
+        setForm(f => (f.repo ? f : { ...f, repo: list[0] }))
       }
     }).catch(() => {})
   }, [])
@@ -123,6 +98,20 @@ export default function ReviewPage() {
       </p>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+        <Field label="Repository">
+          {repos.length > 0 ? (
+            <select value={form.repo} onChange={e => set('repo', e.target.value)} style={inputStyle}>
+              {!repos.includes(form.repo) && <option value={form.repo}>{form.repo || 'Select a repo'}</option>}
+              {repos.map(r => <option key={r} value={r}>{r}</option>)}
+            </select>
+          ) : (
+            <input value={form.repo} onChange={e => set('repo', e.target.value)} style={inputStyle} placeholder="owner/repo" />
+          )}
+        </Field>
+        <Field label="PR Number" >
+          <input value={form.pr_number} onChange={e => set('pr_number', Number(e.target.value))}
+            type="number" style={inputStyle} />
+        </Field>
         {repos.length > 0 && (
           <Field label="Load a pull request" style={{ gridColumn: '1 / -1' }}>
             <select value={selectedPr} onChange={e => loadPr(e.target.value)} style={inputStyle} disabled={loadingPrs || loadingPr}>
@@ -138,20 +127,6 @@ export default function ReviewPage() {
             {prError && <div style={{ fontSize: 12, color: 'var(--red)', marginTop: 4 }}>⚠ {prError}</div>}
           </Field>
         )}
-        <Field label="PR Number" >
-          <input value={form.pr_number} onChange={e => set('pr_number', Number(e.target.value))}
-            type="number" style={inputStyle} />
-        </Field>
-        <Field label="Repository">
-          {repos.length > 0 ? (
-            <select value={form.repo} onChange={e => set('repo', e.target.value)} style={inputStyle}>
-              {!repos.includes(form.repo) && <option value={form.repo}>{form.repo || 'Select a repo'}</option>}
-              {repos.map(r => <option key={r} value={r}>{r}</option>)}
-            </select>
-          ) : (
-            <input value={form.repo} onChange={e => set('repo', e.target.value)} style={inputStyle} placeholder="owner/repo" />
-          )}
-        </Field>
         <Field label="PR Title" style={{ gridColumn: '1 / -1' }}>
           <input value={form.title} onChange={e => set('title', e.target.value)} style={inputStyle} />
         </Field>
