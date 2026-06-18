@@ -16,7 +16,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from pydantic import BaseModel
 
 from backend.auth import require_user
@@ -58,6 +58,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Surface database connectivity failures as a clear 503 instead of an opaque 500.
+# The Postgres-backed stores raise psycopg.OperationalError when the DB is
+# unreachable (wrong DATABASE_URL, paused Supabase project, or pooler credentials
+# mid-rotation). Auth survives such an outage via the ALLOWED_EMAILS bootstrap
+# (see auth.py), so without this every DB-backed endpoint would 500 with no hint.
+# Guarded import: the file backend (local/dev) has no psycopg and never raises it.
+try:
+    import psycopg
+
+    @app.exception_handler(psycopg.OperationalError)
+    async def _db_unavailable(request: Request, exc: psycopg.OperationalError):
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Database unavailable — check DATABASE_URL and Supabase status."},
+        )
+except ImportError:
+    pass
+
 
 _store = None
 _engine = None
