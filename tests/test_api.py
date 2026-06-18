@@ -178,6 +178,43 @@ def test_open_prs_excludes_already_in_store(client, monkeypatch):
     assert [p["number"] for p in res["new_prs"]] == [2]
 
 
+# ----- PR picker ----- #
+
+def test_repo_prs_requires_token(client):
+    tc, _ = client
+    assert tc.get("/api/repos/prs", params={"repo": "org/a"}).status_code == 400
+
+
+def test_repo_prs_orders_open_first_then_recent(client, monkeypatch):
+    tc, main = client
+    config_store.save_config({"github_token": "t"})
+    prs = [
+        {"number": 1, "state": "closed", "updated_at": "2026-06-10", "title": "c1"},
+        {"number": 2, "state": "open", "updated_at": "2026-06-01", "title": "o1"},
+        {"number": 3, "state": "open", "updated_at": "2026-06-05", "title": "o2"},
+    ]
+    monkeypatch.setattr(main, "list_prs", lambda repo, token: prs)
+    res = tc.get("/api/repos/prs", params={"repo": "org/a"}).json()
+    # open PRs first (newest-updated first), then closed
+    assert [p["number"] for p in res["prs"]] == [3, 2, 1]
+
+
+def test_repo_pr_requires_token(client):
+    tc, _ = client
+    assert tc.get("/api/repos/pr", params={"repo": "org/a", "number": 1}).status_code == 400
+
+
+def test_repo_pr_returns_form_data(client, monkeypatch):
+    tc, main = client
+    config_store.save_config({"github_token": "t"})
+    monkeypatch.setattr(main, "fetch_pr", lambda repo, number, token: {
+        "pr_number": number, "repo": repo, "title": "T", "description": "D",
+        "author": "dev", "base_branch": "main", "diff": "d", "files_changed": ["a.py"],
+    })
+    res = tc.get("/api/repos/pr", params={"repo": "org/a", "number": 196}).json()
+    assert res["pr_number"] == 196 and res["diff"] == "d" and res["files_changed"] == ["a.py"]
+
+
 # ----- webhook ----- #
 
 def _sign(secret: bytes, body: bytes) -> str:

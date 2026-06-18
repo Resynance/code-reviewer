@@ -111,10 +111,24 @@ def backfill(repo: str, pages: int, token: str, store, on_page=None) -> int:
     return imported
 
 
-def list_open_prs(repo: str, token: str, pages: int = 5) -> list:
-    """Return a repo's open PRs as summary dicts (newest GitHub order).
+def _pr_summary(pr: dict) -> dict:
+    return {
+        "number": pr.get("number"),
+        "title": pr.get("title", ""),
+        "author": (pr.get("user") or {}).get("login", "unknown"),
+        "url": pr.get("html_url", ""),
+        "state": pr.get("state", "open"),
+        "draft": bool(pr.get("draft", False)),
+        "created_at": pr.get("created_at"),
+        "updated_at": pr.get("updated_at"),
+    }
 
-    Raises ValueError / RuntimeError on the same conditions as backfill().
+
+def list_prs(repo: str, token: str, state: str = "all", pages: int = 3) -> list:
+    """Return a repo's PRs as summary dicts, most-recently-updated first.
+
+    `state` is one of GitHub's `open` / `closed` / `all`. Raises ValueError /
+    RuntimeError on the same conditions as backfill().
     """
     import httpx
 
@@ -125,22 +139,55 @@ def list_open_prs(repo: str, token: str, pages: int = 5) -> list:
         for page in range(1, pages + 1):
             resp = client.get(
                 f"{GITHUB_API}/repos/{repo}/pulls",
-                params={"state": "open", "per_page": PER_PAGE, "page": page},
+                params={"state": state, "per_page": PER_PAGE, "page": page,
+                        "sort": "updated", "direction": "desc"},
             )
             _raise_for_status(resp, repo)
 
             prs = resp.json()
             if not prs:
                 break
-
-            for pr in prs:
-                out.append({
-                    "number": pr.get("number"),
-                    "title": pr.get("title", ""),
-                    "author": (pr.get("user") or {}).get("login", "unknown"),
-                    "url": pr.get("html_url", ""),
-                    "created_at": pr.get("created_at"),
-                    "draft": bool(pr.get("draft", False)),
-                })
+            out.extend(_pr_summary(pr) for pr in prs)
 
     return out
+
+
+def list_open_prs(repo: str, token: str, pages: int = 5) -> list:
+    """Return a repo's open PRs as summary dicts."""
+    return list_prs(repo, token, state="open", pages=pages)
+
+
+def fetch_pr(repo: str, number, token: str) -> dict:
+    """Fetch one PR's metadata + unified diff + changed files, shaped for the
+    review form. Raises ValueError / RuntimeError on the usual conditions.
+    """
+    import httpx
+
+    _validate(repo, token)
+
+    base = f"{GITHUB_API}/repos/{repo}/pulls/{number}"
+    with httpx.Client(timeout=30.0, headers=_headers(token)) as client:
+        meta_resp = client.get(base)
+        _raise_for_status(meta_resp, repo)
+        meta = meta_resp.json()
+
+        diff_resp = client.get(base, headers={"Accept": "application/vnd.github.v3.diff"})
+        _raise_for_status(diff_resp, repo)
+        diff = diff_resp.text
+
+        files_resp = client.get(f"{base}/files", params={"per_page": PER_PAGE})
+        files = (
+            [f.get("filename") for f in files_resp.json()]
+            if files_resp.status_code == 200 else []
+        )
+
+    return {
+        "pr_number": meta.get("number", number),
+        "repo": repo,
+        "title": meta.get("title", ""),
+        "description": meta.get("body") or "",
+        "author": (meta.get("user") or {}).get("login", "unknown"),
+        "base_branch": (meta.get("base") or {}).get("ref", "main"),
+        "diff": diff,
+        "files_changed": files,
+    }

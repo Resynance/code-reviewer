@@ -25,7 +25,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
 import config_store
 from decision_store import create_store, ChromaDecisionStore
 from review_engine import CodeReviewEngine, ReviewRequest
-from github_backfill import backfill as run_backfill, list_open_prs, pr_doc_id
+from github_backfill import (
+    backfill as run_backfill,
+    list_open_prs,
+    list_prs,
+    fetch_pr,
+    pr_doc_id,
+)
 
 
 # ------------------------------------------------------------------ #
@@ -301,6 +307,42 @@ def open_prs(repo: str):
     existing = store.existing_ids([pr_doc_id(repo, pr["number"]) for pr in prs])
     new_prs = [pr for pr in prs if pr_doc_id(repo, pr["number"]) not in existing]
     return {"repo": repo, "open_pr_count": len(prs), "new_prs": new_prs}
+
+
+@app.get("/api/repos/prs")
+def repo_prs(repo: str):
+    """List a repo's PRs for the review picker — open PRs first, then closed,
+    each group newest-updated first."""
+    token = config_store.get_github_token()
+    if not token:
+        raise HTTPException(status_code=400, detail="GitHub token not configured")
+    try:
+        prs = list_prs(repo, token)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    def recency(p):
+        return p.get("updated_at") or ""
+
+    open_prs = sorted((p for p in prs if p["state"] == "open"), key=recency, reverse=True)
+    closed_prs = sorted((p for p in prs if p["state"] != "open"), key=recency, reverse=True)
+    return {"repo": repo, "prs": open_prs + closed_prs}
+
+
+@app.get("/api/repos/pr")
+def repo_pr(repo: str, number: int):
+    """Fetch one PR's metadata + diff, shaped for the review form."""
+    token = config_store.get_github_token()
+    if not token:
+        raise HTTPException(status_code=400, detail="GitHub token not configured")
+    try:
+        return fetch_pr(repo, number, token)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @app.get("/api/balance")

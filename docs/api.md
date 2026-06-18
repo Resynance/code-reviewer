@@ -144,6 +144,26 @@ backfilled). Read-only discovery — does not fetch diffs or run reviews.
 (`<owner>-<repo>-pr-<number>`) isn't already stored. `400` if no GitHub token is
 configured; `502` on GitHub API errors.
 
+### `GET /api/repos/prs?repo=org/a`
+List a repo's PRs for the Review page picker — **open PRs first**, then closed,
+each group newest-updated first.
+```json
+{ "repo": "org/a", "prs": [
+  { "number": 88, "title": "Add caching", "author": "dev", "url": "…",
+    "state": "open", "draft": false, "created_at": "…", "updated_at": "…" }
+] }
+```
+`400` without a token; `502` on GitHub errors.
+
+### `GET /api/repos/pr?repo=org/a&number=88`
+Fetch one PR's metadata + unified diff + changed files, shaped for the review form.
+```json
+{ "pr_number": 88, "repo": "org/a", "title": "Add caching", "description": "…",
+  "author": "dev", "base_branch": "main", "diff": "diff --git …",
+  "files_changed": ["src/cache.py"] }
+```
+`400` without a token; `502` on GitHub errors.
+
 ## Status
 
 ### `GET /api/stats`

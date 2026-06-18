@@ -150,3 +150,45 @@ def test_list_open_prs_404_message(monkeypatch):
     _patch_client(monkeypatch, {1: FakeResp(404, {}, "nf")})
     with pytest.raises(RuntimeError, match="not found"):
         gb.list_open_prs("org/repo", token="t")
+
+
+def test_list_prs_includes_state(monkeypatch):
+    _patch_client(monkeypatch, {1: FakeResp(200, [_open_pr(1), _pr(2)]), 2: FakeResp(200, [])})
+    prs = gb.list_prs("org/repo", token="t")
+    assert {p["number"]: p["state"] for p in prs} == {1: "open", 2: "closed"}
+
+
+def test_fetch_pr_shapes_form_data(monkeypatch):
+    meta = FakeResp(200, {"number": 196, "title": "T", "body": "B",
+                          "user": {"login": "dev"}, "base": {"ref": "develop"}})
+    diff = FakeResp(200, None, "DIFF-TEXT")
+    files = FakeResp(200, [{"filename": "a.py"}, {"filename": "b.py"}])
+    seq, state = [meta, diff, files], {"i": 0}
+
+    class SeqClient:
+        def __init__(self, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url, params=None, headers=None):
+            r = seq[state["i"]]
+            state["i"] += 1
+            return r
+
+    monkeypatch.setattr(httpx, "Client", lambda **kw: SeqClient(**kw))
+    data = gb.fetch_pr("org/repo", 196, token="t")
+    assert data["pr_number"] == 196
+    assert data["title"] == "T" and data["description"] == "B"
+    assert data["author"] == "dev" and data["base_branch"] == "develop"
+    assert data["diff"] == "DIFF-TEXT"
+    assert data["files_changed"] == ["a.py", "b.py"]
+
+
+def test_fetch_pr_missing_token():
+    with pytest.raises(ValueError, match="token"):
+        gb.fetch_pr("org/repo", 1, token="")

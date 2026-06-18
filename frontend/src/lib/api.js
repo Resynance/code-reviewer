@@ -59,4 +59,10 @@ export const api = {
 
   openPrs: (repo) =>
     request(`/api/repos/open-prs?repo=${encodeURIComponent(repo)}`),
+
+  repoPrs: (repo) =>
+    request(`/api/repos/prs?repo=${encodeURIComponent(repo)}`),
+
+  repoPr: (repo, number) =>
+    request(`/api/repos/pr?repo=${encodeURIComponent(repo)}&number=${encodeURIComponent(number)}`),
 }

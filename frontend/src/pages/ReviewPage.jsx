@@ -41,6 +41,11 @@ export default function ReviewPage() {
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
   const [repos, setRepos] = useState([])
+  const [prList, setPrList] = useState([])
+  const [loadingPrs, setLoadingPrs] = useState(false)
+  const [loadingPr, setLoadingPr] = useState(false)
+  const [prError, setPrError] = useState(null)
+  const [selectedPr, setSelectedPr] = useState('')
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
@@ -55,6 +60,42 @@ export default function ReviewPage() {
       }
     }).catch(() => {})
   }, [])
+
+  // Whenever the selected repo changes, load its PRs (open first) for the picker.
+  useEffect(() => {
+    if (!form.repo || !repos.includes(form.repo)) { setPrList([]); return }
+    let active = true
+    setLoadingPrs(true); setPrError(null); setSelectedPr('')
+    api.repoPrs(form.repo)
+      .then(res => { if (active) setPrList(res.prs || []) })
+      .catch(() => { if (active) { setPrList([]); setPrError('Could not load PRs — check the GitHub token in Settings.') } })
+      .finally(() => active && setLoadingPrs(false))
+    return () => { active = false }
+  }, [form.repo, repos])
+
+  // Load a selected PR's metadata + diff into the form.
+  async function loadPr(number) {
+    setSelectedPr(number)
+    if (!number) return
+    setLoadingPr(true); setPrError(null)
+    try {
+      const data = await api.repoPr(form.repo, number)
+      setForm(f => ({
+        ...f,
+        pr_number: data.pr_number,
+        title: data.title,
+        description: data.description,
+        author: data.author,
+        base_branch: data.base_branch,
+        diff: data.diff,
+        files_changed: data.files_changed || [],
+      }))
+    } catch (e) {
+      setPrError(e.message)
+    } finally {
+      setLoadingPr(false)
+    }
+  }
 
   async function submit() {
     setLoading(true)
@@ -77,10 +118,26 @@ export default function ReviewPage() {
     <div style={{ maxWidth: 900 }}>
       <h1 style={{ fontSize: 22, fontWeight: 600, marginBottom: 4 }}>Review a Pull Request</h1>
       <p style={{ color: 'var(--text-2)', marginBottom: 28 }}>
-        Paste a diff and PR metadata to run an AI review with historical context.
+        Select a pull request to load it from GitHub, or fill the fields manually,
+        then run an AI review with historical context.
       </p>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+        {repos.length > 0 && (
+          <Field label="Load a pull request" style={{ gridColumn: '1 / -1' }}>
+            <select value={selectedPr} onChange={e => loadPr(e.target.value)} style={inputStyle} disabled={loadingPrs || loadingPr}>
+              <option value="">
+                {loadingPrs ? 'Loading pull requests…' : loadingPr ? 'Loading PR…' : 'Select a pull request…'}
+              </option>
+              {prList.map(pr => (
+                <option key={pr.number} value={pr.number}>
+                  #{pr.number}  {pr.state === 'open' ? '●' : '○'} {pr.state}{pr.draft ? ' · draft' : ''}  —  {pr.title}
+                </option>
+              ))}
+            </select>
+            {prError && <div style={{ fontSize: 12, color: 'var(--red)', marginTop: 4 }}>⚠ {prError}</div>}
+          </Field>
+        )}
         <Field label="PR Number" >
           <input value={form.pr_number} onChange={e => set('pr_number', Number(e.target.value))}
             type="number" style={inputStyle} />
