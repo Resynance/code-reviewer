@@ -217,3 +217,76 @@ def test_fetch_pr_builds_diff_from_files_on_406(monkeypatch):
 def test_fetch_pr_missing_token():
     with pytest.raises(ValueError, match="token"):
         gb.fetch_pr("org/repo", 1, token="")
+
+
+# ----- owner / repo discovery ----- #
+
+def _client_from(handler, monkeypatch):
+    class C:
+        def __init__(self, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url, params=None):
+            return handler(url, params or {})
+
+    monkeypatch.setattr(httpx, "Client", lambda **k: C())
+
+
+def test_list_owners(monkeypatch):
+    def handler(url, params):
+        if url.endswith("/user"):
+            return FakeResp(200, {"login": "me"})
+        if url.endswith("/user/orgs"):
+            return FakeResp(200, [{"login": "acme"}, {"login": "globex"}] if params.get("page", 1) == 1 else [])
+        return FakeResp(404, {}, "nf")
+
+    _client_from(handler, monkeypatch)
+    owners = gb.list_owners("t")
+    assert owners[0] == {"login": "me", "type": "user"}
+    assert {o["login"] for o in owners} == {"me", "acme", "globex"}
+    assert all(o["type"] == "org" for o in owners[1:])
+
+
+def test_list_owner_repos_org(monkeypatch):
+    def handler(url, params):
+        if "/orgs/acme/repos" in url:
+            return FakeResp(200, [{"full_name": "acme/a", "name": "a", "private": True, "description": "d"}]
+                            if params.get("page", 1) == 1 else [])
+        return FakeResp(404, {}, "nf")
+
+    _client_from(handler, monkeypatch)
+    repos = gb.list_owner_repos("acme", "t", owner_type="org")
+    assert repos == [{"full_name": "acme/a", "name": "a", "private": True, "description": "d"}]
+
+
+def test_list_owner_repos_user_uses_affiliation(monkeypatch):
+    seen = {}
+
+    def handler(url, params):
+        if url.endswith("/user/repos"):
+            seen.update(params)
+            return FakeResp(200, [{"full_name": "me/x", "name": "x", "private": False}]
+                            if params.get("page", 1) == 1 else [])
+        return FakeResp(404, {}, "nf")
+
+    _client_from(handler, monkeypatch)
+    repos = gb.list_owner_repos("me", "t", owner_type="user")
+    assert repos[0]["full_name"] == "me/x"
+    assert seen.get("affiliation") == "owner"
+
+
+def test_list_owners_missing_token():
+    with pytest.raises(ValueError, match="token"):
+        gb.list_owners("")
+
+
+def test_list_owners_auth_error(monkeypatch):
+    _client_from(lambda url, params: FakeResp(403, {}, "forbidden"), monkeypatch)
+    with pytest.raises(RuntimeError, match="authentication failed"):
+        gb.list_owners("t")

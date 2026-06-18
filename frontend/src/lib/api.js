@@ -64,6 +64,11 @@ export const api = {
   backfill: (repo, pages) =>
     request('/api/backfill', { method: 'POST', body: { repo, pages } }),
 
+  githubOwners: () => request('/api/github/owners'),
+
+  githubRepos: (owner, type = 'org') =>
+    request(`/api/github/repos?owner=${encodeURIComponent(owner)}&type=${encodeURIComponent(type)}`),
+
   openPrs: (repo) =>
     request(`/api/repos/open-prs?repo=${encodeURIComponent(repo)}`),
 

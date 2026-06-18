@@ -35,6 +35,8 @@ from github_backfill import (
     list_prs,
     fetch_pr,
     pr_doc_id,
+    list_owners,
+    list_owner_repos,
 )
 
 
@@ -339,6 +341,34 @@ def add_access(body: EmailBody):
 def remove_access(email: str):
     """Revoke a user's access by email."""
     return {"emails": access_store.remove_email(email)}
+
+
+@app.get("/api/github/owners")
+def github_owners():
+    """List the token's owner accounts (the user + their orgs) for repo discovery."""
+    token = config_store.get_github_token()
+    if not token:
+        raise HTTPException(status_code=400, detail="GitHub token not configured")
+    try:
+        return {"owners": list_owners(token)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/api/github/repos")
+def github_owner_repos(owner: str, type: str = "org"):
+    """List repos under an owner that the token can access."""
+    token = config_store.get_github_token()
+    if not token:
+        raise HTTPException(status_code=400, detail="GitHub token not configured")
+    try:
+        return {"owner": owner, "repos": list_owner_repos(owner, token, owner_type=type)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @app.post("/api/backfill")

@@ -224,3 +224,81 @@ def fetch_pr(repo: str, number, token: str, max_file_pages: int = 20) -> dict:
         "diff": diff,
         "files_changed": [f.get("filename") for f in files],
     }
+
+
+def _require_token(token: str):
+    if not token:
+        raise ValueError("GitHub token is not configured")
+
+
+def _raise_status(resp):
+    if resp.status_code in (401, 403):
+        raise RuntimeError(
+            "GitHub authentication failed. The token needs 'read:org' and 'repo' "
+            "scope (and SSO authorization for private org repos)."
+        )
+    if resp.status_code != 200:
+        raise RuntimeError(f"GitHub returned {resp.status_code}: {resp.text[:200]}")
+
+
+def list_owners(token: str, pages: int = 5) -> list:
+    """The authenticated user's account plus the orgs they belong to.
+
+    Returns [{login, type}] where type is 'user' (their own account) or 'org'.
+    """
+    import httpx
+
+    _require_token(token)
+    with httpx.Client(timeout=30.0, headers=_headers(token)) as client:
+        me = client.get(f"{GITHUB_API}/user")
+        _raise_status(me)
+        login = me.json().get("login", "")
+        owners = [{"login": login, "type": "user"}] if login else []
+
+        for page in range(1, pages + 1):
+            resp = client.get(
+                f"{GITHUB_API}/user/orgs", params={"per_page": PER_PAGE, "page": page}
+            )
+            _raise_status(resp)
+            orgs = resp.json()
+            if not orgs:
+                break
+            owners.extend({"login": o.get("login"), "type": "org"} for o in orgs)
+    return owners
+
+
+def list_owner_repos(owner: str, token: str, owner_type: str = "org", pages: int = 5) -> list:
+    """Repos under an owner the token can access, most-recently-updated first.
+
+    For `owner_type == 'org'`, lists `/orgs/{owner}/repos`. Otherwise lists the
+    authenticated user's own repos (`/user/repos?affiliation=owner`), which
+    includes private ones.
+    """
+    import httpx
+
+    _require_token(token)
+    out = []
+    with httpx.Client(timeout=30.0, headers=_headers(token)) as client:
+        for page in range(1, pages + 1):
+            if owner_type == "org":
+                resp = client.get(
+                    f"{GITHUB_API}/orgs/{owner}/repos",
+                    params={"per_page": PER_PAGE, "page": page, "sort": "updated"},
+                )
+            else:
+                resp = client.get(
+                    f"{GITHUB_API}/user/repos",
+                    params={"per_page": PER_PAGE, "page": page,
+                            "affiliation": "owner", "sort": "updated"},
+                )
+            _raise_status(resp)
+            repos = resp.json()
+            if not repos:
+                break
+            out.extend({
+                "full_name": r.get("full_name"),
+                "name": r.get("name"),
+                "private": bool(r.get("private")),
+                "description": r.get("description") or "",
+            } for r in repos)
+    return out

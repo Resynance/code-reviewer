@@ -131,6 +131,22 @@ Returns the same shape as `GET /api/settings`.
 ### `DELETE /api/repos?repo=org/a`
 Removes a repo. Returns `{ "repos": [...] }`.
 
+### `GET /api/github/owners`
+Owner accounts the configured token can browse — the authenticated user plus
+their orgs. Used to discover repos instead of typing them.
+```json
+{ "owners": [ { "login": "you", "type": "user" }, { "login": "acme", "type": "org" } ] }
+```
+`400` without a token; `502` on GitHub errors (the message hints at needing
+`read:org`/`repo` scope + SSO authorization).
+
+### `GET /api/github/repos?owner=acme&type=org`
+Repos under an owner the token can access (newest-updated first). `type` is
+`org` (`/orgs/{owner}/repos`) or `user` (the authenticated user's own repos).
+```json
+{ "owner": "acme", "repos": [ { "full_name": "acme/api", "name": "api", "private": true, "description": "…" } ] }
+```
+
 ## Access allowlist
 
 Who may sign in and use the app, stored in the `access_allowlist` table and

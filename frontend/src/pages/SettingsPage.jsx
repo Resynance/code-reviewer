@@ -25,6 +25,14 @@ export default function SettingsPage() {
   const [backfillState, setBackfillState] = useState({}) // repo -> { status, text }
   const [openPrs, setOpenPrs] = useState({}) // repo -> { open, status, prs, total, error }
 
+  // Browse-from-GitHub (discover repos under the token's orgs / your account)
+  const [owners, setOwners] = useState([])
+  const [browseOwner, setBrowseOwner] = useState('') // "login::type"
+  const [ownerRepos, setOwnerRepos] = useState([])
+  const [loadingOwnerRepos, setLoadingOwnerRepos] = useState(false)
+  const [browseRepo, setBrowseRepo] = useState('')
+  const [browseErr, setBrowseErr] = useState(null)
+
   // Access allowlist
   const [accessEmails, setAccessEmails] = useState([])
   const [newEmail, setNewEmail] = useState('')
@@ -43,7 +51,33 @@ export default function SettingsPage() {
       setEmbeddingInput(s.embedding_model || '')
     }).catch(() => {})
     api.listAccess().then(r => setAccessEmails(r.emails || [])).catch(() => {})
+    api.githubOwners().then(r => setOwners(r.owners || [])).catch(() => {})
   }, [])
+
+  // Load an owner's repos when one is picked.
+  useEffect(() => {
+    if (!browseOwner) { setOwnerRepos([]); return }
+    const [login, type] = browseOwner.split('::')
+    let active = true
+    setLoadingOwnerRepos(true); setBrowseErr(null); setBrowseRepo('')
+    api.githubRepos(login, type)
+      .then(r => { if (active) setOwnerRepos(r.repos || []) })
+      .catch(e => { if (active) { setOwnerRepos([]); setBrowseErr(e.message) } })
+      .finally(() => active && setLoadingOwnerRepos(false))
+    return () => { active = false }
+  }, [browseOwner])
+
+  async function addBrowsedRepo() {
+    if (!browseRepo) return
+    setBrowseErr(null)
+    try {
+      const res = await api.addRepo(browseRepo)
+      setSettings(s => ({ ...s, repos: res.repos }))
+      setBrowseRepo('')
+    } catch (e) {
+      setBrowseErr(e.message)
+    }
+  }
 
   async function addAccess() {
     const e = newEmail.trim()
@@ -284,9 +318,30 @@ export default function SettingsPage() {
           Open PRs lists open PRs not yet in the store (both require a GitHub token above).
         </p>
 
+        {owners.length > 0 && (
+          <div style={{ marginBottom: 14 }}>
+            <label style={labelStyle}>Browse from GitHub</label>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <select value={browseOwner} onChange={e => setBrowseOwner(e.target.value)} style={{ ...inputStyle, flex: '0 0 210px' }}>
+                <option value="">Select owner…</option>
+                {owners.map(o => <option key={o.login} value={`${o.login}::${o.type}`}>{o.login}{o.type === 'user' ? ' (you)' : ''}</option>)}
+              </select>
+              <select value={browseRepo} onChange={e => setBrowseRepo(e.target.value)}
+                disabled={!browseOwner || loadingOwnerRepos} style={{ ...inputStyle, flex: 1 }}>
+                <option value="">{loadingOwnerRepos ? 'Loading repos…' : browseOwner ? 'Select a repo…' : '—'}</option>
+                {ownerRepos.filter(r => !(settings?.repos || []).includes(r.full_name)).map(r => (
+                  <option key={r.full_name} value={r.full_name}>{r.full_name}{r.private ? ' 🔒' : ''}</option>
+                ))}
+              </select>
+              <button onClick={addBrowsedRepo} disabled={!browseRepo} style={{ ...primaryBtn(false), height: 38 }}>Add</button>
+            </div>
+            {browseErr && <div style={{ color: 'var(--red)', fontSize: 12, marginTop: 6 }}>⚠ {browseErr}</div>}
+          </div>
+        )}
+
         <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginBottom: 8 }}>
           <div style={{ flex: 1 }}>
-            <label style={labelStyle}>Add repository (owner/repo)</label>
+            <label style={labelStyle}>Add manually (owner/repo)</label>
             <input value={newRepo} onChange={e => setNewRepo(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && addRepo()}
               placeholder="my-org/my-repo" style={inputStyle} />

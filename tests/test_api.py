@@ -174,6 +174,25 @@ def test_backfill_invokes_importer(client, monkeypatch):
 
 # ----- open PRs ----- #
 
+def test_github_owners_requires_token(client):
+    tc, _ = client
+    assert tc.get("/api/github/owners").status_code == 400
+
+
+def test_github_owners_and_repos(client, monkeypatch):
+    tc, main = client
+    config_store.save_config({"github_token": "t"})
+    monkeypatch.setattr(main, "list_owners", lambda token: [
+        {"login": "me", "type": "user"}, {"login": "acme", "type": "org"}])
+    monkeypatch.setattr(main, "list_owner_repos",
+                        lambda owner, token, owner_type="org": [{"full_name": f"{owner}/r", "private": False}])
+
+    owners = tc.get("/api/github/owners").json()["owners"]
+    assert [o["login"] for o in owners] == ["me", "acme"]
+    repos = tc.get("/api/github/repos", params={"owner": "acme", "type": "org"}).json()
+    assert repos["owner"] == "acme" and repos["repos"][0]["full_name"] == "acme/r"
+
+
 def test_open_prs_requires_token(client):
     tc, _ = client
     assert tc.get("/api/repos/open-prs", params={"repo": "org/a"}).status_code == 400
