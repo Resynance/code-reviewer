@@ -49,7 +49,23 @@ def test_missing_token_rejected(monkeypatch):
 
 def test_valid_token_passes(monkeypatch):
     monkeypatch.setenv("SUPABASE_JWT_SECRET", SECRET)
+    monkeypatch.setenv("ALLOWED_EMAILS", "a@b.com")
     assert run(auth.require_user(req("/api/settings", make_token(email="a@b.com")))) is None
+
+
+def test_empty_allowlist_denies(monkeypatch):
+    # Fail closed: auth on + valid token but no ALLOWED_EMAILS -> 403.
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", SECRET)
+    monkeypatch.delenv("ALLOWED_EMAILS", raising=False)
+    with pytest.raises(HTTPException) as e:
+        run(auth.require_user(req("/api/settings", make_token(email="a@b.com"))))
+    assert e.value.status_code == 403
+
+
+def test_wildcard_allowlist_allows_any(monkeypatch):
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", SECRET)
+    monkeypatch.setenv("ALLOWED_EMAILS", "*")
+    assert run(auth.require_user(req("/api/settings", make_token(email="anyone@x.com")))) is None
 
 
 def test_wrong_secret_rejected(monkeypatch):
@@ -91,6 +107,7 @@ def test_asymmetric_token_via_jwks(monkeypatch):
     )
 
     monkeypatch.setenv("SUPABASE_URL", "https://ref.supabase.co")
+    monkeypatch.setenv("ALLOWED_EMAILS", "a@b.com")
     monkeypatch.setattr(auth, "_jwk_client", lambda url: types.SimpleNamespace(
         get_signing_key_from_jwt=lambda t: types.SimpleNamespace(key=public_key)
     ))

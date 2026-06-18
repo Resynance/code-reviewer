@@ -14,9 +14,11 @@ default for current projects, verified via the project's JWKS) or the legacy
   SUPABASE_JWKS_URL     explicit JWKS URL (overrides the derived one)
   SUPABASE_JWT_SECRET   legacy HS256 secret (fallback for HS256-signed tokens)
 
-Auth is enabled when any of the above is set. Optional `ALLOWED_EMAILS` is a
-comma-separated allowlist. Exempt: `/api/health`, the GitHub webhook
-(`/webhook/*`, HMAC-verified), the docs routes, and any non-API path.
+Auth is enabled when any of the above is set. Authorization is **fail closed**:
+once auth is on, `ALLOWED_EMAILS` must list the permitted emails (or be `*` to
+allow any authenticated user) — an empty value denies everyone, so a public
+OAuth provider can't leave the app open. Exempt: `/api/health`, the GitHub
+webhook (`/webhook/*`, HMAC-verified), the docs routes, and any non-API path.
 """
 
 import os
@@ -51,12 +53,24 @@ def _jwk_client(url: str):
     return jwt.PyJWKClient(url)
 
 
-def _allowed_email(email: str) -> bool:
+def _check_allowlist(email: str):
+    """Authorize a verified user against ALLOWED_EMAILS — **fail closed**.
+
+    With auth enabled, an empty ALLOWED_EMAILS denies everyone (a public OAuth
+    provider would otherwise let any account in). Set a comma-separated list, or
+    `*` to explicitly allow any authenticated user.
+    """
     allow = os.getenv("ALLOWED_EMAILS", "").strip()
     if not allow:
-        return True
+        raise HTTPException(
+            status_code=403,
+            detail="Access is locked: set ALLOWED_EMAILS (comma-separated, or '*' for any user)",
+        )
+    if allow == "*":
+        return
     allowed = {e.strip().lower() for e in allow.split(",") if e.strip()}
-    return (email or "").lower() in allowed
+    if (email or "").lower() not in allowed:
+        raise HTTPException(status_code=403, detail="Not authorized")
 
 
 def _decode(token: str) -> dict:
@@ -93,5 +107,4 @@ async def require_user(request: Request):
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
 
-    if not _allowed_email(claims.get("email")):
-        raise HTTPException(status_code=403, detail="Not authorized")
+    _check_allowlist(claims.get("email"))
