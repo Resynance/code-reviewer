@@ -141,6 +141,14 @@ class ChromaDecisionStore:
     def delete(self, doc_id):
         self._collection.delete(ids=[doc_id])
 
+    def existing_ids(self, doc_ids):
+        """Return the subset of `doc_ids` already present in the store."""
+        ids = [d for d in doc_ids if d]
+        if not ids:
+            return set()
+        result = self._collection.get(ids=ids)
+        return set(result.get("ids") or [])
+
 
 class PgVectorDecisionStore:
     """Postgres + pgvector backend for production deployments.
@@ -233,6 +241,17 @@ class PgVectorDecisionStore:
     def delete(self, doc_id):
         with self._conn.cursor() as cur:
             cur.execute(f"DELETE FROM {self._table} WHERE doc_id = %s", (doc_id,))
+
+    def existing_ids(self, doc_ids):
+        """Return the subset of `doc_ids` already present in the store."""
+        ids = [d for d in doc_ids if d]
+        if not ids:
+            return set()
+        with self._conn.cursor() as cur:
+            cur.execute(
+                f"SELECT doc_id FROM {self._table} WHERE doc_id = ANY(%s)", (ids,)
+            )
+            return {row[0] for row in cur.fetchall()}
 
 
 def create_store():

@@ -115,6 +115,13 @@ def test_upsert_overwrites_same_id(store):
     assert res[0]["summary"] == "second"
 
 
+def test_existing_ids(store):
+    _seed(store)  # ids a1, b1, g1
+    assert store.existing_ids(["a1", "missing", "g1"]) == {"a1", "g1"}
+    assert store.existing_ids([]) == set()
+    assert store.existing_ids(["nope"]) == set()
+
+
 def test_create_store_unknown_backend_raises(monkeypatch):
     monkeypatch.setenv("DECISION_STORE_BACKEND", "bogus")
     with pytest.raises(ValueError):

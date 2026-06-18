@@ -112,3 +112,41 @@ def test_on_page_callback_invoked(store, monkeypatch):
     calls = []
     gb.backfill("org/repo", 2, token="t", store=store, on_page=lambda p, n: calls.append((p, n)))
     assert calls == [(1, 1)]
+
+
+# ----- pr_doc_id + list_open_prs ----- #
+
+def _open_pr(number, draft=False):
+    return {
+        "number": number,
+        "title": f"Open {number}",
+        "state": "open",
+        "user": {"login": "dev"},
+        "html_url": f"https://github.com/org/repo/pull/{number}",
+        "created_at": "2026-06-01T00:00:00Z",
+        "draft": draft,
+    }
+
+
+def test_pr_doc_id():
+    assert gb.pr_doc_id("org/repo", 5) == "org-repo-pr-5"
+
+
+def test_list_open_prs_returns_summaries(monkeypatch):
+    _patch_client(monkeypatch, {1: FakeResp(200, [_open_pr(1), _open_pr(2, draft=True)]), 2: FakeResp(200, [])})
+    prs = gb.list_open_prs("org/repo", token="t")
+    assert [p["number"] for p in prs] == [1, 2]
+    assert prs[0]["author"] == "dev"
+    assert prs[0]["draft"] is False
+    assert prs[1]["draft"] is True
+
+
+def test_list_open_prs_missing_token_raises():
+    with pytest.raises(ValueError, match="token"):
+        gb.list_open_prs("org/repo", token="")
+
+
+def test_list_open_prs_404_message(monkeypatch):
+    _patch_client(monkeypatch, {1: FakeResp(404, {}, "nf")})
+    with pytest.raises(RuntimeError, match="not found"):
+        gb.list_open_prs("org/repo", token="t")

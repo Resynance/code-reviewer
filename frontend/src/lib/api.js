@@ -56,4 +56,7 @@ export const api = {
 
   backfill: (repo, pages) =>
     request('/api/backfill', { method: 'POST', body: { repo, pages } }),
+
+  openPrs: (repo) =>
+    request(`/api/repos/open-prs?repo=${encodeURIComponent(repo)}`),
 }

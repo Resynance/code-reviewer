@@ -154,6 +154,30 @@ def test_backfill_invokes_importer(client, monkeypatch):
     assert resp.json() == {"repo": "org/a", "imported": 5}
 
 
+# ----- open PRs ----- #
+
+def test_open_prs_requires_token(client):
+    tc, _ = client
+    assert tc.get("/api/repos/open-prs", params={"repo": "org/a"}).status_code == 400
+
+
+def test_open_prs_excludes_already_in_store(client, monkeypatch):
+    tc, main = client
+    config_store.save_config({"github_token": "t"})
+    fake_prs = [
+        {"number": 1, "title": "a", "author": "x", "url": "u1", "created_at": None, "draft": False},
+        {"number": 2, "title": "b", "author": "y", "url": "u2", "created_at": None, "draft": True},
+    ]
+    monkeypatch.setattr(main, "list_open_prs", lambda repo, token: fake_prs)
+    # Seed the store so PR #1 is "already backfilled".
+    store = main.get_store()
+    store.upsert(doc_id=main.pr_doc_id("org/a", 1), ref="PR #1", summary="x",
+                 reasoning="", outcome="approved_and_merged", date="")
+    res = tc.get("/api/repos/open-prs", params={"repo": "org/a"}).json()
+    assert res["open_pr_count"] == 2
+    assert [p["number"] for p in res["new_prs"]] == [2]
+
+
 # ----- webhook ----- #
 
 def _sign(secret: bytes, body: bytes) -> str:

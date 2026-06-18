@@ -1,15 +1,53 @@
 """
-github_backfill.py — import closed GitHub PRs into the decision store.
+github_backfill.py — fetch GitHub PRs for the decision store.
 
-Shared by the CLI (`cli.py backfill`) and the API (`POST /api/backfill`) so the
-two stay in sync. Each closed PR becomes one decision: title as summary, body as
-reasoning, merge state as outcome.
+Provides:
+  - backfill(...)       import closed PRs as decisions (CLI + /api/backfill)
+  - list_open_prs(...)  list a repo's open PRs (for /api/repos/open-prs)
+  - pr_doc_id(...)      the canonical decision id for a PR — shared so the
+                        "already backfilled?" check matches what backfill writes
 """
 
 from datetime import datetime, timezone
 
 GITHUB_API = "https://api.github.com"
 PER_PAGE = 100
+
+
+def pr_doc_id(repo: str, number) -> str:
+    """The decision store doc_id for a given repo + PR number."""
+    return f"{repo.replace('/', '-')}-pr-{number}"
+
+
+def _headers(token: str) -> dict:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
+def _validate(repo: str, token: str):
+    if "/" not in repo:
+        raise ValueError(f"repo must be in 'owner/repo' form, got {repo!r}")
+    if not token:
+        raise ValueError("GitHub token is not configured")
+
+
+def _raise_for_status(resp, repo: str):
+    if resp.status_code == 404:
+        raise RuntimeError(
+            f"Repo '{repo}' not found. Check the owner/repo name; if it's "
+            "private, your GitHub token needs 'repo' scope and access to it "
+            "(GitHub returns 404 rather than 403 for repos the token can't see)."
+        )
+    if resp.status_code in (401, 403):
+        raise RuntimeError(
+            "GitHub authentication failed. Check that the GitHub token is "
+            "valid and has 'repo' read scope."
+        )
+    if resp.status_code != 200:
+        raise RuntimeError(f"GitHub returned {resp.status_code}: {resp.text[:200]}")
 
 
 def _outcome_for(pr: dict) -> str:
@@ -30,39 +68,16 @@ def backfill(repo: str, pages: int, token: str, store, on_page=None) -> int:
     """
     import httpx
 
-    if "/" not in repo:
-        raise ValueError(f"repo must be in 'owner/repo' form, got {repo!r}")
-    if not token:
-        raise ValueError("GitHub token is not configured")
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
+    _validate(repo, token)
 
     imported = 0
-    with httpx.Client(timeout=30.0, headers=headers) as client:
+    with httpx.Client(timeout=30.0, headers=_headers(token)) as client:
         for page in range(1, pages + 1):
             resp = client.get(
                 f"{GITHUB_API}/repos/{repo}/pulls",
                 params={"state": "closed", "per_page": PER_PAGE, "page": page},
             )
-            if resp.status_code == 404:
-                raise RuntimeError(
-                    f"Repo '{repo}' not found. Check the owner/repo name; if it's "
-                    "private, your GitHub token needs 'repo' scope and access to it "
-                    "(GitHub returns 404 rather than 403 for repos the token can't see)."
-                )
-            if resp.status_code in (401, 403):
-                raise RuntimeError(
-                    "GitHub authentication failed. Check that the GitHub token is "
-                    "valid and has 'repo' read scope."
-                )
-            if resp.status_code != 200:
-                raise RuntimeError(
-                    f"GitHub returned {resp.status_code}: {resp.text[:200]}"
-                )
+            _raise_for_status(resp, repo)
 
             prs = resp.json()
             if not prs:
@@ -70,14 +85,13 @@ def backfill(repo: str, pages: int, token: str, store, on_page=None) -> int:
 
             for pr in prs:
                 number = pr.get("number")
-                doc_id = f"{repo.replace('/', '-')}-pr-{number}"
                 date = (
                     pr.get("merged_at")
                     or pr.get("closed_at")
                     or datetime.now(timezone.utc).isoformat()
                 )
                 store.upsert(
-                    doc_id=doc_id,
+                    doc_id=pr_doc_id(repo, number),
                     ref=f"PR #{number}",
                     summary=pr.get("title", "") or f"PR #{number}",
                     reasoning=(pr.get("body") or "").strip(),
@@ -95,3 +109,38 @@ def backfill(repo: str, pages: int, token: str, store, on_page=None) -> int:
                 on_page(page, len(prs))
 
     return imported
+
+
+def list_open_prs(repo: str, token: str, pages: int = 5) -> list:
+    """Return a repo's open PRs as summary dicts (newest GitHub order).
+
+    Raises ValueError / RuntimeError on the same conditions as backfill().
+    """
+    import httpx
+
+    _validate(repo, token)
+
+    out = []
+    with httpx.Client(timeout=30.0, headers=_headers(token)) as client:
+        for page in range(1, pages + 1):
+            resp = client.get(
+                f"{GITHUB_API}/repos/{repo}/pulls",
+                params={"state": "open", "per_page": PER_PAGE, "page": page},
+            )
+            _raise_for_status(resp, repo)
+
+            prs = resp.json()
+            if not prs:
+                break
+
+            for pr in prs:
+                out.append({
+                    "number": pr.get("number"),
+                    "title": pr.get("title", ""),
+                    "author": (pr.get("user") or {}).get("login", "unknown"),
+                    "url": pr.get("html_url", ""),
+                    "created_at": pr.get("created_at"),
+                    "draft": bool(pr.get("draft", False)),
+                })
+
+    return out

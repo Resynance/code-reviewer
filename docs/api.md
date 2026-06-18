@@ -127,6 +127,23 @@ actionable, e.g. a 404 hint about private-repo access).
 
 > Runs synchronously — a large repo holds the request open until done.
 
+### `GET /api/repos/open-prs?repo=org/a`
+List a repo's **open** PRs that are **not yet in the decision store** (i.e. not
+backfilled). Read-only discovery — does not fetch diffs or run reviews.
+```json
+{
+  "repo": "org/a",
+  "open_pr_count": 12,
+  "new_prs": [
+    { "number": 88, "title": "Add caching", "author": "dev",
+      "url": "https://github.com/org/a/pull/88", "created_at": "2026-06-01T…", "draft": false }
+  ]
+}
+```
+`open_pr_count` is the total open PRs seen; `new_prs` are those whose decision id
+(`<owner>-<repo>-pr-<number>`) isn't already stored. `400` if no GitHub token is
+configured; `502` on GitHub API errors.
+
 ## Status
 
 ### `GET /api/stats`

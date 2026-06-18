@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
 import config_store
 from decision_store import create_store, ChromaDecisionStore
 from review_engine import CodeReviewEngine, ReviewRequest
-from github_backfill import backfill as run_backfill
+from github_backfill import backfill as run_backfill, list_open_prs, pr_doc_id
 
 
 # ------------------------------------------------------------------ #
@@ -282,6 +282,25 @@ def backfill_repo(body: BackfillBody):
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
     return {"repo": body.repo, "imported": imported}
+
+
+@app.get("/api/repos/open-prs")
+def open_prs(repo: str):
+    """List a repo's open PRs that aren't yet in the decision store."""
+    token = config_store.get_github_token()
+    if not token:
+        raise HTTPException(status_code=400, detail="GitHub token not configured")
+    try:
+        prs = list_open_prs(repo, token)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    store = get_store()
+    existing = store.existing_ids([pr_doc_id(repo, pr["number"]) for pr in prs])
+    new_prs = [pr for pr in prs if pr_doc_id(repo, pr["number"]) not in existing]
+    return {"repo": repo, "open_pr_count": len(prs), "new_prs": new_prs}
 
 
 @app.get("/api/balance")

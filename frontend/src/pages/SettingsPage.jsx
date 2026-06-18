@@ -22,6 +22,7 @@ export default function SettingsPage() {
   const [repoErr, setRepoErr] = useState(null)
   const [pages, setPages] = useState(5)
   const [backfillState, setBackfillState] = useState({}) // repo -> { status, text }
+  const [openPrs, setOpenPrs] = useState({}) // repo -> { open, status, prs, total, error }
 
   function refreshStats() {
     api.stats().then(setStats).catch(() => {})
@@ -111,6 +112,20 @@ export default function SettingsPage() {
     }
   }
 
+  async function toggleOpenPrs(r) {
+    if (openPrs[r]?.open) {
+      setOpenPrs(s => ({ ...s, [r]: { ...s[r], open: false } }))
+      return
+    }
+    setOpenPrs(s => ({ ...s, [r]: { open: true, status: 'loading' } }))
+    try {
+      const res = await api.openPrs(r)
+      setOpenPrs(s => ({ ...s, [r]: { open: true, status: 'done', prs: res.new_prs || [], total: res.open_pr_count } }))
+    } catch (e) {
+      setOpenPrs(s => ({ ...s, [r]: { open: true, status: 'error', error: e.message } }))
+    }
+  }
+
   const repos = settings?.repos || []
 
   return (
@@ -195,8 +210,8 @@ export default function SettingsPage() {
       {/* Repositories */}
       <Card title="Repositories">
         <p style={{ color: 'var(--text-2)', fontSize: 13, marginBottom: 16 }}>
-          Repos appear in the review form and the decision filter. Backfill imports a repo's closed PRs
-          (requires a GitHub token above).
+          Repos appear in the review form and the decision filter. Backfill imports a repo's closed PRs;
+          Open PRs lists open PRs not yet in the store (both require a GitHub token above).
         </p>
 
         <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginBottom: 8 }}>
@@ -221,10 +236,14 @@ export default function SettingsPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
             {repos.map(r => {
               const bf = backfillState[r] || {}
+              const op = openPrs[r] || {}
               return (
                 <div key={r} style={{ background: 'var(--surface2)', borderRadius: 8, padding: '10px 14px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <code style={{ flex: 1, fontSize: 13, color: 'var(--text)', fontFamily: 'var(--font-mono)' }}>{r}</code>
+                    <button onClick={() => toggleOpenPrs(r)} style={smallBtn}>
+                      {op.open ? '▾ Open PRs' : '▸ Open PRs'}
+                    </button>
                     <button onClick={() => runBackfill(r)} disabled={bf.status === 'running'} style={smallBtn}>
                       {bf.status === 'running' ? '⟳ Backfilling…' : 'Backfill'}
                     </button>
@@ -235,6 +254,7 @@ export default function SettingsPage() {
                       {bf.status === 'error' ? '⚠ ' : '✓ '}{bf.text}
                     </div>
                   )}
+                  {op.open && <OpenPrList op={op} />}
                 </div>
               )
             })}
@@ -260,6 +280,49 @@ export default function SettingsPage() {
           </div>
         ))}
       </Card>
+    </div>
+  )
+}
+
+function OpenPrList({ op }) {
+  const box = { marginTop: 8, paddingTop: 10, borderTop: '1px solid var(--border)' }
+  if (op.status === 'loading') {
+    return <div style={{ ...box, fontSize: 12, color: 'var(--text-3)' }}>Loading open PRs…</div>
+  }
+  if (op.status === 'error') {
+    return <div style={{ ...box, fontSize: 12, color: 'var(--red)' }}>⚠ {op.error}</div>
+  }
+  if (!op.prs || op.prs.length === 0) {
+    return (
+      <div style={{ ...box, fontSize: 12, color: 'var(--text-3)' }}>
+        No new open PRs{op.total ? ` — all ${op.total} open PRs are already in the store.` : '.'}
+      </div>
+    )
+  }
+  return (
+    <div style={box}>
+      <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6 }}>
+        {op.prs.length} not yet in the store · {op.total} open total
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {op.prs.map(pr => (
+          <div key={pr.number} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+            <a href={pr.url} target="_blank" rel="noreferrer"
+              style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)', textDecoration: 'none' }}>
+              #{pr.number}
+            </a>
+            <span style={{ flex: 1, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {pr.title}
+            </span>
+            {pr.draft && (
+              <span style={{ fontSize: 10, color: 'var(--text-3)', border: '1px solid var(--border2)', borderRadius: 4, padding: '1px 5px' }}>
+                draft
+              </span>
+            )}
+            <span style={{ color: 'var(--text-3)' }}>{pr.author}</span>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
