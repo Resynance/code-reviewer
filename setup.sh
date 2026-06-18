@@ -42,15 +42,7 @@ source "$VENV_DIR/bin/activate"
 echo ""
 echo "▸ Installing Python packages..."
 pip install --quiet --upgrade pip
-pip install --quiet \
-  fastapi \
-  "uvicorn[standard]" \
-  chromadb \
-  openai \
-  httpx \
-  python-multipart \
-  pydantic \
-  pytest
+pip install --quiet -r "$SCRIPT_DIR/requirements.txt"
 
 echo "  Done."
 
