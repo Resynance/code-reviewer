@@ -1,42 +1,68 @@
 import { useState } from 'react'
-import { signInWithGitHub } from '../lib/auth.js'
+import { signIn, signInWithGitHub } from '../lib/auth.js'
 
 export default function LoginPage() {
-  const [busy, setBusy] = useState(false)
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [busy, setBusy] = useState(null) // 'github' | 'password' | null
   const [error, setError] = useState(null)
 
-  async function go() {
-    setBusy(true)
+  async function withGitHub() {
+    setBusy('github')
     setError(null)
     const { error } = await signInWithGitHub()
-    if (error) {
-      setError(error.message)
-      setBusy(false)
-    }
-    // On success the browser redirects to GitHub; the rest of this function
-    // never runs. After the round-trip, App's onAuthStateChange picks up the
-    // session and renders the app.
+    if (error) { setError(error.message); setBusy(null) }
+    // On success the browser redirects to GitHub; App's onAuthStateChange takes
+    // over after the round-trip.
+  }
+
+  async function withPassword(e) {
+    e.preventDefault()
+    setBusy('password')
+    setError(null)
+    const { error } = await signIn(email, password)
+    if (error) setError(error.message)
+    setBusy(null)
   }
 
   return (
     <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
       <div style={{
         width: 340, background: 'var(--surface)', border: '1px solid var(--border)',
-        borderRadius: 12, padding: '32px 28px', textAlign: 'center',
+        borderRadius: 12, padding: '32px 28px',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 8 }}>
           <span style={{ fontSize: 20 }}>⌘</span>
           <span style={{ fontSize: 17, fontWeight: 600 }}>ReviewBot</span>
         </div>
-        <p style={{ color: 'var(--text-2)', fontSize: 13, marginBottom: 24 }}>Sign in to continue.</p>
+        <p style={{ color: 'var(--text-2)', fontSize: 13, marginBottom: 22, textAlign: 'center' }}>Sign in to continue.</p>
 
-        <button onClick={go} disabled={busy} style={{
+        <button onClick={withGitHub} disabled={busy !== null} style={{
           width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
           background: busy ? 'var(--surface2)' : 'var(--accent)', color: busy ? 'var(--text-3)' : '#fff',
           border: 'none', borderRadius: 8, padding: '11px 0', fontSize: 14, fontWeight: 500,
         }}>
-          <GithubMark /> {busy ? 'Redirecting…' : 'Sign in with GitHub'}
+          <GithubMark /> {busy === 'github' ? 'Redirecting…' : 'Sign in with GitHub'}
         </button>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '18px 0' }}>
+          <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+          <span style={{ fontSize: 11, color: 'var(--text-3)' }}>or</span>
+          <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+        </div>
+
+        <form onSubmit={withPassword}>
+          <label style={labelStyle}>Email</label>
+          <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+            autoComplete="email" required style={inputStyle} />
+          <label style={{ ...labelStyle, marginTop: 12 }}>Password</label>
+          <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+            autoComplete="current-password" required style={inputStyle} />
+          <button type="submit" disabled={busy !== null} style={{
+            marginTop: 16, width: '100%', background: 'transparent', color: 'var(--text)',
+            border: '1px solid var(--border2)', borderRadius: 8, padding: '10px 0', fontSize: 13, fontWeight: 500,
+          }}>{busy === 'password' ? 'Signing in…' : 'Sign in with email'}</button>
+        </form>
 
         {error && <div style={{ color: 'var(--red)', fontSize: 12, marginTop: 14 }}>⚠ {error}</div>}
       </div>
@@ -51,3 +77,6 @@ function GithubMark() {
     </svg>
   )
 }
+
+const labelStyle = { display: 'block', fontSize: 11, color: 'var(--text-3)', marginBottom: 5, letterSpacing: '0.04em', textTransform: 'uppercase' }
+const inputStyle = { display: 'block', width: '100%', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', color: 'var(--text)', fontSize: 14, outline: 'none' }
