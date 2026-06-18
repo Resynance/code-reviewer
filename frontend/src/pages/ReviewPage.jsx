@@ -1,6 +1,20 @@
 import { useState, useEffect, useRef } from 'react'
 import { api } from '../lib/api.js'
 
+// Map a stored history record to the live result shape the panel renders.
+// (History persists `past_decisions`; a fresh run returns `past_decisions_applied`.)
+function historyToResult(r) {
+  return {
+    pr_number: r.pr_number,
+    summary: r.summary,
+    approved: r.approved,
+    confidence: r.confidence,
+    issues: r.issues || [],
+    suggestions: r.suggestions || [],
+    past_decisions_applied: r.past_decisions || [],
+  }
+}
+
 export default function ReviewPage() {
   const [form, setForm] = useState({
     pr_number: '',
@@ -24,6 +38,9 @@ export default function ReviewPage() {
   // Tracks the in-flight review job so a superseded/unmounted poll stops.
   const jobRef = useRef(null)
   useEffect(() => () => { jobRef.current = null }, [])
+  // When the shown result is the last *saved* review (vs. a fresh run), holds
+  // its timestamp so the panel can say so.
+  const [savedAt, setSavedAt] = useState(null)
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
@@ -68,6 +85,15 @@ export default function ReviewPage() {
         diff: data.diff,
         files_changed: data.files_changed || [],
       }))
+      // Surface the most recent saved review for this PR, so it's not "lost"
+      // after a refresh — a fresh run replaces it.
+      try {
+        const hist = await api.reviews({ repo: form.repo, prNumber: number, limit: 1 })
+        const last = (hist.reviews || [])[0]
+        setResult(last ? historyToResult(last) : null)
+        setSavedAt(last ? last.created_at : null)
+        setError(null)
+      } catch { /* history is best-effort */ }
     } catch (e) {
       setPrError(e.message)
     } finally {
@@ -78,6 +104,7 @@ export default function ReviewPage() {
   async function submit() {
     setLoading(true)
     setResult(null)
+    setSavedAt(null)
     setError(null)
     try {
       const { id } = await api.createReview({
@@ -182,6 +209,11 @@ export default function ReviewPage() {
         {error && <span style={{ color: 'var(--red)', fontSize: 13 }}>⚠ {error}</span>}
       </div>
 
+      {result && savedAt && (
+        <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10 }}>
+          Showing the most recent saved review ({new Date(savedAt).toLocaleString()}). Run Review to refresh.
+        </div>
+      )}
       {result && <ReviewResult result={result} repo={form.repo} />}
     </div>
   )
