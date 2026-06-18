@@ -328,6 +328,7 @@ def test_post_pr_comment_empty_body():
 
 
 def test_post_pr_comment_auth_error(monkeypatch):
+    # GitHub's own message ("forbidden") is surfaced, not masked.
     _post_client(monkeypatch, FakeResp(403, {}, "forbidden"))
-    with pytest.raises(RuntimeError, match="write access"):
+    with pytest.raises(RuntimeError, match="denied the comment.*forbidden"):
         gb.post_pr_comment("org/repo", 5, "hi", token="t")

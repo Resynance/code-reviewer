@@ -248,9 +248,16 @@ def post_pr_comment(repo: str, pr_number, body: str, token: str) -> str:
             json={"body": body},
         )
     if resp.status_code in (401, 403):
+        try:
+            gh_msg = resp.json().get("message", "") or resp.text[:200]
+        except ValueError:
+            gh_msg = resp.text[:200]
         raise RuntimeError(
-            "GitHub authentication failed. The token needs write access "
-            "(repo / pull_requests:write) to comment on PRs."
+            f"GitHub denied the comment ({resp.status_code}: {gh_msg}). The token "
+            "must be able to WRITE to this repo. A fine-grained PAT needs its "
+            "Repository access to include this repo (not 'Public repositories "
+            "(read-only)') plus Pull requests: Read and write; a classic PAT needs "
+            "the 'repo' scope."
         )
     if resp.status_code == 404:
         raise RuntimeError(f"PR {repo}#{pr_number} not found, or the token lacks access.")
