@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
 
 import config_store
 import review_store
+import access_store
 from decision_store import create_store, ChromaDecisionStore
 from review_engine import CodeReviewEngine, ReviewRequest
 from github_backfill import (
@@ -115,6 +116,10 @@ class SettingsBody(BaseModel):
 
 class RepoBody(BaseModel):
     repo: str
+
+
+class EmailBody(BaseModel):
+    email: str
 
 
 class BackfillBody(BaseModel):
@@ -313,6 +318,27 @@ def add_repo(body: RepoBody):
 def delete_repo(repo: str):
     """Remove a repository from the configured list."""
     return {"repos": config_store.remove_repo(repo)}
+
+
+@app.get("/api/access")
+def list_access():
+    """List emails on the runtime allowlist (who may use the app)."""
+    return {"emails": access_store.list_emails()}
+
+
+@app.post("/api/access")
+def add_access(body: EmailBody):
+    """Grant a user access by email (takes effect within ~30s, no redeploy)."""
+    email = body.email.strip().lower()
+    if "@" not in email:
+        raise HTTPException(status_code=400, detail="invalid email")
+    return {"emails": access_store.add_email(email)}
+
+
+@app.delete("/api/access")
+def remove_access(email: str):
+    """Revoke a user's access by email."""
+    return {"emails": access_store.remove_email(email)}
 
 
 @app.post("/api/backfill")

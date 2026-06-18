@@ -8,9 +8,20 @@ import jwt
 import pytest
 from fastapi import HTTPException
 
+import access_store
 from backend import auth
 
 SECRET = "test-secret"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_auth(monkeypatch):
+    # Clean slate: no env allowlist, empty (controllable) DB allowlist.
+    for v in ("ALLOWED_EMAILS", "SUPABASE_URL", "SUPABASE_JWKS_URL", "SUPABASE_JWT_SECRET"):
+        monkeypatch.delenv(v, raising=False)
+    db_emails = set()
+    monkeypatch.setattr(access_store, "allowed_emails_cached", lambda: db_emails)
+    return db_emails
 
 
 def req(path, token=None):
@@ -66,6 +77,13 @@ def test_wildcard_allowlist_allows_any(monkeypatch):
     monkeypatch.setenv("SUPABASE_JWT_SECRET", SECRET)
     monkeypatch.setenv("ALLOWED_EMAILS", "*")
     assert run(auth.require_user(req("/api/settings", make_token(email="anyone@x.com")))) is None
+
+
+def test_db_allowlist_allows(monkeypatch, _isolate_auth):
+    # No env allowlist; the email is in the runtime (table) allowlist.
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", SECRET)
+    _isolate_auth.add("dbuser@b.com")
+    assert run(auth.require_user(req("/api/settings", make_token(email="dbuser@b.com")))) is None
 
 
 def test_wrong_secret_rejected(monkeypatch):

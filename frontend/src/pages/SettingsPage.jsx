@@ -25,6 +25,11 @@ export default function SettingsPage() {
   const [backfillState, setBackfillState] = useState({}) // repo -> { status, text }
   const [openPrs, setOpenPrs] = useState({}) // repo -> { open, status, prs, total, error }
 
+  // Access allowlist
+  const [accessEmails, setAccessEmails] = useState([])
+  const [newEmail, setNewEmail] = useState('')
+  const [accessErr, setAccessErr] = useState(null)
+
   function refreshStats() {
     api.stats().then(setStats).catch(() => {})
   }
@@ -37,7 +42,31 @@ export default function SettingsPage() {
       setProviderInput(s.openrouter_provider || '')
       setEmbeddingInput(s.embedding_model || '')
     }).catch(() => {})
+    api.listAccess().then(r => setAccessEmails(r.emails || [])).catch(() => {})
   }, [])
+
+  async function addAccess() {
+    const e = newEmail.trim()
+    if (!e) return
+    setAccessErr(null)
+    try {
+      const res = await api.addAccess(e)
+      setAccessEmails(res.emails || [])
+      setNewEmail('')
+    } catch (err) {
+      setAccessErr(err.message)
+    }
+  }
+
+  async function removeAccess(email) {
+    setAccessErr(null)
+    try {
+      const res = await api.removeAccess(email)
+      setAccessEmails(res.emails || [])
+    } catch (err) {
+      setAccessErr(err.message)
+    }
+  }
 
   async function saveModel() {
     setSavingModel(true)
@@ -182,6 +211,37 @@ export default function SettingsPage() {
             {modelMsg && <span style={{ fontSize: 13, color: modelMsg === 'Saved ✓' ? 'var(--green)' : 'var(--red)' }}>{modelMsg}</span>}
           </div>
         </div>
+      </Card>
+
+      {/* Access allowlist */}
+      <Card title="Access">
+        <p style={{ color: 'var(--text-2)', fontSize: 13, marginBottom: 16 }}>
+          Emails allowed to sign in and use the app. Changes take effect within ~30s — no redeploy.
+        </p>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginBottom: 8 }}>
+          <div style={{ flex: 1 }}>
+            <label style={labelStyle}>Add user by email</label>
+            <input value={newEmail} onChange={e => setNewEmail(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && addAccess()}
+              placeholder="user@example.com" style={inputStyle} />
+          </div>
+          <button onClick={addAccess} style={{ ...primaryBtn(false), height: 38 }}>Add</button>
+        </div>
+        {accessErr && <div style={{ color: 'var(--red)', fontSize: 12, marginBottom: 8 }}>⚠ {accessErr}</div>}
+        {accessEmails.length === 0 ? (
+          <div style={{ color: 'var(--text-3)', fontSize: 13, padding: '8px 0' }}>
+            No users yet — anyone matching the ALLOWED_EMAILS env bootstrap can still sign in.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+            {accessEmails.map(em => (
+              <div key={em} style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--surface2)', borderRadius: 8, padding: '8px 14px' }}>
+                <span style={{ flex: 1, fontSize: 13, color: 'var(--text)' }}>{em}</span>
+                <button onClick={() => removeAccess(em)} style={dangerBtn}>Remove</button>
+              </div>
+            ))}
+          </div>
+        )}
       </Card>
 
       {/* GitHub credentials */}

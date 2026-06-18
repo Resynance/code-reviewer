@@ -222,6 +222,17 @@ def test_repo_pr_requires_token(client):
     assert tc.get("/api/repos/pr", params={"repo": "org/a", "number": 1}).status_code == 400
 
 
+def test_access_allowlist_crud(client):
+    tc, _ = client
+    assert tc.get("/api/access").json()["emails"] == []
+    assert tc.post("/api/access", json={"email": "User@Co.com"}).json()["emails"] == ["user@co.com"]
+    assert tc.post("/api/access", json={"email": "nope"}).status_code == 400  # invalid email
+    tc.post("/api/access", json={"email": "two@co.com"})
+    assert set(tc.get("/api/access").json()["emails"]) == {"user@co.com", "two@co.com"}
+    tc.delete("/api/access", params={"email": "user@co.com"})
+    assert tc.get("/api/access").json()["emails"] == ["two@co.com"]
+
+
 def test_repo_pr_returns_form_data(client, monkeypatch):
     tc, main = client
     config_store.save_config({"github_token": "t"})

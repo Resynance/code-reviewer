@@ -15,10 +15,12 @@ default for current projects, verified via the project's JWKS) or the legacy
   SUPABASE_JWT_SECRET   legacy HS256 secret (fallback for HS256-signed tokens)
 
 Auth is enabled when any of the above is set. Authorization is **fail closed**:
-once auth is on, `ALLOWED_EMAILS` must list the permitted emails (or be `*` to
-allow any authenticated user) — an empty value denies everyone, so a public
-OAuth provider can't leave the app open. Exempt: `/api/health`, the GitHub
-webhook (`/webhook/*`, HMAC-verified), the docs routes, and any non-API path.
+a user must be on the runtime allowlist table (managed in the app via
+`core/access_store.py`, no redeploy) or in the `ALLOWED_EMAILS` env bootstrap
+(comma-separated, or `*` for any authenticated user). If both are empty, everyone
+is denied, so a public OAuth provider can't leave the app open. Exempt:
+`/api/health`, the GitHub webhook (`/webhook/*`, HMAC-verified), the docs routes,
+and any non-API path.
 """
 
 import os
@@ -54,23 +56,33 @@ def _jwk_client(url: str):
 
 
 def _check_allowlist(email: str):
-    """Authorize a verified user against ALLOWED_EMAILS — **fail closed**.
+    """Authorize a verified user — **fail closed**.
 
-    With auth enabled, an empty ALLOWED_EMAILS denies everyone (a public OAuth
-    provider would otherwise let any account in). Set a comma-separated list, or
-    `*` to explicitly allow any authenticated user.
+    A user is allowed if their email is in the runtime allowlist table
+    (managed in the app, no redeploy) OR in the ALLOWED_EMAILS env bootstrap
+    (comma-separated, or `*` for any authenticated user). If neither lists them —
+    and the lists are empty — access is denied.
     """
-    allow = os.getenv("ALLOWED_EMAILS", "").strip()
-    if not allow:
-        raise HTTPException(
-            status_code=403,
-            detail="Access is locked: set ALLOWED_EMAILS (comma-separated, or '*' for any user)",
-        )
-    if allow == "*":
+    email_l = (email or "").lower()
+
+    env_allow = os.getenv("ALLOWED_EMAILS", "").strip()
+    if env_allow == "*":
         return
-    allowed = {e.strip().lower() for e in allow.split(",") if e.strip()}
-    if (email or "").lower() not in allowed:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    env_set = {e.strip().lower() for e in env_allow.split(",") if e.strip()}
+    if email_l and email_l in env_set:
+        return
+
+    try:
+        import access_store
+        db_set = access_store.allowed_emails_cached()
+    except Exception:
+        db_set = set()
+    if email_l and email_l in db_set:
+        return
+
+    if not env_set and not db_set:
+        raise HTTPException(status_code=403, detail="Access is locked: no users are on the allowlist")
+    raise HTTPException(status_code=403, detail="Not authorized")
 
 
 def _decode(token: str) -> dict:

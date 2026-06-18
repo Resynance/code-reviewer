@@ -131,6 +131,16 @@ Returns the same shape as `GET /api/settings`.
 ### `DELETE /api/repos?repo=org/a`
 Removes a repo. Returns `{ "repos": [...] }`.
 
+## Access allowlist
+
+Who may sign in and use the app, stored in the `access_allowlist` table and
+editable at runtime (no redeploy; changes apply within ~30s). The `ALLOWED_EMAILS`
+env var remains an optional bootstrap/fallback.
+
+### `GET /api/access` → `{ "emails": ["you@co.com"] }`
+### `POST /api/access` — `{ "email": "user@co.com" }` → `{ "emails": [...] }` (`400` on invalid email)
+### `DELETE /api/access?email=user@co.com` → `{ "emails": [...] }`
+
 ### `POST /api/backfill`
 Import a repo's closed PRs into the decision store (server-side).
 ```json

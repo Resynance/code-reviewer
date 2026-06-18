@@ -80,4 +80,11 @@ export const api = {
     q.set('limit', String(limit))
     return request(`/api/reviews?${q.toString()}`)
   },
+
+  listAccess: () => request('/api/access'),
+
+  addAccess: (email) => request('/api/access', { method: 'POST', body: { email } }),
+
+  removeAccess: (email) =>
+    request(`/api/access?email=${encodeURIComponent(email)}`, { method: 'DELETE' }),
 }

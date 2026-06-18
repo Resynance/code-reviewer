@@ -9,6 +9,7 @@ __pycache__/
 .env.*
 config.json
 reviews.json
+access.json
 
 # Vector store
 .chroma/
