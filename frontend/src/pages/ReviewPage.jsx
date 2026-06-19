@@ -12,6 +12,7 @@ function historyToResult(r) {
     issues: r.issues || [],
     suggestions: r.suggestions || [],
     past_decisions_applied: r.past_decisions || [],
+    model: r.model || '',
   }
 }
 
@@ -346,7 +347,16 @@ function ReviewResult({ result, repo }) {
           display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20,
         }}>{result.approved ? '✓' : '!'}</div>
         <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 600, fontSize: 15, color: statusColor }}>{statusLabel}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 600, fontSize: 15, color: statusColor }}>{statusLabel}</span>
+            {result.model && (
+              <span style={{
+                fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-3)',
+                background: 'var(--surface2)', border: '1px solid var(--border)',
+                borderRadius: 5, padding: '2px 7px',
+              }}>{result.model}</span>
+            )}
+          </div>
           <div style={{ color: 'var(--text-2)', fontSize: 13, marginTop: 2 }}>{result.summary}</div>
         </div>
         <ConfidencePill value={result.confidence} />

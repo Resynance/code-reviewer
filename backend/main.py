@@ -233,6 +233,7 @@ def _execute_review(body: ReviewRequestBody, source: str) -> dict:
         "issues": result.issues,
         "suggestions": result.suggestions,
         "past_decisions_applied": result.past_decisions_applied,
+        "model": result.model,
     }
 
 
@@ -295,6 +296,7 @@ def _save_review(request, result, source):
             "suggestions": result.suggestions,
             "past_decisions": result.past_decisions_applied,
             "source": source,
+            "model": result.model,
         })
     except Exception:
         pass

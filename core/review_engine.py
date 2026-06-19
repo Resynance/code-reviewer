@@ -52,6 +52,7 @@ class ReviewResult:
     issues: list = field(default_factory=list)
     suggestions: list = field(default_factory=list)
     past_decisions_applied: list = field(default_factory=list)
+    model: str = ""
 
 
 # JSON schema for the structured review. The model is forced to call the
@@ -213,7 +214,9 @@ class CodeReviewEngine:
         response = self._client.chat.completions.create(**kwargs)
 
         payload = self._extract_tool_input(response)
-        return self._to_result(request, payload, decisions)
+        result = self._to_result(request, payload, decisions)
+        result.model = model
+        return result
 
     # ------------------------------------------------------------------ #
     # Internals
