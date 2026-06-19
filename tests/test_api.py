@@ -170,6 +170,26 @@ def test_review_job_not_found(client):
     assert tc.post("/api/review/nope/run").status_code == 404
 
 
+def test_github_token_add_remove(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setattr(main, "list_owners", lambda token: [
+        {"login": "alice", "type": "user"}, {"login": "acme", "type": "org"}])
+    res = tc.post("/api/github/tokens", json={"token": "ghp_abc"}).json()
+    assert res["github_tokens"] == [{"username": "alice", "orgs": ["acme"]}]
+    # Settings should reflect it
+    settings = tc.get("/api/settings").json()
+    assert settings["github_token_set"] is True
+    assert settings["github_tokens"] == [{"username": "alice", "orgs": ["acme"]}]
+    # Remove it
+    res = tc.delete("/api/github/tokens", params={"username": "alice"}).json()
+    assert res["github_tokens"] == []
+
+
+def test_github_token_add_requires_token_field(client):
+    tc, _ = client
+    assert tc.post("/api/github/tokens", json={"token": ""}).status_code == 400
+
+
 def test_pr_comment_requires_token(client):
     tc, _ = client
     assert tc.post("/api/pr-comment", json={"repo": "org/a", "pr_number": 5, "body": "hi"}).status_code == 400

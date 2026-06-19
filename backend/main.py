@@ -170,6 +170,26 @@ class BackfillBody(BaseModel):
     pages: int = 5
 
 
+class AddTokenBody(BaseModel):
+    token: str
+
+
+# ------------------------------------------------------------------ #
+# Helpers
+# ------------------------------------------------------------------ #
+
+def _token_for(repo: str) -> str:
+    """Return the right GitHub token for a repo (owner-based routing).
+
+    Raises 400 if no tokens are configured at all.
+    """
+    owner = repo.split("/")[0] if "/" in repo else repo
+    token = config_store.get_token_for(owner)
+    if not token:
+        raise HTTPException(status_code=400, detail="GitHub token not configured")
+    return token
+
+
 # ------------------------------------------------------------------ #
 # API routes
 # ------------------------------------------------------------------ #
@@ -283,9 +303,7 @@ def list_review_history(repo: Optional[str] = None, pr_number: Optional[int] = N
 @app.post("/api/pr-comment")
 def pr_comment(body: PrCommentBody):
     """Post selected review findings as a comment on the PR."""
-    token = config_store.get_github_token()
-    if not token:
-        raise HTTPException(status_code=400, detail="GitHub token not configured")
+    token = _token_for(body.repo)
     try:
         url = post_pr_comment(body.repo, body.pr_number, body.body, token)
     except ValueError as e:
@@ -298,9 +316,7 @@ def pr_comment(body: PrCommentBody):
 @app.post("/api/issue")
 def open_issue(body: CreateIssueBody):
     """Open a new GitHub issue from selected review findings."""
-    token = config_store.get_github_token()
-    if not token:
-        raise HTTPException(status_code=400, detail="GitHub token not configured")
+    token = _token_for(body.repo)
     try:
         url = create_issue(body.repo, body.title, body.body, token)
     except ValueError as e:
@@ -380,9 +396,11 @@ def get_stats():
 def get_settings():
     """Return GitHub settings. Secrets are reported as booleans, never echoed."""
     cfg = config_store.load_config()
+    tokens = config_store.get_github_tokens()
     return {
         "repos": cfg.get("repos", []),
         "github_token_set": bool(config_store.get_github_token()),
+        "github_tokens": [{"username": t["username"], "orgs": t.get("orgs", [])} for t in tokens],
         "webhook_secret_set": bool(config_store.get_webhook_secret()),
         # Model/provider are not secret — return the effective values.
         "openrouter_model": config_store.get_model(),
@@ -454,26 +472,63 @@ def remove_access(email: str):
     return {"emails": access_store.remove_email(email)}
 
 
+@app.post("/api/github/tokens")
+def add_github_token(body: AddTokenBody):
+    """Add a GitHub token — auto-discovers the account username and org memberships."""
+    if not body.token.strip():
+        raise HTTPException(status_code=400, detail="Token is required")
+    try:
+        owners = list_owners(body.token.strip())
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not verify token with GitHub: {e}")
+    user = next((o for o in owners if o["type"] == "user"), None)
+    if not user:
+        raise HTTPException(status_code=502, detail="Could not determine GitHub username from token")
+    username = user["login"]
+    orgs = [o["login"] for o in owners if o["type"] == "org"]
+    tokens = config_store.add_github_token(username, orgs, body.token.strip())
+    return {"github_tokens": [{"username": t["username"], "orgs": t.get("orgs", [])} for t in tokens]}
+
+
+@app.delete("/api/github/tokens")
+def remove_github_token(username: str):
+    """Remove a GitHub token by username."""
+    tokens = config_store.remove_github_token(username)
+    return {"github_tokens": [{"username": t["username"], "orgs": t.get("orgs", [])} for t in tokens]}
+
+
 @app.get("/api/github/owners")
 def github_owners():
-    """List the token's owner accounts (the user + their orgs) for repo discovery."""
-    token = config_store.get_github_token()
-    if not token:
-        raise HTTPException(status_code=400, detail="GitHub token not configured")
-    try:
-        return {"owners": list_owners(token)}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    """List owner accounts across all configured tokens for repo discovery."""
+    tokens = config_store.get_github_tokens()
+    if not tokens:
+        # Legacy: fall back to single-token env/config
+        token = config_store.get_github_token()
+        if not token:
+            raise HTTPException(status_code=400, detail="No GitHub tokens configured")
+        tokens = [{"username": "", "orgs": [], "token": token}]
+
+    seen: dict = {}
+    last_err = None
+    for entry in tokens:
+        try:
+            for owner in list_owners(entry["token"]):
+                if owner["login"] not in seen:
+                    seen[owner["login"]] = owner
+        except Exception as e:
+            last_err = e
+
+    if not seen and last_err:
+        raise HTTPException(status_code=502, detail=str(last_err))
+    return {"owners": list(seen.values())}
 
 
 @app.get("/api/github/repos")
 def github_owner_repos(owner: str, type: str = "org"):
-    """List repos under an owner that the token can access."""
-    token = config_store.get_github_token()
+    """List repos under an owner using the token that has access to that owner."""
+    token = config_store.get_token_for(owner)
     if not token:
-        raise HTTPException(status_code=400, detail="GitHub token not configured")
+        raise HTTPException(status_code=400, detail="No GitHub token configured")
     try:
         return {"owner": owner, "repos": list_owner_repos(owner, token, owner_type=type)}
     except ValueError as e:
@@ -485,9 +540,7 @@ def github_owner_repos(owner: str, type: str = "org"):
 @app.post("/api/backfill")
 def backfill_repo(body: BackfillBody):
     """Import a repo's closed PRs into the decision store, server-side."""
-    token = config_store.get_github_token()
-    if not token:
-        raise HTTPException(status_code=400, detail="GitHub token not configured")
+    token = _token_for(body.repo)
     store = get_store()
     try:
         imported = run_backfill(body.repo, body.pages, token, store)
@@ -501,9 +554,7 @@ def backfill_repo(body: BackfillBody):
 @app.get("/api/repos/open-prs")
 def open_prs(repo: str):
     """List a repo's open PRs that aren't yet in the decision store."""
-    token = config_store.get_github_token()
-    if not token:
-        raise HTTPException(status_code=400, detail="GitHub token not configured")
+    token = _token_for(repo)
     try:
         prs = list_open_prs(repo, token)
     except ValueError as e:
@@ -521,9 +572,7 @@ def open_prs(repo: str):
 def repo_prs(repo: str):
     """List a repo's PRs for the review picker — open PRs first, then closed,
     each group newest-updated first."""
-    token = config_store.get_github_token()
-    if not token:
-        raise HTTPException(status_code=400, detail="GitHub token not configured")
+    token = _token_for(repo)
     try:
         prs = list_prs(repo, token)
     except ValueError as e:
@@ -542,9 +591,7 @@ def repo_prs(repo: str):
 @app.get("/api/repos/pr")
 def repo_pr(repo: str, number: int):
     """Fetch one PR's metadata + diff, shaped for the review form."""
-    token = config_store.get_github_token()
-    if not token:
-        raise HTTPException(status_code=400, detail="GitHub token not configured")
+    token = _token_for(repo)
     try:
         return fetch_pr(repo, number, token)
     except ValueError as e:
@@ -604,10 +651,10 @@ def _verify_github_signature(body: bytes, signature: Optional[str]) -> bool:
 
 
 async def _fetch_pr_diff(repo: str, pr_number: int) -> str:
-    """Fetch a PR's unified diff from GitHub using GITHUB_TOKEN."""
+    """Fetch a PR's unified diff from GitHub."""
     import httpx
 
-    token = config_store.get_github_token()
+    token = config_store.get_token_for(repo.split("/")[0]) or ""
     headers = {
         "Accept": "application/vnd.github.v3.diff",
         "X-GitHub-Api-Version": "2022-11-28",

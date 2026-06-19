@@ -7,6 +7,7 @@ def test_defaults_when_no_file(cfg):
     c = cfg.load_config()
     assert c == {
         "github_token": "",
+        "github_tokens": [],
         "webhook_secret": "",
         "repos": [],
         "openrouter_model": "",
@@ -118,3 +119,66 @@ def test_save_writes_to_disk(cfg):
     cfg.save_config({"github_token": "persisted"})
     assert cfg._CONFIG_PATH.exists()
     assert "persisted" in cfg._CONFIG_PATH.read_text()
+
+
+# ----- multi-token support ----- #
+
+def test_add_and_get_github_tokens(cfg):
+    assert cfg.get_github_tokens() == []
+    cfg.add_github_token("alice", ["acme"], "tok_alice")
+    cfg.add_github_token("bob", [], "tok_bob")
+    tokens = cfg.get_github_tokens()
+    assert len(tokens) == 2
+    assert tokens[0] == {"username": "alice", "orgs": ["acme"], "token": "tok_alice"}
+    assert tokens[1] == {"username": "bob", "orgs": [], "token": "tok_bob"}
+
+
+def test_add_github_token_replaces_same_username(cfg):
+    cfg.add_github_token("alice", ["acme"], "tok_old")
+    cfg.add_github_token("alice", ["acme", "globex"], "tok_new")
+    tokens = cfg.get_github_tokens()
+    assert len(tokens) == 1
+    assert tokens[0]["token"] == "tok_new"
+    assert tokens[0]["orgs"] == ["acme", "globex"]
+
+
+def test_remove_github_token(cfg):
+    cfg.add_github_token("alice", [], "tok_a")
+    cfg.add_github_token("bob", [], "tok_b")
+    remaining = cfg.remove_github_token("alice")
+    assert len(remaining) == 1
+    assert remaining[0]["username"] == "bob"
+
+
+def test_get_token_for_matches_username(cfg):
+    cfg.add_github_token("alice", ["acme"], "tok_alice")
+    cfg.add_github_token("bob", ["globex"], "tok_bob")
+    assert cfg.get_token_for("alice") == "tok_alice"
+    assert cfg.get_token_for("bob") == "tok_bob"
+
+
+def test_get_token_for_matches_org(cfg):
+    cfg.add_github_token("alice", ["acme", "startup"], "tok_alice")
+    assert cfg.get_token_for("acme") == "tok_alice"
+    assert cfg.get_token_for("startup") == "tok_alice"
+
+
+def test_get_token_for_falls_back_to_first(cfg):
+    cfg.add_github_token("alice", ["acme"], "tok_alice")
+    # "unknown-org" not in any token's list → first token
+    assert cfg.get_token_for("unknown-org") == "tok_alice"
+
+
+def test_get_token_for_returns_none_when_empty(cfg):
+    assert cfg.get_token_for("anything") is None
+
+
+def test_get_github_token_reads_from_tokens_list(cfg):
+    cfg.add_github_token("alice", [], "tok_alice")
+    assert cfg.get_github_token() == "tok_alice"
+
+
+def test_legacy_github_token_fallback(cfg, monkeypatch):
+    # Old-style single token (no github_tokens list) still works via get_github_token
+    cfg.save_config({"github_token": "old_token"})
+    assert cfg.get_github_token() == "old_token"

@@ -21,7 +21,8 @@ _CONFIG_PATH = Path(__file__).parent.parent / "config.json"
 _LOCK = threading.Lock()
 
 _DEFAULTS = {
-    "github_token": "",
+    "github_token": "",   # legacy single-token field — superseded by github_tokens
+    "github_tokens": [],  # list of {username, orgs, token}
     "webhook_secret": "",
     "repos": [],
     "openrouter_model": "",
@@ -113,8 +114,49 @@ def save_config(update: dict):
         return current
 
 
+def get_github_tokens() -> list:
+    """Return all configured tokens as [{username, orgs, token}]."""
+    return load_config().get("github_tokens", [])
+
+
 def get_github_token() -> str:
+    """Return the first token for backward compatibility."""
+    tokens = get_github_tokens()
+    if tokens:
+        return tokens[0]["token"]
     return load_config().get("github_token") or os.getenv("GITHUB_TOKEN", "")
+
+
+def get_token_for(owner: str) -> "str | None":
+    """Return the best token for a given GitHub owner (username or org).
+
+    Matches by username first, then by org membership. Falls back to the
+    first token if no explicit match (handles single-token deployments and
+    repos whose owner wasn't seen at token-add time).
+    """
+    tokens = get_github_tokens()
+    for entry in tokens:
+        if owner == entry.get("username") or owner in entry.get("orgs", []):
+            return entry["token"]
+    if tokens:
+        return tokens[0]["token"]
+    # Legacy fallback
+    return load_config().get("github_token") or os.getenv("GITHUB_TOKEN", "") or None
+
+
+def add_github_token(username: str, orgs: list, token: str) -> list:
+    """Add or replace a token entry (matched by username). Returns the full list."""
+    tokens = [t for t in get_github_tokens() if t.get("username") != username]
+    tokens.append({"username": username, "orgs": orgs, "token": token})
+    save_config({"github_tokens": tokens})
+    return tokens
+
+
+def remove_github_token(username: str) -> list:
+    """Remove a token by GitHub username. Returns the remaining list."""
+    tokens = [t for t in get_github_tokens() if t.get("username") != username]
+    save_config({"github_tokens": tokens})
+    return tokens
 
 
 def get_webhook_secret() -> str:

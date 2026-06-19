@@ -73,6 +73,12 @@ export const api = {
   backfill: (repo, pages) =>
     request('/api/backfill', { method: 'POST', body: { repo, pages } }),
 
+  addGithubToken: (token) =>
+    request('/api/github/tokens', { method: 'POST', body: { token } }),
+
+  removeGithubToken: (username) =>
+    request(`/api/github/tokens?username=${encodeURIComponent(username)}`, { method: 'DELETE' }),
+
   githubOwners: () => request('/api/github/owners'),
 
   githubRepos: (owner, type = 'org') =>

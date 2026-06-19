@@ -12,11 +12,15 @@ export default function SettingsPage() {
   const [savingModel, setSavingModel] = useState(false)
   const [modelMsg, setModelMsg] = useState(null)
 
-  // GitHub credential form (write-only — values are never read back from the server)
-  const [token, setToken] = useState('')
+  // GitHub token list
+  const [tokenInput, setTokenInput] = useState('')
+  const [addingToken, setAddingToken] = useState(false)
+  const [tokenMsg, setTokenMsg] = useState(null)
+
+  // Webhook secret (separate save)
   const [secret, setSecret] = useState('')
-  const [savingCreds, setSavingCreds] = useState(false)
-  const [credMsg, setCredMsg] = useState(null)
+  const [savingSecret, setSavingSecret] = useState(false)
+  const [secretMsg, setSecretMsg] = useState(null)
 
   // Repo manager
   const [newRepo, setNewRepo] = useState('')
@@ -124,24 +128,49 @@ export default function SettingsPage() {
     }
   }
 
-  async function saveCreds() {
-    const payload = {}
-    if (token) payload.github_token = token
-    if (secret) payload.webhook_secret = secret
-    if (!Object.keys(payload).length) { setCredMsg('Enter a token or secret to save.'); return }
-    setSavingCreds(true)
-    setCredMsg(null)
+  async function addToken() {
+    if (!tokenInput.trim()) return
+    setAddingToken(true)
+    setTokenMsg(null)
     try {
-      const s = await api.saveSettings(payload)
-      setSettings(s)
-      setToken('')
-      setSecret('')
-      setCredMsg('Saved ✓')
+      const res = await api.addGithubToken(tokenInput.trim())
+      setSettings(s => ({ ...s, github_tokens: res.github_tokens, github_token_set: res.github_tokens.length > 0 }))
+      setTokenInput('')
+      setTokenMsg('Added ✓')
       refreshStats()
+      api.githubOwners().then(r => setOwners(r.owners || [])).catch(() => {})
     } catch (e) {
-      setCredMsg(e.message)
+      setTokenMsg(e.message)
     } finally {
-      setSavingCreds(false)
+      setAddingToken(false)
+    }
+  }
+
+  async function removeToken(username) {
+    setTokenMsg(null)
+    try {
+      const res = await api.removeGithubToken(username)
+      setSettings(s => ({ ...s, github_tokens: res.github_tokens, github_token_set: res.github_tokens.length > 0 }))
+      refreshStats()
+      api.githubOwners().then(r => setOwners(r.owners || [])).catch(() => {})
+    } catch (e) {
+      setTokenMsg(e.message)
+    }
+  }
+
+  async function saveSecret() {
+    if (!secret) { setSecretMsg('Enter a secret to save.'); return }
+    setSavingSecret(true)
+    setSecretMsg(null)
+    try {
+      const s = await api.saveSettings({ webhook_secret: secret })
+      setSettings(s)
+      setSecret('')
+      setSecretMsg('Saved ✓')
+    } catch (e) {
+      setSecretMsg(e.message)
+    } finally {
+      setSavingSecret(false)
     }
   }
 
@@ -205,7 +234,11 @@ export default function SettingsPage() {
         {stats ? (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <StatRow label="OpenRouter API key" value={stats.api_key_configured ? 'Configured ✓' : 'Not set ✗'} ok={stats.api_key_configured} />
-            <StatRow label="GitHub token" value={stats.github_token_configured ? 'Configured ✓' : 'Not set ✗'} ok={stats.github_token_configured} />
+            <StatRow label="GitHub tokens" value={
+              settings?.github_tokens?.length
+                ? `${settings.github_tokens.length} configured ✓`
+                : stats.github_token_configured ? '1 configured ✓' : 'Not set ✗'
+            } ok={stats.github_token_configured} />
             <StatRow label="Model" value={stats.model || '—'} />
             <StatRow label="Provider" value={stats.provider || 'auto'} />
             <StatRow label="Embedding model" value={stats.embedding_model || '—'} />
@@ -278,37 +311,80 @@ export default function SettingsPage() {
         )}
       </Card>
 
-      {/* GitHub credentials */}
+      {/* GitHub tokens */}
       <Card title="GitHub Access">
         <p style={{ color: 'var(--text-2)', fontSize: 13, marginBottom: 16 }}>
-          Stored securely on the server (config.json). Leave a field blank to keep its current value.
+          Add one token per GitHub account. Repos are automatically routed to the
+          right token based on owner membership. Tokens are stored on the server only.
         </p>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div>
-            <label style={labelStyle}>
-              GitHub token {settings && (settings.github_token_set
-                ? <span style={{ color: 'var(--green)' }}>· set</span>
-                : <span style={{ color: 'var(--text-3)' }}>· not set</span>)}
-            </label>
-            <input type="password" value={token} onChange={e => setToken(e.target.value)}
-              placeholder={settings?.github_token_set ? '•••••••• (unchanged)' : 'ghp_…'} style={inputStyle} />
+
+        {(settings?.github_tokens || []).length === 0 ? (
+          <div style={{ color: 'var(--text-3)', fontSize: 13, padding: '6px 0', marginBottom: 12 }}>
+            No tokens configured.
           </div>
-          <div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
+            {(settings.github_tokens || []).map(t => (
+              <div key={t.username} style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--surface2)', borderRadius: 8, padding: '9px 14px' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>
+                    {t.username || '(unknown)'}
+                  </div>
+                  {t.orgs?.length > 0 && (
+                    <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
+                      orgs: {t.orgs.join(', ')}
+                    </div>
+                  )}
+                </div>
+                <button onClick={() => removeToken(t.username)} style={dangerBtn}>Remove</button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginBottom: 6 }}>
+          <div style={{ flex: 1 }}>
+            <label style={labelStyle}>Add GitHub token</label>
+            <input type="password" value={tokenInput} onChange={e => setTokenInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && addToken()}
+              placeholder="ghp_… or github_pat_…" style={inputStyle} />
+          </div>
+          <button onClick={addToken} disabled={addingToken} style={{ ...primaryBtn(addingToken), height: 38 }}>
+            {addingToken ? 'Verifying…' : 'Add'}
+          </button>
+        </div>
+        {tokenMsg && (
+          <div style={{ fontSize: 13, marginBottom: 6, color: tokenMsg === 'Added ✓' ? 'var(--green)' : 'var(--red)' }}>
+            {tokenMsg}
+          </div>
+        )}
+      </Card>
+
+      {/* Webhook secret */}
+      <Card title="GitHub Webhook Secret">
+        <p style={{ color: 'var(--text-2)', fontSize: 13, marginBottom: 16 }}>
+          Required to receive GitHub pull-request events. Leave blank to keep the current value.
+        </p>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginBottom: 6 }}>
+          <div style={{ flex: 1 }}>
             <label style={labelStyle}>
               Webhook secret {settings && (settings.webhook_secret_set
                 ? <span style={{ color: 'var(--green)' }}>· set</span>
                 : <span style={{ color: 'var(--text-3)' }}>· not set</span>)}
             </label>
             <input type="password" value={secret} onChange={e => setSecret(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && saveSecret()}
               placeholder={settings?.webhook_secret_set ? '•••••••• (unchanged)' : 'any random string'} style={inputStyle} />
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <button onClick={saveCreds} disabled={savingCreds} style={primaryBtn(savingCreds)}>
-              {savingCreds ? 'Saving…' : 'Save'}
-            </button>
-            {credMsg && <span style={{ fontSize: 13, color: credMsg === 'Saved ✓' ? 'var(--green)' : 'var(--red)' }}>{credMsg}</span>}
-          </div>
+          <button onClick={saveSecret} disabled={savingSecret} style={{ ...primaryBtn(savingSecret), height: 38 }}>
+            {savingSecret ? 'Saving…' : 'Save'}
+          </button>
         </div>
+        {secretMsg && (
+          <div style={{ fontSize: 13, color: secretMsg === 'Saved ✓' ? 'var(--green)' : 'var(--red)' }}>
+            {secretMsg}
+          </div>
+        )}
       </Card>
 
       {/* Repositories */}
