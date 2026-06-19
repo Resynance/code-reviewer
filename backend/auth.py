@@ -125,6 +125,31 @@ def _decode(token: str) -> dict:
     return jwt.decode(token, secret, algorithms=["HS256"], audience="authenticated")
 
 
+def _get_admin_email() -> "str | None":
+    """Return the configured admin email, or None if not determinable.
+
+    Priority: ADMIN_EMAIL env var → first entry in ALLOWED_EMAILS (when not '*').
+    """
+    explicit = os.getenv("ADMIN_EMAIL", "").strip()
+    if explicit:
+        return explicit
+    env_allow = os.getenv("ALLOWED_EMAILS", "").strip()
+    if env_allow and env_allow != "*":
+        first = next((e.strip() for e in env_allow.split(",") if e.strip()), None)
+        return first
+    return None
+
+
+def _bearer_claims(request: Request) -> dict:
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or malformed bearer token")
+    try:
+        return _decode(header[len("Bearer "):])
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
+
+
 async def require_user(request: Request):
     if not _auth_enabled():
         return  # auth disabled (local dev / tests)
@@ -133,13 +158,30 @@ async def require_user(request: Request):
     if path.startswith(_EXEMPT_PREFIXES) or not path.startswith("/api/"):
         return
 
-    header = request.headers.get("Authorization", "")
-    if not header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or malformed bearer token")
-
-    try:
-        claims = _decode(header[len("Bearer "):])
-    except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
-
+    claims = _bearer_claims(request)
     _check_allowlist(claims.get("email"))
+
+
+async def require_admin(request: Request):
+    """Restrict allowlist-management endpoints to the configured admin.
+
+    Set ADMIN_EMAIL to an explicit admin address, or leave it unset to fall back
+    to the first entry in ALLOWED_EMAILS. When auth is disabled (local dev /
+    tests), this is a no-op. When auth is enabled but no admin is configured
+    (e.g. ALLOWED_EMAILS=*), the endpoint returns 403 — manage the allowlist
+    via the env var directly in that case.
+    """
+    if not _auth_enabled():
+        return
+
+    admin = _get_admin_email()
+    if not admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Allowlist management requires ADMIN_EMAIL (or a non-wildcard ALLOWED_EMAILS) to be set",
+        )
+
+    claims = _bearer_claims(request)
+    caller = _canonical_email(claims.get("email", ""))
+    if caller != _canonical_email(admin):
+        raise HTTPException(status_code=403, detail="Admin access required")

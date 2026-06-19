@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from backend.auth import require_user
+from backend.auth import require_user, require_admin
 
 # Add parent dir so we can import the core modules
 sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
@@ -58,6 +58,7 @@ app = FastAPI(
     # schema (all endpoint names, parameters, models) to unauthenticated callers.
     docs_url=None if _in_production else "/docs",
     redoc_url=None if _in_production else "/redoc",
+    openapi_url=None if _in_production else "/openapi.json",
 )
 
 app.add_middleware(
@@ -438,7 +439,7 @@ def list_access():
     return {"emails": access_store.list_emails()}
 
 
-@app.post("/api/access")
+@app.post("/api/access", dependencies=[Depends(require_admin)])
 def add_access(body: EmailBody):
     """Grant a user access by email (takes effect within ~30s, no redeploy)."""
     email = body.email.strip().lower()
@@ -447,7 +448,7 @@ def add_access(body: EmailBody):
     return {"emails": access_store.add_email(email)}
 
 
-@app.delete("/api/access")
+@app.delete("/api/access", dependencies=[Depends(require_admin)])
 def remove_access(email: str):
     """Revoke a user's access by email."""
     return {"emails": access_store.remove_email(email)}

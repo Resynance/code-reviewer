@@ -133,6 +133,43 @@ def test_non_gmail_dots_are_significant(monkeypatch):
     assert e.value.status_code == 403
 
 
+def test_require_admin_no_op_when_auth_disabled(monkeypatch):
+    monkeypatch.delenv("SUPABASE_JWT_SECRET", raising=False)
+    assert run(auth.require_admin(req("/api/access"))) is None
+
+
+def test_require_admin_blocks_non_admin(monkeypatch):
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", SECRET)
+    monkeypatch.setenv("ALLOWED_EMAILS", "admin@co.com,user@co.com")
+    with pytest.raises(HTTPException) as e:
+        run(auth.require_admin(req("/api/access", make_token(email="user@co.com"))))
+    assert e.value.status_code == 403
+
+
+def test_require_admin_allows_first_email(monkeypatch):
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", SECRET)
+    monkeypatch.setenv("ALLOWED_EMAILS", "admin@co.com,user@co.com")
+    assert run(auth.require_admin(req("/api/access", make_token(email="admin@co.com")))) is None
+
+
+def test_require_admin_explicit_admin_email(monkeypatch):
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", SECRET)
+    monkeypatch.setenv("ALLOWED_EMAILS", "user@co.com")
+    monkeypatch.setenv("ADMIN_EMAIL", "boss@co.com")
+    assert run(auth.require_admin(req("/api/access", make_token(email="boss@co.com")))) is None
+    with pytest.raises(HTTPException) as e:
+        run(auth.require_admin(req("/api/access", make_token(email="user@co.com"))))
+    assert e.value.status_code == 403
+
+
+def test_require_admin_wildcard_blocks_management(monkeypatch):
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", SECRET)
+    monkeypatch.setenv("ALLOWED_EMAILS", "*")
+    with pytest.raises(HTTPException) as e:
+        run(auth.require_admin(req("/api/access", make_token(email="anyone@x.com"))))
+    assert e.value.status_code == 403
+
+
 def test_canonical_email():
     assert auth._canonical_email("Maxwell.Turner+ci@Gmail.com") == "maxwellturner@gmail.com"
     assert auth._canonical_email("a.b@googlemail.com") == "ab@googlemail.com"
