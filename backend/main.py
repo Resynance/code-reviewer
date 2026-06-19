@@ -142,12 +142,20 @@ class SearchBody(BaseModel):
     repo: Optional[str] = None
 
 
+class ModelSlot(BaseModel):
+    label: str = ""
+    model: str
+    provider: str = ""
+
+
 class SettingsBody(BaseModel):
     # All optional: only provided (non-null) fields are updated. Send "" to clear
     # a value (falls back to env/default); omit/null to leave it unchanged.
     github_token: Optional[str] = None
     webhook_secret: Optional[str] = None
     repos: Optional[list[str]] = None
+    openrouter_models: Optional[list[ModelSlot]] = None
+    # Legacy fields — still accepted so old clients don't break.
     openrouter_model: Optional[str] = None
     openrouter_provider: Optional[str] = None
     openrouter_model_2: Optional[str] = None
@@ -501,7 +509,9 @@ def get_settings():
         "github_token_set": bool(config_store.get_github_token()),
         "github_tokens": [{"username": t["username"], "orgs": t.get("orgs", [])} for t in tokens],
         "webhook_secret_set": bool(config_store.get_webhook_secret()),
-        # Model/provider are not secret — return the effective values.
+        # Model list — not secret, return the effective resolved values.
+        "openrouter_models": config_store.get_models(),
+        # Legacy fields for backward compat with older frontend versions.
         "openrouter_model": config_store.get_model(),
         "openrouter_provider": config_store.get_provider(),
         "openrouter_model_2": config_store.get_model_2(),
@@ -520,6 +530,12 @@ def update_settings(body: SettingsBody):
         update["webhook_secret"] = body.webhook_secret
     if body.repos is not None:
         update["repos"] = [r.strip() for r in body.repos if r and r.strip()]
+    if body.openrouter_models is not None:
+        update["openrouter_models"] = [
+            {"label": s.label.strip(), "model": s.model.strip(), "provider": s.provider.strip()}
+            for s in body.openrouter_models if s.model.strip()
+        ]
+    # Legacy fields — accepted but not surfaced in the UI any more.
     if body.openrouter_model is not None:
         update["openrouter_model"] = body.openrouter_model.strip()
     if body.openrouter_provider is not None:

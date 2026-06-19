@@ -23,10 +23,9 @@ export default function AssessmentPage() {
     }).catch(() => {})
 
     api.getSettings().then(s => {
-      const slots = [{ label: 'Model 1', model: s.openrouter_model, provider: s.openrouter_provider || '' }]
-      if (s.openrouter_model_2) slots.push({ label: 'Model 2', model: s.openrouter_model_2, provider: s.openrouter_provider_2 || '' })
+      const slots = s.openrouter_models || []
       setModels(slots)
-      setSelectedModel(slots[0])
+      setSelectedModel(slots[0] || null)
     }).catch(() => {})
   }, [])
 
@@ -115,21 +114,18 @@ export default function AssessmentPage() {
       </div>
 
       {/* Model picker */}
-      {models && models.length > 1 && (
-        <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 20 }}>
-          <span style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Model</span>
-          {models.map(m => (
-            <label key={m.model} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, color: 'var(--text)' }}>
-              <input
-                type="radio"
-                name="assess-model"
-                checked={selectedModel?.model === m.model}
-                onChange={() => setSelectedModel(m)}
-                style={{ accentColor: 'var(--accent)' }}
-              />
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{m.model}</span>
-            </label>
-          ))}
+      {models && models.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+          <span style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>Model</span>
+          <select
+            value={models.findIndex(m => m.model === selectedModel?.model && m.provider === selectedModel?.provider)}
+            onChange={e => setSelectedModel(models[+e.target.value])}
+            style={{ ...inputStyle, width: 'auto', minWidth: 260, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+          >
+            {models.map((m, i) => (
+              <option key={i} value={i}>{m.label ? `${m.label} — ${m.model}` : m.model}</option>
+            ))}
+          </select>
         </div>
       )}
 
