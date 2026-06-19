@@ -184,16 +184,32 @@ export default function ReviewPage() {
         </Field>
         {repos.length > 0 && (
           <Field label="Load a pull request" style={{ gridColumn: '1 / -1' }}>
-            <select value={selectedPr} onChange={e => loadPr(e.target.value)} style={inputStyle} disabled={loadingPrs || loadingPr}>
-              <option value="">
-                {loadingPrs ? 'Loading pull requests…' : loadingPr ? 'Loading PR…' : 'Select a pull request…'}
-              </option>
-              {prList.map(pr => (
-                <option key={pr.number} value={pr.number}>
-                  #{pr.number}  {pr.state === 'open' ? '●' : '○'} {pr.state}{pr.draft ? ' · draft' : ''}  —  {pr.title}
+            <div style={{ display: 'flex', gap: 8 }}>
+              <select value={selectedPr} onChange={e => loadPr(e.target.value)} style={{ ...inputStyle, flex: 1 }} disabled={loadingPrs || loadingPr}>
+                <option value="">
+                  {loadingPrs ? 'Loading pull requests…' : loadingPr ? 'Loading PR…' : 'Select a pull request…'}
                 </option>
-              ))}
-            </select>
+                {prList.map(pr => (
+                  <option key={pr.number} value={pr.number}>
+                    #{pr.number}  {pr.state === 'open' ? '●' : '○'} {pr.state}{pr.draft ? ' · draft' : ''}  —  {pr.title}
+                  </option>
+                ))}
+              </select>
+              {selectedPr && (
+                <button
+                  onClick={() => loadPr(selectedPr)}
+                  disabled={loadingPr}
+                  title="Re-fetch this PR from GitHub"
+                  style={{
+                    background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8,
+                    padding: '0 14px', fontSize: 13, color: loadingPr ? 'var(--text-3)' : 'var(--text)',
+                    cursor: loadingPr ? 'default' : 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
+                  }}
+                >
+                  {loadingPr ? '⟳' : '↻ Refresh PR'}
+                </button>
+              )}
+            </div>
             {prError && <div style={{ fontSize: 12, color: 'var(--red)', marginTop: 4 }}>⚠ {prError}</div>}
           </Field>
         )}
