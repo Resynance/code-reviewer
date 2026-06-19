@@ -315,7 +315,7 @@ def test_repo_pr_returns_form_data(client, monkeypatch):
 # ----- webhook ----- #
 
 def _sign(secret: bytes, body: bytes) -> str:
-    return "sha256=" + hmac.new(secret, body, hashlib.sha256).hexdigest()
+    return "sha256=" + hmac.HMAC(secret, body, hashlib.sha256).hexdigest()
 
 
 def test_webhook_rejects_bad_signature(client):

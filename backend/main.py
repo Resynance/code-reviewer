@@ -13,11 +13,11 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.auth import require_user
 
@@ -47,11 +47,17 @@ from github_backfill import (
 # App setup
 # ------------------------------------------------------------------ #
 
+_in_production = bool(os.environ.get("VERCEL") or os.environ.get("DISABLE_DOCS"))
+
 app = FastAPI(
     title="Code Review Tool API",
     version="1.0.0",
     # No-op unless SUPABASE_JWT_SECRET is set (gates /api/* with Supabase Auth).
     dependencies=[Depends(require_user)],
+    # Disable interactive API docs in production to avoid exposing the full
+    # schema (all endpoint names, parameters, models) to unauthenticated callers.
+    docs_url=None if _in_production else "/docs",
+    redoc_url=None if _in_production else "/redoc",
 )
 
 app.add_middleware(
@@ -123,7 +129,7 @@ class DecisionUpsertBody(BaseModel):
 
 class SearchBody(BaseModel):
     query: str
-    k: int = 10
+    k: int = Field(default=10, ge=1, le=100)
     repo: Optional[str] = None
 
 
@@ -267,7 +273,7 @@ def _save_review(request, result, source):
 
 
 @app.get("/api/reviews")
-def list_review_history(repo: Optional[str] = None, pr_number: Optional[int] = None, limit: int = 50):
+def list_review_history(repo: Optional[str] = None, pr_number: Optional[int] = None, limit: int = Query(default=50, ge=1, le=500)):
     """Return saved review runs (full history), newest first."""
     reviews = review_store.list_reviews(repo=repo, pr_number=pr_number, limit=limit)
     return {"reviews": reviews, "count": len(reviews)}
@@ -312,7 +318,7 @@ def search_decisions(body: SearchBody):
 
 
 @app.get("/api/decisions")
-def list_decisions(k: int = 20, repo: Optional[str] = None):
+def list_decisions(k: int = Query(default=20, ge=1, le=200), repo: Optional[str] = None):
     """List recent decisions from the store, optionally scoped to a repo."""
     store = get_store()
     results = store.retrieve("code review decision architecture pattern", k=k, repo=repo)
@@ -592,7 +598,7 @@ def _verify_github_signature(body: bytes, signature: Optional[str]) -> bool:
         return False
     if not signature or not signature.startswith("sha256="):
         return False
-    expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    expected = "sha256=" + hmac.HMAC(secret.encode(), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
 
 
