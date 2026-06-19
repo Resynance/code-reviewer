@@ -143,7 +143,7 @@ export default function AssessmentPage() {
       )}
 
       {/* Result */}
-      {result && <AssessmentResult result={result} />}
+      {result && <AssessmentResult key={result.id ?? result.created_at ?? result.repo} result={result} />}
 
       {/* History */}
       {history.length > 0 && !loading && (
@@ -218,7 +218,7 @@ function AssessmentResult({ result }) {
     const vulns = [...selVulns].sort((a, b) => a - b)
       .map(i => result.vulnerabilities[i]).filter(Boolean)
     if (vulns.length === 1) {
-      return `[${(vulns[0].severity || '').toUpperCase()}] ${vulns[0].title}`.slice(0, 120)
+      return `[${(vulns[0].severity || '').toUpperCase()}] ${vulns[0].title}`.slice(0, 250)
     }
     return `Security findings — ${result.repo} (${vulns.length})`
   }
