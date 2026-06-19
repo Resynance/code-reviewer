@@ -10,6 +10,7 @@ def test_defaults_when_no_file(cfg):
         "github_tokens": [],
         "webhook_secret": "",
         "repos": [],
+        "openrouter_models": [],
         "openrouter_model": "",
         "openrouter_provider": "",
         "openrouter_model_2": "",
