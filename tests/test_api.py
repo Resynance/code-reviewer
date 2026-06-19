@@ -101,6 +101,21 @@ def test_decisions_search(client):
     assert res["count"] == 1
 
 
+def test_decisions_list_k_cap(client):
+    tc, _ = client
+    assert tc.get("/api/decisions", params={"k": 201}).status_code == 422
+
+
+def test_decisions_search_k_cap(client):
+    tc, _ = client
+    assert tc.post("/api/decisions/search", json={"query": "x", "k": 101}).status_code == 422
+
+
+def test_review_history_limit_cap(client):
+    tc, _ = client
+    assert tc.get("/api/reviews", params={"limit": 501}).status_code == 422
+
+
 # ----- stats & balance ----- #
 
 def test_stats_shape(client):
