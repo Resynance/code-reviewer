@@ -10,6 +10,7 @@ def test_defaults_when_no_file(cfg):
         "github_tokens": [],
         "webhook_secret": "",
         "repos": [],
+        "openrouter_models": [],
         "openrouter_model": "",
         "openrouter_provider": "",
         "openrouter_model_2": "",
@@ -184,3 +185,41 @@ def test_legacy_github_token_fallback(cfg, monkeypatch):
     # Old-style single token (no github_tokens list) still works via get_github_token
     cfg.save_config({"github_token": "old_token"})
     assert cfg.get_github_token() == "old_token"
+
+
+# ----- models list ----- #
+
+def test_get_models_from_list(cfg):
+    slots = [
+        {"label": "Fast", "model": "openai/gpt-4o-mini", "provider": ""},
+        {"label": "Smart", "model": "anthropic/claude-sonnet-4.5", "provider": "Anthropic"},
+    ]
+    cfg.save_config({"openrouter_models": slots})
+    assert cfg.get_models() == slots
+
+
+def test_get_models_backward_compat_single(cfg, monkeypatch):
+    # No openrouter_models list → derive from legacy fields
+    cfg.save_config({"openrouter_model": "my/model", "openrouter_provider": "MyCloud"})
+    models = cfg.get_models()
+    assert len(models) == 1
+    assert models[0]["model"] == "my/model"
+    assert models[0]["provider"] == "MyCloud"
+
+
+def test_get_models_backward_compat_with_model2(cfg):
+    cfg.save_config({
+        "openrouter_model": "m/one", "openrouter_provider": "",
+        "openrouter_model_2": "m/two", "openrouter_provider_2": "Azure",
+    })
+    models = cfg.get_models()
+    assert len(models) == 2
+    assert models[1]["model"] == "m/two"
+    assert models[1]["provider"] == "Azure"
+
+
+def test_get_model_and_provider_derive_from_models_list(cfg):
+    slots = [{"label": "", "model": "x/first", "provider": "Prov1"}]
+    cfg.save_config({"openrouter_models": slots})
+    assert cfg.get_model() == "x/first"
+    assert cfg.get_provider() == "Prov1"

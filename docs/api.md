@@ -133,23 +133,87 @@ Set `metadata.repo` to a repo name, or `*` for a global decision. Returns
 ### `DELETE /api/decisions/{doc_id}`
 Removes a decision. Returns `{ "deleted": "<doc_id>" }`.
 
+## Assessments
+
+Assessments run **asynchronously** (same enqueue → run → poll pattern as reviews).
+
+### `POST /api/assessments` — enqueue
+```json
+{ "repo": "org/a", "model": "anthropic/claude-sonnet-4.5", "provider": "" }
+```
+`model` and `provider` are optional (fall back to the configured default). Returns
+`{ "id": "<uuid>", "status": "queued" }`. `400` if `OPENROUTER_API_KEY` is not set.
+
+### `POST /api/assessments/{id}/run`
+Execute a queued assessment job. Idempotent — a job already running/finished is
+returned as-is. Returns the job (see below).
+
+### `GET /api/assessments/{id}`
+Poll a job. Returns `{ id, status, request, result, error, created_at, updated_at }`
+where `status` ∈ `queued|running|done|error`. When `done`, `result` is:
+```json
+{
+  "repo": "org/a",
+  "summary": "…",
+  "purpose": "…",
+  "tech_stack": ["Python", "FastAPI", "React"],
+  "key_components": [
+    { "name": "API server", "role": "…", "files": ["backend/main.py"] }
+  ],
+  "vulnerabilities": [
+    { "severity": "high", "title": "…", "description": "…", "recommendation": "…" }
+  ],
+  "model": "anthropic/claude-sonnet-4.5"
+}
+```
+`vulnerability.severity` ∈ `critical|high|medium|low`. `404` for an unknown id.
+
+Each finished assessment is also **saved to history** (best-effort).
+
+### `GET /api/assessments?repo=&limit=20`
+Saved assessments, newest first. `repo` optional; `limit` defaults to 20, max 100.
+```json
+{ "assessments": [ { "id": 1, "repo": "org/a", "summary": "…", "model": "…",
+                     "created_at": "2026-06-19T…" } ], "count": 1 }
+```
+
 ## Settings
 
 ### `GET /api/settings`
 Secrets are reported as booleans, never echoed.
 ```json
-{ "repos": ["org/a"], "github_token_set": true, "webhook_secret_set": false,
-  "openrouter_model": "anthropic/claude-sonnet-4.5", "openrouter_provider": "" }
+{
+  "repos": ["org/a"],
+  "github_token_set": true,
+  "webhook_secret_set": false,
+  "openrouter_model": "anthropic/claude-sonnet-4.5",
+  "openrouter_provider": "",
+  "openrouter_models": [
+    { "label": "Default", "model": "anthropic/claude-sonnet-4.5", "provider": "" }
+  ],
+  "github_tokens": [{ "username": "alice", "orgs": ["acme"] }]
+}
 ```
+`openrouter_models` is the canonical model list used by the Review and Assessment
+pages. `openrouter_model`/`openrouter_provider` reflect the first slot for backward
+compatibility.
 
 ### `PUT /api/settings`
 Update settings. **Only provided (non-null) fields change**; send `""` to clear a
 value (falls back to env/default), omit/null to leave unchanged.
 ```json
-{ "github_token": "ghp_…", "webhook_secret": "…", "repos": ["org/a", "org/b"],
-  "openrouter_model": "openai/gpt-4o", "openrouter_provider": "Azure" }
+{
+  "github_token": "ghp_…",
+  "webhook_secret": "…",
+  "repos": ["org/a", "org/b"],
+  "openrouter_models": [
+    { "label": "Fast",  "model": "openai/gpt-4o-mini",              "provider": "" },
+    { "label": "Smart", "model": "anthropic/claude-sonnet-4.5", "provider": "Anthropic" }
+  ]
+}
 ```
-Returns the same shape as `GET /api/settings`.
+Each model slot requires `model`; `label` and `provider` are optional. Slots with
+a blank `model` are silently dropped. Returns the same shape as `GET /api/settings`.
 
 ## Repositories
 

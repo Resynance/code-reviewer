@@ -25,6 +25,10 @@ _DEFAULTS = {
     "github_tokens": [],  # list of {username, orgs, token}
     "webhook_secret": "",
     "repos": [],
+    # New: ordered list of model slots [{label, model, provider}].
+    # When set, this supersedes the legacy openrouter_model / openrouter_model_2 fields.
+    "openrouter_models": [],
+    # Legacy single/dual model fields — kept for backward compat with existing configs.
     "openrouter_model": "",
     "openrouter_provider": "",
     "openrouter_model_2": "",
@@ -169,21 +173,48 @@ def get_repos() -> list:
     return load_config().get("repos", [])
 
 
+def get_models() -> list:
+    """Return the ordered list of model slots as [{label, model, provider}].
+
+    When openrouter_models is configured, it is the source of truth.
+    Falls back to the legacy openrouter_model / openrouter_model_2 fields so
+    that existing deployments work without reconfiguration.
+    """
+    cfg = load_config()
+    models = cfg.get("openrouter_models") or []
+    if models:
+        return models
+    # Legacy fallback: build a list from the old two-slot fields.
+    m1 = cfg.get("openrouter_model") or os.getenv("OPENROUTER_MODEL") or DEFAULT_MODEL
+    p1 = cfg.get("openrouter_provider") or os.getenv("OPENROUTER_PROVIDER") or ""
+    result = [{"label": "Default", "model": m1, "provider": p1}]
+    m2 = cfg.get("openrouter_model_2") or ""
+    if m2:
+        p2 = cfg.get("openrouter_provider_2") or ""
+        result.append({"label": "Model 2", "model": m2, "provider": p2})
+    return result
+
+
 def get_model() -> str:
-    return load_config().get("openrouter_model") or os.getenv("OPENROUTER_MODEL") or DEFAULT_MODEL
+    """Return the model string for the first slot (used by the review engine)."""
+    models = get_models()
+    return models[0]["model"] if models else DEFAULT_MODEL
 
 
 def get_provider() -> str:
-    """Optional OpenRouter provider to pin (e.g. 'Anthropic'). Empty = auto-route."""
-    return load_config().get("openrouter_provider") or os.getenv("OPENROUTER_PROVIDER") or ""
+    """Return the provider for the first slot. Empty string = auto-route."""
+    models = get_models()
+    return (models[0].get("provider") or "") if models else ""
 
 
 def get_model_2() -> str:
-    return load_config().get("openrouter_model_2") or ""
+    models = get_models()
+    return models[1]["model"] if len(models) > 1 else ""
 
 
 def get_provider_2() -> str:
-    return load_config().get("openrouter_provider_2") or ""
+    models = get_models()
+    return (models[1].get("provider") or "") if len(models) > 1 else ""
 
 
 def get_embedding_model() -> str:

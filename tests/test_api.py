@@ -5,6 +5,7 @@ import hashlib
 
 import config_store
 from review_engine import ReviewResult
+from assessment_engine import AssessmentResult
 
 
 def test_health(client):
@@ -21,6 +22,21 @@ def test_settings_default(client):
     assert body["github_token_set"] is False
     assert body["webhook_secret_set"] is False
     assert body["openrouter_model"] == config_store.DEFAULT_MODEL
+    assert isinstance(body["openrouter_models"], list)
+
+
+def test_settings_put_model_list(client):
+    tc, _ = client
+    slots = [
+        {"label": "Fast", "model": "openai/gpt-4o-mini", "provider": ""},
+        {"label": "Smart", "model": "anthropic/claude-sonnet-4.5", "provider": "Anthropic"},
+    ]
+    resp = tc.put("/api/settings", json={"openrouter_models": slots})
+    assert resp.status_code == 200
+    body = tc.get("/api/settings").json()
+    assert len(body["openrouter_models"]) == 2
+    assert body["openrouter_models"][0]["model"] == "openai/gpt-4o-mini"
+    assert body["openrouter_models"][1]["label"] == "Smart"
 
 
 def test_settings_put_updates_and_hides_secrets(client):
@@ -377,3 +393,76 @@ def test_webhook_rejects_when_no_secret_configured(client):
     resp = tc.post("/webhook/github", content=b"{}",
                    headers={"X-GitHub-Event": "ping", "X-Hub-Signature-256": "sha256=whatever"})
     assert resp.status_code == 401
+
+
+# ----- assessments ----- #
+
+def _fake_assessment_engine():
+    """Returns a class that mimics AssessmentEngine, echoing the request repo."""
+    class _Fake:
+        def assess(self, req):
+            return AssessmentResult(
+                repo=req.repo, summary="A fine app", purpose="Does things",
+                tech_stack=["Python"], key_components=[], vulnerabilities=[], model="m/x",
+            )
+    return _Fake
+
+
+def test_assessment_requires_api_key(client):
+    tc, _ = client
+    resp = tc.post("/api/assessments", json={"repo": "org/a"})
+    assert resp.status_code == 400
+
+
+def test_assessment_enqueues_and_runs(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    monkeypatch.setattr(main, "AssessmentEngine", _fake_assessment_engine())
+
+    job = tc.post("/api/assessments", json={"repo": "org/a"}).json()
+    assert job["status"] == "queued" and job["id"]
+
+    run = tc.post(f"/api/assessments/{job['id']}/run").json()
+    assert run["status"] == "done"
+    assert run["result"]["repo"] == "org/a"
+    assert run["result"]["summary"] == "A fine app"
+
+    polled = tc.get(f"/api/assessments/{job['id']}").json()
+    assert polled["status"] == "done" and polled["result"]["repo"] == "org/a"
+
+
+def test_assessment_job_not_found(client):
+    tc, _ = client
+    assert tc.get("/api/assessments/00000000-0000-0000-0000-000000000000").status_code == 404
+    assert tc.post("/api/assessments/nope/run").status_code == 404
+
+
+def test_assessment_is_saved_to_history(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    monkeypatch.setattr(main, "AssessmentEngine", _fake_assessment_engine())
+
+    job = tc.post("/api/assessments", json={"repo": "org/b"}).json()
+    tc.post(f"/api/assessments/{job['id']}/run")
+
+    hist = tc.get("/api/assessments", params={"repo": "org/b"}).json()
+    assert hist["count"] == 1
+    assert hist["assessments"][0]["repo"] == "org/b"
+    assert hist["assessments"][0]["summary"] == "A fine app"
+
+
+def test_list_assessments(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    monkeypatch.setattr(main, "AssessmentEngine", _fake_assessment_engine())
+
+    j1 = tc.post("/api/assessments", json={"repo": "org/a"}).json()
+    j2 = tc.post("/api/assessments", json={"repo": "org/b"}).json()
+    tc.post(f"/api/assessments/{j1['id']}/run")
+    tc.post(f"/api/assessments/{j2['id']}/run")
+
+    all_hist = tc.get("/api/assessments").json()
+    assert all_hist["count"] == 2
+
+    only_a = tc.get("/api/assessments", params={"repo": "org/a"}).json()
+    assert only_a["count"] == 1 and only_a["assessments"][0]["repo"] == "org/a"

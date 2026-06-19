@@ -5,11 +5,8 @@ export default function SettingsPage() {
   const [stats, setStats] = useState(null)
   const [settings, setSettings] = useState(null)
 
-  // Model / provider form (prefilled from the server's effective values)
-  const [modelInput, setModelInput] = useState('')
-  const [providerInput, setProviderInput] = useState('')
-  const [model2Input, setModel2Input] = useState('')
-  const [provider2Input, setProvider2Input] = useState('')
+  // Model list + embedding form
+  const [modelsList, setModelsList] = useState([]) // [{label, model, provider}]
   const [embeddingInput, setEmbeddingInput] = useState('')
   const [savingModel, setSavingModel] = useState(false)
   const [modelMsg, setModelMsg] = useState(null)
@@ -37,6 +34,7 @@ export default function SettingsPage() {
   const [ownerRepos, setOwnerRepos] = useState([])
   const [loadingOwnerRepos, setLoadingOwnerRepos] = useState(false)
   const [browseRepo, setBrowseRepo] = useState('')
+  const [repoFilter, setRepoFilter] = useState('')
   const [browseErr, setBrowseErr] = useState(null)
 
   // Access allowlist
@@ -52,10 +50,7 @@ export default function SettingsPage() {
     refreshStats()
     api.getSettings().then(s => {
       setSettings(s)
-      setModelInput(s.openrouter_model || '')
-      setProviderInput(s.openrouter_provider || '')
-      setModel2Input(s.openrouter_model_2 || '')
-      setProvider2Input(s.openrouter_provider_2 || '')
+      setModelsList(s.openrouter_models || [])
       setEmbeddingInput(s.embedding_model || '')
     }).catch(() => {})
     api.listAccess().then(r => setAccessEmails(r.emails || [])).catch(() => {})
@@ -67,7 +62,7 @@ export default function SettingsPage() {
     if (!browseOwner) { setOwnerRepos([]); return }
     const [login, type] = browseOwner.split('::')
     let active = true
-    setLoadingOwnerRepos(true); setBrowseErr(null); setBrowseRepo('')
+    setLoadingOwnerRepos(true); setBrowseErr(null); setBrowseRepo(''); setRepoFilter('')
     api.githubRepos(login, type)
       .then(r => { if (active) setOwnerRepos(r.repos || []) })
       .catch(e => { if (active) { setOwnerRepos([]); setBrowseErr(e.message) } })
@@ -110,22 +105,28 @@ export default function SettingsPage() {
     }
   }
 
+  function updateModelField(idx, field, value) {
+    setModelsList(list => list.map((m, i) => i === idx ? { ...m, [field]: value } : m))
+  }
+
+  function addModelSlot() {
+    setModelsList(list => [...list, { label: '', model: '', provider: '' }])
+  }
+
+  function removeModelSlot(idx) {
+    setModelsList(list => list.filter((_, i) => i !== idx))
+  }
+
   async function saveModel() {
     setSavingModel(true)
     setModelMsg(null)
     try {
       const s = await api.saveSettings({
-        openrouter_model: modelInput.trim(),
-        openrouter_provider: providerInput.trim(),
-        openrouter_model_2: model2Input.trim(),
-        openrouter_provider_2: provider2Input.trim(),
+        openrouter_models: modelsList,
         embedding_model: embeddingInput.trim(),
       })
       setSettings(s)
-      setModelInput(s.openrouter_model || '')
-      setProviderInput(s.openrouter_provider || '')
-      setModel2Input(s.openrouter_model_2 || '')
-      setProvider2Input(s.openrouter_provider_2 || '')
+      setModelsList(s.openrouter_models || [])
       setEmbeddingInput(s.embedding_model || '')
       setModelMsg('Saved ✓')
       refreshStats()
@@ -257,46 +258,70 @@ export default function SettingsPage() {
         ) : <div style={{ color: 'var(--text-3)' }}>Loading…</div>}
       </Card>
 
-      {/* Model / provider */}
-      <Card title="Model">
+      {/* Model list */}
+      <Card title="Models">
         <p style={{ color: 'var(--text-2)', fontSize: 13, marginBottom: 16 }}>
-          The OpenRouter model used for reviews. Optionally pin a provider to route to.
-          Leave the model blank to use the default (<code style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>anthropic/claude-sonnet-4.5</code>).
+          Add one or more OpenRouter models. The first entry is the default.
+          All configured models appear in the dropdown on the Review and Assess pages.
+          See <code style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>openrouter.ai/models</code> for available model IDs.
         </p>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <div>
-              <label style={labelStyle}>Model 1 — see openrouter.ai/models</label>
-              <input value={modelInput} onChange={e => setModelInput(e.target.value)}
-                placeholder="anthropic/claude-sonnet-4.5" style={inputStyle} />
-            </div>
-            <div>
-              <label style={labelStyle}>Provider 1 (optional)</label>
-              <input value={providerInput} onChange={e => setProviderInput(e.target.value)}
-                placeholder="auto-route" style={inputStyle} />
-            </div>
-            <div>
-              <label style={labelStyle}>Model 2 (optional — enables model picker on Review page)</label>
-              <input value={model2Input} onChange={e => setModel2Input(e.target.value)}
-                placeholder="openai/gpt-4o" style={inputStyle} />
-            </div>
-            <div>
-              <label style={labelStyle}>Provider 2 (optional)</label>
-              <input value={provider2Input} onChange={e => setProvider2Input(e.target.value)}
-                placeholder="auto-route" style={inputStyle} />
-            </div>
+
+        {modelsList.length === 0 && (
+          <div style={{ color: 'var(--text-3)', fontSize: 13, padding: '6px 0', marginBottom: 12 }}>
+            No models configured — the default (<code style={{ fontFamily: 'var(--font-mono)' }}>anthropic/claude-sonnet-4.5</code>) will be used.
           </div>
-          <div>
-            <label style={labelStyle}>Embedding model — used to index/search decisions (pgvector backend)</label>
-            <input value={embeddingInput} onChange={e => setEmbeddingInput(e.target.value)}
-              placeholder="openai/text-embedding-3-small" style={inputStyle} />
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <button onClick={saveModel} disabled={savingModel} style={primaryBtn(savingModel)}>
-              {savingModel ? 'Saving…' : 'Save'}
-            </button>
-            {modelMsg && <span style={{ fontSize: 13, color: modelMsg === 'Saved ✓' ? 'var(--green)' : 'var(--red)' }}>{modelMsg}</span>}
-          </div>
+        )}
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+          {modelsList.map((m, i) => (
+            <div key={i} style={{ display: 'grid', gridTemplateColumns: '160px 1fr 160px auto', gap: 8, alignItems: 'center', background: 'var(--surface2)', borderRadius: 8, padding: '10px 12px' }}>
+              <div>
+                {i === 0 && <label style={labelStyle}>Label</label>}
+                <input
+                  value={m.label}
+                  onChange={e => updateModelField(i, 'label', e.target.value)}
+                  placeholder={`Model ${i + 1}`}
+                  style={inputStyle}
+                />
+              </div>
+              <div>
+                {i === 0 && <label style={labelStyle}>Model ID</label>}
+                <input
+                  value={m.model}
+                  onChange={e => updateModelField(i, 'model', e.target.value)}
+                  placeholder="anthropic/claude-sonnet-4.5"
+                  style={inputStyle}
+                />
+              </div>
+              <div>
+                {i === 0 && <label style={labelStyle}>Provider (optional)</label>}
+                <input
+                  value={m.provider}
+                  onChange={e => updateModelField(i, 'provider', e.target.value)}
+                  placeholder="auto-route"
+                  style={inputStyle}
+                />
+              </div>
+              <button onClick={() => removeModelSlot(i)} style={{ ...dangerBtn, alignSelf: i === 0 ? 'flex-end' : 'center', height: 36 }}>
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <button onClick={addModelSlot} style={{ ...smallBtn, marginBottom: 16 }}>+ Add model</button>
+
+        <div>
+          <label style={labelStyle}>Embedding model — used to index/search decisions (pgvector backend)</label>
+          <input value={embeddingInput} onChange={e => setEmbeddingInput(e.target.value)}
+            placeholder="openai/text-embedding-3-small" style={inputStyle} />
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14 }}>
+          <button onClick={saveModel} disabled={savingModel} style={primaryBtn(savingModel)}>
+            {savingModel ? 'Saving…' : 'Save'}
+          </button>
+          {modelMsg && <span style={{ fontSize: 13, color: modelMsg === 'Saved ✓' ? 'var(--green)' : 'var(--red)' }}>{modelMsg}</span>}
         </div>
       </Card>
 
@@ -417,18 +442,36 @@ export default function SettingsPage() {
         {owners.length > 0 && (
           <div style={{ marginBottom: 14 }}>
             <label style={labelStyle}>Browse from GitHub</label>
-            <div style={{ display: 'flex', gap: 10 }}>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
               <select value={browseOwner} onChange={e => setBrowseOwner(e.target.value)} style={{ ...inputStyle, flex: '0 0 210px' }}>
                 <option value="">Select owner…</option>
                 {owners.map(o => <option key={o.login} value={`${o.login}::${o.type}`}>{o.login}{o.type === 'user' ? ' (you)' : ''}</option>)}
               </select>
-              <select value={browseRepo} onChange={e => setBrowseRepo(e.target.value)}
-                disabled={!browseOwner || loadingOwnerRepos} style={{ ...inputStyle, flex: 1 }}>
-                <option value="">{loadingOwnerRepos ? 'Loading repos…' : browseOwner ? 'Select a repo…' : '—'}</option>
-                {ownerRepos.filter(r => !(settings?.repos || []).includes(r.full_name)).map(r => (
-                  <option key={r.full_name} value={r.full_name}>{r.full_name}{r.private ? ' 🔒' : ''}</option>
-                ))}
-              </select>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {browseOwner && (
+                  <input
+                    value={repoFilter}
+                    onChange={e => { setRepoFilter(e.target.value); setBrowseRepo('') }}
+                    placeholder="Filter repos…"
+                    style={{ ...inputStyle, fontSize: 12 }}
+                  />
+                )}
+                <select
+                  value={browseRepo}
+                  onChange={e => setBrowseRepo(e.target.value)}
+                  disabled={!browseOwner || loadingOwnerRepos}
+                  style={inputStyle}
+                >
+                  <option value="">{loadingOwnerRepos ? 'Loading repos…' : browseOwner ? 'Select a repo…' : '—'}</option>
+                  {ownerRepos
+                    .filter(r => !(settings?.repos || []).includes(r.full_name))
+                    .filter(r => !repoFilter || r.full_name.toLowerCase().includes(repoFilter.toLowerCase()))
+                    .map(r => (
+                      <option key={r.full_name} value={r.full_name}>{r.full_name}{r.private ? ' 🔒' : ''}</option>
+                    ))
+                  }
+                </select>
+              </div>
               <button onClick={addBrowsedRepo} disabled={!browseRepo} style={{ ...primaryBtn(false), height: 38 }}>Add</button>
             </div>
             {browseErr && <div style={{ color: 'var(--red)', fontSize: 12, marginTop: 6 }}>⚠ {browseErr}</div>}

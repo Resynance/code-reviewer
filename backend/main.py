@@ -9,9 +9,12 @@ import json
 import hmac
 import hashlib
 import asyncio
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,9 +30,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
 import config_store
 import review_store
 import review_jobs
+import assessment_store
 import access_store
 from decision_store import create_store, ChromaDecisionStore
 from review_engine import CodeReviewEngine, ReviewRequest
+from assessment_engine import AssessmentEngine, AssessmentRequest
 from github_backfill import (
     backfill as run_backfill,
     list_open_prs,
@@ -137,12 +142,20 @@ class SearchBody(BaseModel):
     repo: Optional[str] = None
 
 
+class ModelSlot(BaseModel):
+    label: str = ""
+    model: str
+    provider: str = ""
+
+
 class SettingsBody(BaseModel):
     # All optional: only provided (non-null) fields are updated. Send "" to clear
     # a value (falls back to env/default); omit/null to leave it unchanged.
     github_token: Optional[str] = None
     webhook_secret: Optional[str] = None
     repos: Optional[list[str]] = None
+    openrouter_models: Optional[list[ModelSlot]] = None
+    # Legacy fields — still accepted so old clients don't break.
     openrouter_model: Optional[str] = None
     openrouter_provider: Optional[str] = None
     openrouter_model_2: Optional[str] = None
@@ -177,6 +190,12 @@ class BackfillBody(BaseModel):
 
 class AddTokenBody(BaseModel):
     token: str
+
+
+class AssessmentRequestBody(BaseModel):
+    repo: str
+    model: Optional[str] = None
+    provider: Optional[str] = None
 
 
 # ------------------------------------------------------------------ #
@@ -309,6 +328,85 @@ def list_review_history(repo: Optional[str] = None, pr_number: Optional[int] = N
     return {"reviews": reviews, "count": len(reviews)}
 
 
+@app.post("/api/assessments")
+def create_assessment(body: AssessmentRequestBody):
+    """Enqueue an async project assessment and return its job id."""
+    if not os.getenv("OPENROUTER_API_KEY"):
+        raise HTTPException(status_code=400, detail="OPENROUTER_API_KEY not set")
+    payload = body.model_dump()
+    payload["_type"] = "assessment"
+    job = review_jobs.create_job(payload)
+    return {"id": job["id"], "status": job["status"]}
+
+
+@app.post("/api/assessments/{job_id}/run")
+def run_assessment_job(job_id: str):
+    """Execute a queued assessment job."""
+    job = review_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Assessment job not found")
+    if job["status"] != "queued":
+        return job
+    review_jobs.update_job(job_id, status="running")
+    try:
+        req = job["request"]
+        result = _execute_assessment(AssessmentRequestBody(
+            repo=req["repo"],
+            model=req.get("model"),
+            provider=req.get("provider"),
+        ))
+        return review_jobs.update_job(job_id, status="done", result=result)
+    except Exception as e:
+        return review_jobs.update_job(job_id, status="error", error=str(e))
+
+
+@app.get("/api/assessments/{job_id}")
+def get_assessment_job(job_id: str):
+    """Poll an assessment job's status/result."""
+    job = review_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Assessment job not found")
+    return job
+
+
+@app.get("/api/assessments")
+def list_assessments_history(repo: Optional[str] = None, limit: int = Query(default=20, ge=1, le=100)):
+    """Return saved assessments, newest first."""
+    items = assessment_store.list_assessments(repo=repo, limit=limit)
+    return {"assessments": items, "count": len(items)}
+
+
+def _execute_assessment(body: AssessmentRequestBody) -> dict:
+    engine = AssessmentEngine()
+    request = AssessmentRequest(
+        repo=body.repo,
+        model=body.model or None,
+        provider=body.provider or None,
+    )
+    result = engine.assess(request)
+    try:
+        assessment_store.save_assessment({
+            "repo": result.repo,
+            "summary": result.summary,
+            "purpose": result.purpose,
+            "tech_stack": result.tech_stack,
+            "key_components": result.key_components,
+            "vulnerabilities": result.vulnerabilities,
+            "model": result.model,
+        })
+    except Exception:
+        logger.warning("Failed to persist assessment for %s", result.repo, exc_info=True)
+    return {
+        "repo": result.repo,
+        "summary": result.summary,
+        "purpose": result.purpose,
+        "tech_stack": result.tech_stack,
+        "key_components": result.key_components,
+        "vulnerabilities": result.vulnerabilities,
+        "model": result.model,
+    }
+
+
 @app.post("/api/pr-comment")
 def pr_comment(body: PrCommentBody):
     """Post selected review findings as a comment on the PR."""
@@ -411,7 +509,9 @@ def get_settings():
         "github_token_set": bool(config_store.get_github_token()),
         "github_tokens": [{"username": t["username"], "orgs": t.get("orgs", [])} for t in tokens],
         "webhook_secret_set": bool(config_store.get_webhook_secret()),
-        # Model/provider are not secret — return the effective values.
+        # Model list — not secret, return the effective resolved values.
+        "openrouter_models": config_store.get_models(),
+        # Legacy fields for backward compat with older frontend versions.
         "openrouter_model": config_store.get_model(),
         "openrouter_provider": config_store.get_provider(),
         "openrouter_model_2": config_store.get_model_2(),
@@ -430,6 +530,12 @@ def update_settings(body: SettingsBody):
         update["webhook_secret"] = body.webhook_secret
     if body.repos is not None:
         update["repos"] = [r.strip() for r in body.repos if r and r.strip()]
+    if body.openrouter_models is not None:
+        update["openrouter_models"] = [
+            {"label": s.label.strip(), "model": s.model.strip(), "provider": s.provider.strip()}
+            for s in body.openrouter_models if s.model.strip()
+        ]
+    # Legacy fields — accepted but not surfaced in the UI any more.
     if body.openrouter_model is not None:
         update["openrouter_model"] = body.openrouter_model.strip()
     if body.openrouter_provider is not None:

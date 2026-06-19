@@ -72,6 +72,7 @@ def client(tmp_path, monkeypatch, clean_env):
     import config_store
     import review_store
     import review_jobs
+    import assessment_store
     import access_store
     import backend.main as main
     from starlette.testclient import TestClient
@@ -79,6 +80,7 @@ def client(tmp_path, monkeypatch, clean_env):
     monkeypatch.setattr(config_store, "_CONFIG_PATH", tmp_path / "config.json")
     monkeypatch.setattr(review_store, "_FILE_PATH", tmp_path / "reviews.json")
     monkeypatch.setattr(review_jobs, "_FILE_PATH", tmp_path / "review_jobs.json")
+    monkeypatch.setattr(assessment_store, "_FILE_PATH", tmp_path / "assessments.json")
     monkeypatch.setattr(access_store, "_FILE_PATH", tmp_path / "access.json")
     access_store._CACHE["emails"] = None  # reset cache between tests
     # Reset lazily-built singletons so each test gets a fresh, temp-backed store.
