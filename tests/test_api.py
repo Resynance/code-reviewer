@@ -169,6 +169,24 @@ def test_pr_comment_posts(client, monkeypatch):
     assert res["html_url"].endswith("#c1")
 
 
+def test_issue_requires_token(client):
+    tc, _ = client
+    assert tc.post("/api/issue", json={"repo": "org/a", "title": "t", "body": "b"}).status_code == 400
+
+
+def test_issue_created(client, monkeypatch):
+    tc, main = client
+    config_store.save_config({"github_token": "t"})
+    captured = {}
+    def fake_create(repo, title, body, token):
+        captured.update(repo=repo, title=title, body=body)
+        return "https://github.com/org/a/issues/9"
+    monkeypatch.setattr(main, "create_issue", fake_create)
+    res = tc.post("/api/issue", json={"repo": "org/a", "title": "Bug", "body": "b"}).json()
+    assert res["html_url"].endswith("/issues/9")
+    assert captured == {"repo": "org/a", "title": "Bug", "body": "b"}
+
+
 def test_review_is_saved_to_history(client, monkeypatch):
     tc, main = client
     monkeypatch.setenv("OPENROUTER_API_KEY", "key")

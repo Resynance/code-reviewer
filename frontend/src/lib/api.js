@@ -40,6 +40,9 @@ export const api = {
   postPrComment: ({ repo, pr_number, body }) =>
     request('/api/pr-comment', { method: 'POST', body: { repo, pr_number, body } }),
 
+  createIssue: ({ repo, title, body }) =>
+    request('/api/issue', { method: 'POST', body: { repo, title, body } }),
+
   listDecisions: (k = 20, repo = '') =>
     request(`/api/decisions?k=${encodeURIComponent(k)}${repo ? `&repo=${encodeURIComponent(repo)}` : ''}`),
 

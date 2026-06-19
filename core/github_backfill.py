@@ -266,6 +266,41 @@ def post_pr_comment(repo: str, pr_number, body: str, token: str) -> str:
     return resp.json().get("html_url", "")
 
 
+def create_issue(repo: str, title: str, body: str, token: str) -> str:
+    """Open a new issue on the repo. Returns the issue's html_url.
+
+    Requires a token with write access (repo / issues:write).
+    """
+    import httpx
+
+    _validate(repo, token)
+    if not (title or "").strip():
+        raise ValueError("issue title is empty")
+
+    with httpx.Client(timeout=30.0, headers=_headers(token)) as client:
+        resp = client.post(
+            f"{GITHUB_API}/repos/{repo}/issues",
+            json={"title": title, "body": body or ""},
+        )
+    if resp.status_code in (401, 403):
+        try:
+            gh_msg = resp.json().get("message", "") or resp.text[:200]
+        except ValueError:
+            gh_msg = resp.text[:200]
+        raise RuntimeError(
+            f"GitHub denied creating the issue ({resp.status_code}: {gh_msg}). The "
+            "token must be able to WRITE to this repo. A fine-grained PAT needs its "
+            "Repository access to include this repo (not 'Public repositories "
+            "(read-only)') plus Issues: Read and write; a classic PAT needs the "
+            "'repo' scope."
+        )
+    if resp.status_code == 404:
+        raise RuntimeError(f"Repo '{repo}' not found, or the token lacks access.")
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(f"GitHub returned {resp.status_code}: {resp.text[:200]}")
+    return resp.json().get("html_url", "")
+
+
 def _raise_status(resp):
     if resp.status_code in (401, 403):
         raise RuntimeError(

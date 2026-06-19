@@ -39,6 +39,7 @@ from github_backfill import (
     list_owners,
     list_owner_repos,
     post_pr_comment,
+    create_issue,
 )
 
 
@@ -149,6 +150,12 @@ class PrCommentBody(BaseModel):
     repo: str
     pr_number: int
     body: str
+
+
+class CreateIssueBody(BaseModel):
+    repo: str
+    title: str
+    body: str = ""
 
 
 class BackfillBody(BaseModel):
@@ -274,6 +281,21 @@ def pr_comment(body: PrCommentBody):
         raise HTTPException(status_code=400, detail="GitHub token not configured")
     try:
         url = post_pr_comment(body.repo, body.pr_number, body.body, token)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"html_url": url}
+
+
+@app.post("/api/issue")
+def open_issue(body: CreateIssueBody):
+    """Open a new GitHub issue from selected review findings."""
+    token = config_store.get_github_token()
+    if not token:
+        raise HTTPException(status_code=400, detail="GitHub token not configured")
+    try:
+        url = create_issue(body.repo, body.title, body.body, token)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

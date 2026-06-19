@@ -16,8 +16,9 @@ Liveness probe.
 
 ## Reviews
 
-### `POST /api/review`
-Run an AI review on a diff.
+### `POST /api/review` — enqueue
+Reviews run **asynchronously** so a slow model call doesn't hold one request open
+past the serverless function limit. This endpoint enqueues a job and returns its id.
 
 Request:
 ```json
@@ -32,9 +33,18 @@ Request:
   "files_changed": ["src/auth/middleware.py"]
 }
 ```
-Only `pr_number`, `repo`, `title`, and `diff` are required.
+Only `pr_number`, `repo`, `title`, and `diff` are required. Returns
+`{ "id": "<uuid>", "status": "queued" }`. `400` if `OPENROUTER_API_KEY` is not set.
 
-Response:
+The client then calls `POST /api/review/{id}/run` and polls `GET /api/review/{id}`.
+
+### `POST /api/review/{id}/run`
+Execute a queued job (runs the review, persists the outcome to the job). Idempotent
+— a job already running/finished is returned as-is. Returns the job (see below).
+
+### `GET /api/review/{id}`
+Poll a job. Returns `{ id, status, request, result, error, created_at, updated_at }`
+where `status` ∈ `queued|running|done|error`. When `done`, `result` is:
 ```json
 {
   "pr_number": 201,
@@ -53,11 +63,10 @@ Response:
 }
 ```
 `issue.severity` ∈ `critical|high|medium|low`. `suggestion.type` ∈
-`security|performance|architecture|style|test_coverage`.
+`security|performance|architecture|style|test_coverage`. `404` for an unknown id.
 
-Each successful review is also **saved to history** (best-effort — a save failure
-never fails the review). Errors: `400` if `OPENROUTER_API_KEY` is not set; `500`
-on engine/LLM failure.
+Each finished review is also **saved to history** (best-effort — a save failure
+never fails the review).
 
 ### `GET /api/reviews?repo=&pr_number=&limit=50`
 Saved review runs, newest first (full history — every run is kept, including
@@ -80,6 +89,15 @@ Post selected review findings as a comment on the PR.
 Returns `{ "html_url": "https://github.com/org/a/pull/88#issuecomment-…" }`. The
 GitHub token needs **write** access (`repo` / `pull_requests:write`); `400`
 without a token or empty body, `502` on GitHub errors (incl. a permissions hint).
+
+### `POST /api/issue`
+Open a new GitHub issue from selected review findings.
+```json
+{ "repo": "org/a", "title": "[HIGH] auth.py: missing token expiry check", "body": "## 🤖 ReviewBot\n…" }
+```
+Returns `{ "html_url": "https://github.com/org/a/issues/9" }`. The GitHub token
+needs **write** access (`repo` / `issues:write`); `400` without a token or empty
+title, `502` on GitHub errors (incl. a permissions hint).
 
 ## Decisions
 

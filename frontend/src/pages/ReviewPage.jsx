@@ -228,6 +228,9 @@ function ReviewResult({ result, repo }) {
   const [commenting, setCommenting] = useState(false)
   const [commentUrl, setCommentUrl] = useState(null)
   const [commentErr, setCommentErr] = useState(null)
+  const [issuing, setIssuing] = useState(false)
+  const [issueUrl, setIssueUrl] = useState(null)
+  const [issueErr, setIssueErr] = useState(null)
 
   const toggle = (set, setter, i) => {
     const n = new Set(set)
@@ -271,6 +274,32 @@ function ReviewResult({ result, repo }) {
     }
   }
 
+  // Title for an issue built from the selection: the single finding's text if
+  // exactly one is picked, else a summary referencing the PR.
+  function issueTitle() {
+    const issues = [...selIssues].sort((a, b) => a - b).map(i => result.issues[i]).filter(Boolean)
+    if (issues.length === 1 && selSugg.size === 0) {
+      const it = issues[0]
+      return `[${(it.severity || '').toUpperCase()}] ${it.file ? `${it.file}: ` : ''}${it.description}`.slice(0, 120)
+    }
+    return `Code review findings — ${repo}#${result.pr_number} (${selCount})`
+  }
+
+  async function postIssue() {
+    const body = buildBody()
+    if (!body) return
+    setIssuing(true); setIssueErr(null); setIssueUrl(null)
+    try {
+      const ref = `\n\n—\nFrom review of ${repo}#${result.pr_number}`
+      const res = await api.createIssue({ repo, title: issueTitle(), body: body + ref })
+      setIssueUrl(res.html_url)
+    } catch (e) {
+      setIssueErr(e.message)
+    } finally {
+      setIssuing(false)
+    }
+  }
+
   return (
     <div style={{ animation: 'fadeIn 0.3s ease' }}>
       <style>{`@keyframes fadeIn { from { opacity:0; transform:translateY(8px) } to { opacity:1; transform:none } }`}</style>
@@ -298,15 +327,24 @@ function ReviewResult({ result, repo }) {
           background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10,
         }}>
           <span style={{ fontSize: 13, color: 'var(--text-2)' }}>
-            {selCount} selected — tick issues/suggestions to post to <code style={{ fontFamily: 'var(--font-mono)' }}>{repo}#{result.pr_number}</code>
+            {selCount} selected — tick issues/suggestions, then comment or open an issue on <code style={{ fontFamily: 'var(--font-mono)' }}>{repo}#{result.pr_number}</code>
           </span>
-          <button onClick={postComment} disabled={!selCount || commenting} style={{
-            marginLeft: 'auto', background: (!selCount || commenting) ? 'var(--surface2)' : 'var(--accent)',
-            color: (!selCount || commenting) ? 'var(--text-3)' : '#fff', border: 'none', borderRadius: 8,
-            padding: '8px 16px', fontSize: 13, fontWeight: 500,
-          }}>{commenting ? 'Posting…' : '💬 Comment on PR'}</button>
-          {commentUrl && <a href={commentUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: 'var(--green)' }}>✓ Posted ↗</a>}
-          {commentErr && <span style={{ fontSize: 12, color: 'var(--red)' }}>⚠ {commentErr}</span>}
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <button onClick={postComment} disabled={!selCount || commenting} style={{
+              background: (!selCount || commenting) ? 'var(--surface2)' : 'var(--accent)',
+              color: (!selCount || commenting) ? 'var(--text-3)' : '#fff', border: 'none', borderRadius: 8,
+              padding: '8px 16px', fontSize: 13, fontWeight: 500,
+            }}>{commenting ? 'Posting…' : '💬 Comment on PR'}</button>
+            {commentUrl && <a href={commentUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: 'var(--green)' }}>✓ Posted ↗</a>}
+            {commentErr && <span style={{ fontSize: 12, color: 'var(--red)' }}>⚠ {commentErr}</span>}
+            <button onClick={postIssue} disabled={!selCount || issuing} style={{
+              background: 'transparent', color: (!selCount || issuing) ? 'var(--text-3)' : 'var(--text)',
+              border: '1px solid var(--border2)', borderRadius: 8,
+              padding: '8px 16px', fontSize: 13, fontWeight: 500,
+            }}>{issuing ? 'Creating…' : '🐛 Create issue'}</button>
+            {issueUrl && <a href={issueUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: 'var(--green)' }}>✓ Created ↗</a>}
+            {issueErr && <span style={{ fontSize: 12, color: 'var(--red)' }}>⚠ {issueErr}</span>}
+          </div>
         </div>
       )}
 

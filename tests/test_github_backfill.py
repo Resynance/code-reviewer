@@ -332,3 +332,25 @@ def test_post_pr_comment_auth_error(monkeypatch):
     _post_client(monkeypatch, FakeResp(403, {}, "forbidden"))
     with pytest.raises(RuntimeError, match="denied the comment.*forbidden"):
         gb.post_pr_comment("org/repo", 5, "hi", token="t")
+
+
+# ----- create_issue ----- #
+
+def test_create_issue(monkeypatch):
+    captured = {}
+    _post_client(monkeypatch, FakeResp(201, {"html_url": "https://github.com/org/repo/issues/9"}), captured)
+    url = gb.create_issue("org/repo", "Bug: thing", "details", token="t")
+    assert url.endswith("/issues/9")
+    assert captured["json"] == {"title": "Bug: thing", "body": "details"}
+    assert captured["url"].endswith("/repos/org/repo/issues")
+
+
+def test_create_issue_empty_title():
+    with pytest.raises(ValueError, match="title is empty"):
+        gb.create_issue("org/repo", "  ", "body", token="t")
+
+
+def test_create_issue_auth_error(monkeypatch):
+    _post_client(monkeypatch, FakeResp(403, {}, "forbidden"))
+    with pytest.raises(RuntimeError, match="denied creating the issue.*forbidden"):
+        gb.create_issue("org/repo", "t", "b", token="t")
