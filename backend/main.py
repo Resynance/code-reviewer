@@ -9,9 +9,12 @@ import json
 import hmac
 import hashlib
 import asyncio
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -384,7 +387,7 @@ def _execute_assessment(body: AssessmentRequestBody) -> dict:
             "model": result.model,
         })
     except Exception:
-        pass
+        logger.warning("Failed to persist assessment for %s", result.repo, exc_info=True)
     return {
         "repo": result.repo,
         "summary": result.summary,

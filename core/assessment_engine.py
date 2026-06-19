@@ -35,6 +35,17 @@ _ENTRY_NAMES = frozenset({
     "index.js", "index.ts", "main.ts", "main.go",
 })
 
+# Files that must never be sent to the LLM regardless of selection pass.
+_SENSITIVE_NAMES = frozenset({
+    ".env", ".env.local", ".env.development", ".env.production", ".env.staging",
+    ".netrc", ".npmrc", ".pypirc", ".htpasswd",
+    "id_rsa", "id_rsa.pub", "id_dsa", "id_ecdsa", "id_ed25519", "id_ed25519.pub",
+    "secrets.yml", "secrets.yaml",
+})
+_SENSITIVE_EXTENSIONS = frozenset({
+    ".pem", ".key", ".p12", ".pfx", ".cer", ".crt", ".der",
+})
+
 
 @dataclass
 class AssessmentRequest:
@@ -242,12 +253,17 @@ class AssessmentEngine:
 
         return tree_lines, file_contents
 
+    def _is_sensitive(self, path: str) -> bool:
+        basename = path.rsplit("/", 1)[-1].lower()
+        _, ext = os.path.splitext(basename)
+        return basename in _SENSITIVE_NAMES or ext in _SENSITIVE_EXTENSIONS
+
     def _select_files(self, all_blobs: list) -> list:
         selected = []
         seen_paths = set()
 
         def add(item):
-            if item["path"] not in seen_paths:
+            if item["path"] not in seen_paths and not self._is_sensitive(item["path"]):
                 selected.append(item)
                 seen_paths.add(item["path"])
 
