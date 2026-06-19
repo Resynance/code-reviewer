@@ -27,9 +27,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
 import config_store
 import review_store
 import review_jobs
+import assessment_store
 import access_store
 from decision_store import create_store, ChromaDecisionStore
 from review_engine import CodeReviewEngine, ReviewRequest
+from assessment_engine import AssessmentEngine, AssessmentRequest
 from github_backfill import (
     backfill as run_backfill,
     list_open_prs,
@@ -179,6 +181,12 @@ class AddTokenBody(BaseModel):
     token: str
 
 
+class AssessmentRequestBody(BaseModel):
+    repo: str
+    model: Optional[str] = None
+    provider: Optional[str] = None
+
+
 # ------------------------------------------------------------------ #
 # Helpers
 # ------------------------------------------------------------------ #
@@ -307,6 +315,85 @@ def list_review_history(repo: Optional[str] = None, pr_number: Optional[int] = N
     """Return saved review runs (full history), newest first."""
     reviews = review_store.list_reviews(repo=repo, pr_number=pr_number, limit=limit)
     return {"reviews": reviews, "count": len(reviews)}
+
+
+@app.post("/api/assess")
+def create_assessment(body: AssessmentRequestBody):
+    """Enqueue an async project assessment and return its job id."""
+    if not os.getenv("OPENROUTER_API_KEY"):
+        raise HTTPException(status_code=400, detail="OPENROUTER_API_KEY not set")
+    payload = body.model_dump()
+    payload["_type"] = "assessment"
+    job = review_jobs.create_job(payload)
+    return {"id": job["id"], "status": job["status"]}
+
+
+@app.post("/api/assess/{job_id}/run")
+def run_assessment_job(job_id: str):
+    """Execute a queued assessment job."""
+    job = review_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Assessment job not found")
+    if job["status"] != "queued":
+        return job
+    review_jobs.update_job(job_id, status="running")
+    try:
+        req = job["request"]
+        result = _execute_assessment(AssessmentRequestBody(
+            repo=req["repo"],
+            model=req.get("model"),
+            provider=req.get("provider"),
+        ))
+        return review_jobs.update_job(job_id, status="done", result=result)
+    except Exception as e:
+        return review_jobs.update_job(job_id, status="error", error=str(e))
+
+
+@app.get("/api/assess/{job_id}")
+def get_assessment_job(job_id: str):
+    """Poll an assessment job's status/result."""
+    job = review_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Assessment job not found")
+    return job
+
+
+@app.get("/api/assessments")
+def list_assessments_history(repo: Optional[str] = None, limit: int = Query(default=20, ge=1, le=100)):
+    """Return saved assessments, newest first."""
+    items = assessment_store.list_assessments(repo=repo, limit=limit)
+    return {"assessments": items, "count": len(items)}
+
+
+def _execute_assessment(body: AssessmentRequestBody) -> dict:
+    engine = AssessmentEngine()
+    request = AssessmentRequest(
+        repo=body.repo,
+        model=body.model or None,
+        provider=body.provider or None,
+    )
+    result = engine.assess(request)
+    try:
+        assessment_store.save_assessment({
+            "repo": result.repo,
+            "summary": result.summary,
+            "purpose": result.purpose,
+            "tech_stack": result.tech_stack,
+            "key_components": result.key_components,
+            "vulnerabilities": result.vulnerabilities,
+            "model": result.model,
+        })
+    except Exception:
+        pass
+    return {
+        "repo": result.repo,
+        "summary": result.summary,
+        "purpose": result.purpose,
+        "tech_stack": result.tech_stack,
+        "key_components": result.key_components,
+        "vulnerabilities": result.vulnerabilities,
+        "model": result.model,
+    }
 
 
 @app.post("/api/pr-comment")

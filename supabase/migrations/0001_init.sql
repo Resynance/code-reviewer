@@ -9,6 +9,10 @@
 -- pgvector (you can also enable this from Dashboard → Database → Extensions).
 create extension if not exists vector with schema extensions;
 
+-- Supabase installs pgvector in the extensions schema; make sure the type is
+-- visible without a schema prefix for the rest of this migration.
+set search_path to public, extensions;
+
 -- Decisions: one row per past PR / ADR, with its embedding for semantic search.
 create table if not exists public.decisions (
   doc_id    text primary key,
