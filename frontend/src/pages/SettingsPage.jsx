@@ -34,6 +34,7 @@ export default function SettingsPage() {
   const [ownerRepos, setOwnerRepos] = useState([])
   const [loadingOwnerRepos, setLoadingOwnerRepos] = useState(false)
   const [browseRepo, setBrowseRepo] = useState('')
+  const [repoFilter, setRepoFilter] = useState('')
   const [browseErr, setBrowseErr] = useState(null)
 
   // Access allowlist
@@ -61,7 +62,7 @@ export default function SettingsPage() {
     if (!browseOwner) { setOwnerRepos([]); return }
     const [login, type] = browseOwner.split('::')
     let active = true
-    setLoadingOwnerRepos(true); setBrowseErr(null); setBrowseRepo('')
+    setLoadingOwnerRepos(true); setBrowseErr(null); setBrowseRepo(''); setRepoFilter('')
     api.githubRepos(login, type)
       .then(r => { if (active) setOwnerRepos(r.repos || []) })
       .catch(e => { if (active) { setOwnerRepos([]); setBrowseErr(e.message) } })
@@ -441,18 +442,36 @@ export default function SettingsPage() {
         {owners.length > 0 && (
           <div style={{ marginBottom: 14 }}>
             <label style={labelStyle}>Browse from GitHub</label>
-            <div style={{ display: 'flex', gap: 10 }}>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
               <select value={browseOwner} onChange={e => setBrowseOwner(e.target.value)} style={{ ...inputStyle, flex: '0 0 210px' }}>
                 <option value="">Select owner…</option>
                 {owners.map(o => <option key={o.login} value={`${o.login}::${o.type}`}>{o.login}{o.type === 'user' ? ' (you)' : ''}</option>)}
               </select>
-              <select value={browseRepo} onChange={e => setBrowseRepo(e.target.value)}
-                disabled={!browseOwner || loadingOwnerRepos} style={{ ...inputStyle, flex: 1 }}>
-                <option value="">{loadingOwnerRepos ? 'Loading repos…' : browseOwner ? 'Select a repo…' : '—'}</option>
-                {ownerRepos.filter(r => !(settings?.repos || []).includes(r.full_name)).map(r => (
-                  <option key={r.full_name} value={r.full_name}>{r.full_name}{r.private ? ' 🔒' : ''}</option>
-                ))}
-              </select>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {browseOwner && (
+                  <input
+                    value={repoFilter}
+                    onChange={e => { setRepoFilter(e.target.value); setBrowseRepo('') }}
+                    placeholder="Filter repos…"
+                    style={{ ...inputStyle, fontSize: 12 }}
+                  />
+                )}
+                <select
+                  value={browseRepo}
+                  onChange={e => setBrowseRepo(e.target.value)}
+                  disabled={!browseOwner || loadingOwnerRepos}
+                  style={inputStyle}
+                >
+                  <option value="">{loadingOwnerRepos ? 'Loading repos…' : browseOwner ? 'Select a repo…' : '—'}</option>
+                  {ownerRepos
+                    .filter(r => !(settings?.repos || []).includes(r.full_name))
+                    .filter(r => !repoFilter || r.full_name.toLowerCase().includes(repoFilter.toLowerCase()))
+                    .map(r => (
+                      <option key={r.full_name} value={r.full_name}>{r.full_name}{r.private ? ' 🔒' : ''}</option>
+                    ))
+                  }
+                </select>
+              </div>
               <button onClick={addBrowsedRepo} disabled={!browseRepo} style={{ ...primaryBtn(false), height: 38 }}>Add</button>
             </div>
             {browseErr && <div style={{ color: 'var(--red)', fontSize: 12, marginTop: 6 }}>⚠ {browseErr}</div>}
