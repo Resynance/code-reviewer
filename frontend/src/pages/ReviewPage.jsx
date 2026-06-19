@@ -409,7 +409,14 @@ function ReviewResult({ result, repo }) {
 
       {/* Issues */}
       {result.issues?.length > 0 && (
-        <Section title={`🔍 Issues (${result.issues.length})`}>
+        <Section
+          title={`🔍 Issues (${result.issues.length})`}
+          allSelected={selIssues.size === result.issues.length}
+          onSelectAll={() => {
+            if (selIssues.size === result.issues.length) setSelIssues(new Set())
+            else setSelIssues(new Set(result.issues.map((_, i) => i)))
+          }}
+        >
           {result.issues.map((issue, i) => (
             <IssueCard key={i} issue={issue} selected={selIssues.has(i)} onToggle={() => toggle(selIssues, setSelIssues, i)} />
           ))}
@@ -418,7 +425,14 @@ function ReviewResult({ result, repo }) {
 
       {/* Suggestions */}
       {result.suggestions?.length > 0 && (
-        <Section title="💭 Suggestions">
+        <Section
+          title="💭 Suggestions"
+          allSelected={selSugg.size === result.suggestions.length}
+          onSelectAll={() => {
+            if (selSugg.size === result.suggestions.length) setSelSugg(new Set())
+            else setSelSugg(new Set(result.suggestions.map((_, i) => i)))
+          }}
+        >
           {result.suggestions.map((s, i) => (
             <div key={i} style={{
               padding: '10px 14px', background: 'var(--surface2)', borderRadius: 6, marginBottom: 6,
@@ -472,14 +486,25 @@ function IssueCard({ issue, selected, onToggle }) {
   )
 }
 
-function Section({ title, children, accent }) {
+function Section({ title, children, accent, onSelectAll, allSelected }) {
   return (
     <div style={{
       background: 'var(--surface)', border: `1px solid ${accent ? 'var(--accent)' : 'var(--border)'}`,
       borderRadius: 10, padding: '16px 20px', marginBottom: 16,
     }}>
-      <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-2)', marginBottom: 12, textTransform: 'uppercase' }}>
-        {title}
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-2)', textTransform: 'uppercase', flex: 1 }}>
+          {title}
+        </div>
+        {onSelectAll && (
+          <button onClick={onSelectAll} style={{
+            background: 'transparent', border: 'none', cursor: 'pointer',
+            fontSize: 11, color: 'var(--accent)', padding: '2px 4px',
+            fontWeight: 500, letterSpacing: '0.03em',
+          }}>
+            {allSelected ? 'Deselect all' : 'Select all'}
+          </button>
+        )}
       </div>
       {children}
     </div>
