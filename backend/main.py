@@ -118,6 +118,9 @@ class ReviewRequestBody(BaseModel):
     author: str = "unknown"
     base_branch: str = "main"
     files_changed: list[str] = []
+    # Optional per-review model override (frontend sends the slug of the chosen slot).
+    model: Optional[str] = None
+    provider: Optional[str] = None
 
 
 class DecisionUpsertBody(BaseModel):
@@ -142,6 +145,8 @@ class SettingsBody(BaseModel):
     repos: Optional[list[str]] = None
     openrouter_model: Optional[str] = None
     openrouter_provider: Optional[str] = None
+    openrouter_model_2: Optional[str] = None
+    openrouter_provider_2: Optional[str] = None
     embedding_model: Optional[str] = None
 
 
@@ -215,6 +220,8 @@ def _execute_review(body: ReviewRequestBody, source: str) -> dict:
         author=body.author,
         base_branch=body.base_branch,
         files_changed=body.files_changed,
+        model=body.model or None,
+        provider=body.provider or None,
     )
     result = engine.review(request)
     _save_review(request, result, source=source)
@@ -405,6 +412,8 @@ def get_settings():
         # Model/provider are not secret — return the effective values.
         "openrouter_model": config_store.get_model(),
         "openrouter_provider": config_store.get_provider(),
+        "openrouter_model_2": config_store.get_model_2(),
+        "openrouter_provider_2": config_store.get_provider_2(),
         "embedding_model": config_store.get_embedding_model(),
     }
 
@@ -423,6 +432,10 @@ def update_settings(body: SettingsBody):
         update["openrouter_model"] = body.openrouter_model.strip()
     if body.openrouter_provider is not None:
         update["openrouter_provider"] = body.openrouter_provider.strip()
+    if body.openrouter_model_2 is not None:
+        update["openrouter_model_2"] = body.openrouter_model_2.strip()
+    if body.openrouter_provider_2 is not None:
+        update["openrouter_provider_2"] = body.openrouter_provider_2.strip()
     if body.embedding_model is not None:
         update["embedding_model"] = body.embedding_model.strip()
     if update:

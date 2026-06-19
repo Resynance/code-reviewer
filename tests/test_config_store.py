@@ -12,6 +12,8 @@ def test_defaults_when_no_file(cfg):
         "repos": [],
         "openrouter_model": "",
         "openrouter_provider": "",
+        "openrouter_model_2": "",
+        "openrouter_provider_2": "",
         "embedding_model": "",
     }
 

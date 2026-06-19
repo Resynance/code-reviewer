@@ -27,6 +27,8 @@ _DEFAULTS = {
     "repos": [],
     "openrouter_model": "",
     "openrouter_provider": "",
+    "openrouter_model_2": "",
+    "openrouter_provider_2": "",
     "embedding_model": "",
 }
 
@@ -174,6 +176,14 @@ def get_model() -> str:
 def get_provider() -> str:
     """Optional OpenRouter provider to pin (e.g. 'Anthropic'). Empty = auto-route."""
     return load_config().get("openrouter_provider") or os.getenv("OPENROUTER_PROVIDER") or ""
+
+
+def get_model_2() -> str:
+    return load_config().get("openrouter_model_2") or ""
+
+
+def get_provider_2() -> str:
+    return load_config().get("openrouter_provider_2") or ""
 
 
 def get_embedding_model() -> str:

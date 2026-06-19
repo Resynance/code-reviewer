@@ -35,6 +35,10 @@ export default function ReviewPage() {
   const [loadingPr, setLoadingPr] = useState(false)
   const [prError, setPrError] = useState(null)
   const [selectedPr, setSelectedPr] = useState('')
+  // Available model slots from settings (null if not yet loaded).
+  const [models, setModels] = useState(null) // [{label, model, provider}]
+  // Which model slot the user picked; null = model 1 (default).
+  const [selectedModel, setSelectedModel] = useState(null)
   // Tracks the in-flight review job so a superseded/unmounted poll stops.
   const jobRef = useRef(null)
   useEffect(() => () => { jobRef.current = null }, [])
@@ -44,8 +48,7 @@ export default function ReviewPage() {
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
-  // Load configured repos so the repo field can be a dropdown. Default the
-  // empty repo field to the first real repo so the PR picker has something.
+  // Load configured repos and model slots on mount.
   useEffect(() => {
     api.listRepos().then(r => {
       const list = r.repos || []
@@ -53,6 +56,15 @@ export default function ReviewPage() {
       if (list.length) {
         setForm(f => (f.repo ? f : { ...f, repo: list[0] }))
       }
+    }).catch(() => {})
+
+    api.getSettings().then(s => {
+      const slots = [{ label: 'Model 1', model: s.openrouter_model, provider: s.openrouter_provider || '' }]
+      if (s.openrouter_model_2) {
+        slots.push({ label: 'Model 2', model: s.openrouter_model_2, provider: s.openrouter_provider_2 || '' })
+      }
+      setModels(slots)
+      setSelectedModel(slots[0])
     }).catch(() => {})
   }, [])
 
@@ -110,6 +122,8 @@ export default function ReviewPage() {
       const { id } = await api.createReview({
         ...form,
         files_changed: form.files_changed.filter(Boolean),
+        model: selectedModel?.model || undefined,
+        provider: selectedModel?.provider || undefined,
       })
       jobRef.current = id
       // Drive the work in the background; the result is read via polling, so a
@@ -201,6 +215,24 @@ export default function ReviewPage() {
         <textarea value={form.diff} onChange={e => set('diff', e.target.value)}
           rows={14} style={{ ...inputStyle, fontFamily: 'var(--font-mono)', fontSize: 12, resize: 'vertical' }} />
       </Field>
+
+      {models && models.length > 1 && (
+        <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 14 }}>
+          <span style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Model</span>
+          {models.map(m => (
+            <label key={m.model} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, color: 'var(--text)' }}>
+              <input
+                type="radio"
+                name="model"
+                checked={selectedModel?.model === m.model}
+                onChange={() => setSelectedModel(m)}
+                style={{ accentColor: 'var(--accent)' }}
+              />
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{m.model}</span>
+            </label>
+          ))}
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 28 }}>
         <button onClick={submit} disabled={loading} style={btnStyle(loading)}>

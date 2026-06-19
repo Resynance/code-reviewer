@@ -36,6 +36,11 @@ class ReviewRequest:
     author: str = "unknown"
     base_branch: str = "main"
     files_changed: list = field(default_factory=list)
+    # Per-request model override. When set, takes precedence over the engine's
+    # model_override and the config-store default, so the frontend can select
+    # which configured model slot to run against.
+    model: Optional[str] = None
+    provider: Optional[str] = None
 
 
 @dataclass
@@ -184,7 +189,7 @@ class CodeReviewEngine:
         decisions = self._retrieve_context(request)
         prompt = self._build_prompt(request, decisions)
 
-        model = self._model_override or config_store.get_model()
+        model = request.model or self._model_override or config_store.get_model()
         kwargs = dict(
             model=model,
             # Enough for a thorough structured review; kept modest so generation
@@ -199,7 +204,7 @@ class CodeReviewEngine:
         )
 
         # Optionally pin OpenRouter to a specific upstream provider.
-        provider = config_store.get_provider()
+        provider = request.provider if request.provider is not None else config_store.get_provider()
         if provider:
             kwargs["extra_body"] = {
                 "provider": {"order": [provider], "allow_fallbacks": False}

@@ -8,6 +8,8 @@ export default function SettingsPage() {
   // Model / provider form (prefilled from the server's effective values)
   const [modelInput, setModelInput] = useState('')
   const [providerInput, setProviderInput] = useState('')
+  const [model2Input, setModel2Input] = useState('')
+  const [provider2Input, setProvider2Input] = useState('')
   const [embeddingInput, setEmbeddingInput] = useState('')
   const [savingModel, setSavingModel] = useState(false)
   const [modelMsg, setModelMsg] = useState(null)
@@ -52,6 +54,8 @@ export default function SettingsPage() {
       setSettings(s)
       setModelInput(s.openrouter_model || '')
       setProviderInput(s.openrouter_provider || '')
+      setModel2Input(s.openrouter_model_2 || '')
+      setProvider2Input(s.openrouter_provider_2 || '')
       setEmbeddingInput(s.embedding_model || '')
     }).catch(() => {})
     api.listAccess().then(r => setAccessEmails(r.emails || [])).catch(() => {})
@@ -113,11 +117,15 @@ export default function SettingsPage() {
       const s = await api.saveSettings({
         openrouter_model: modelInput.trim(),
         openrouter_provider: providerInput.trim(),
+        openrouter_model_2: model2Input.trim(),
+        openrouter_provider_2: provider2Input.trim(),
         embedding_model: embeddingInput.trim(),
       })
       setSettings(s)
       setModelInput(s.openrouter_model || '')
       setProviderInput(s.openrouter_provider || '')
+      setModel2Input(s.openrouter_model_2 || '')
+      setProvider2Input(s.openrouter_provider_2 || '')
       setEmbeddingInput(s.embedding_model || '')
       setModelMsg('Saved ✓')
       refreshStats()
@@ -256,15 +264,27 @@ export default function SettingsPage() {
           Leave the model blank to use the default (<code style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>anthropic/claude-sonnet-4.5</code>).
         </p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div>
-            <label style={labelStyle}>Model slug — see openrouter.ai/models</label>
-            <input value={modelInput} onChange={e => setModelInput(e.target.value)}
-              placeholder="anthropic/claude-sonnet-4.5" style={inputStyle} />
-          </div>
-          <div>
-            <label style={labelStyle}>Provider (optional) — e.g. Anthropic, Google, Fireworks</label>
-            <input value={providerInput} onChange={e => setProviderInput(e.target.value)}
-              placeholder="auto-route (no preference)" style={inputStyle} />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div>
+              <label style={labelStyle}>Model 1 — see openrouter.ai/models</label>
+              <input value={modelInput} onChange={e => setModelInput(e.target.value)}
+                placeholder="anthropic/claude-sonnet-4.5" style={inputStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>Provider 1 (optional)</label>
+              <input value={providerInput} onChange={e => setProviderInput(e.target.value)}
+                placeholder="auto-route" style={inputStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>Model 2 (optional — enables model picker on Review page)</label>
+              <input value={model2Input} onChange={e => setModel2Input(e.target.value)}
+                placeholder="openai/gpt-4o" style={inputStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>Provider 2 (optional)</label>
+              <input value={provider2Input} onChange={e => setProvider2Input(e.target.value)}
+                placeholder="auto-route" style={inputStyle} />
+            </div>
           </div>
           <div>
             <label style={labelStyle}>Embedding model — used to index/search decisions (pgvector backend)</label>
