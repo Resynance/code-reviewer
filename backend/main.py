@@ -317,7 +317,7 @@ def list_review_history(repo: Optional[str] = None, pr_number: Optional[int] = N
     return {"reviews": reviews, "count": len(reviews)}
 
 
-@app.post("/api/assess")
+@app.post("/api/assessments")
 def create_assessment(body: AssessmentRequestBody):
     """Enqueue an async project assessment and return its job id."""
     if not os.getenv("OPENROUTER_API_KEY"):
@@ -328,7 +328,7 @@ def create_assessment(body: AssessmentRequestBody):
     return {"id": job["id"], "status": job["status"]}
 
 
-@app.post("/api/assess/{job_id}/run")
+@app.post("/api/assessments/{job_id}/run")
 def run_assessment_job(job_id: str):
     """Execute a queued assessment job."""
     job = review_jobs.get_job(job_id)
@@ -349,7 +349,7 @@ def run_assessment_job(job_id: str):
         return review_jobs.update_job(job_id, status="error", error=str(e))
 
 
-@app.get("/api/assess/{job_id}")
+@app.get("/api/assessments/{job_id}")
 def get_assessment_job(job_id: str):
     """Poll an assessment job's status/result."""
     job = review_jobs.get_job(job_id)

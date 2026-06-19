@@ -101,9 +101,9 @@ export const api = {
     return request(`/api/reviews?${q.toString()}`)
   },
 
-  createAssessment: (body) => request('/api/assess', { method: 'POST', body }),
-  runAssessment: (id) => request(`/api/assess/${encodeURIComponent(id)}/run`, { method: 'POST' }),
-  getAssessmentJob: (id) => request(`/api/assess/${encodeURIComponent(id)}`),
+  createAssessment: (body) => request('/api/assessments', { method: 'POST', body }),
+  runAssessment: (id) => request(`/api/assessments/${encodeURIComponent(id)}/run`, { method: 'POST' }),
+  getAssessmentJob: (id) => request(`/api/assessments/${encodeURIComponent(id)}`),
   listAssessments: ({ repo = '', limit = 20 } = {}) => {
     const q = new URLSearchParams()
     if (repo) q.set('repo', repo)

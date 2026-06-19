@@ -90,6 +90,7 @@ def _file_list(repo, limit):
 
 def _pg_save(rec):
     import db
+    from psycopg.types.json import Jsonb
 
     with db.connect() as conn, conn.cursor() as cur:
         cur.execute(
@@ -98,8 +99,8 @@ def _pg_save(rec):
             "VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id, created_at",
             (
                 rec["repo"], rec.get("summary"), rec.get("purpose"),
-                json.dumps(rec["tech_stack"]), json.dumps(rec["key_components"]),
-                json.dumps(rec["vulnerabilities"]), rec.get("model"),
+                Jsonb(rec["tech_stack"]), Jsonb(rec["key_components"]),
+                Jsonb(rec["vulnerabilities"]), rec.get("model"),
             ),
         )
         assessment_id, created_at = cur.fetchone()
