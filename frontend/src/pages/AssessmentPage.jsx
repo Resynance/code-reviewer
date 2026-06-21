@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { api } from '../lib/api.js'
+import { useMediaQuery } from '../lib/useMediaQuery.js'
 
 const SEV_COLORS = { critical: '#EF4444', high: '#F97316', medium: '#EAB308', low: '#6366F1' }
 
 export default function AssessmentPage() {
+  const isMobile = useMediaQuery('(max-width: 860px)')
   const [repos, setRepos] = useState([])
   const [repo, setRepo] = useState('')
   const [models, setModels] = useState(null)
@@ -82,7 +84,7 @@ export default function AssessmentPage() {
   }
 
   return (
-    <div style={{ maxWidth: 900 }}>
+    <div style={{ maxWidth: 900, width: '100%' }}>
       <h1 style={{ fontSize: 22, fontWeight: 600, marginBottom: 4 }}>Project Assessment</h1>
       <p style={{ color: 'var(--text-2)', marginBottom: 28 }}>
         Select a repository to generate a high-level analysis: what it does, its architecture, key
@@ -90,8 +92,8 @@ export default function AssessmentPage() {
       </p>
 
       {/* Controls */}
-      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', marginBottom: 16, flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 260 }}>
+      <div style={{ display: 'flex', gap: 12, alignItems: isMobile ? 'stretch' : 'flex-end', flexDirection: isMobile ? 'column' : 'row', marginBottom: 16, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: isMobile ? 0 : 260, width: isMobile ? '100%' : 'auto' }}>
           <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-2)', letterSpacing: '0.03em' }}>
             REPOSITORY
           </label>
@@ -125,12 +127,12 @@ export default function AssessmentPage() {
 
       {/* Model picker */}
       {models && models.length > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: isMobile ? 'stretch' : 'center', flexDirection: isMobile ? 'column' : 'row', gap: 10, marginBottom: 20 }}>
           <span style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>Model</span>
           <select
             value={models.findIndex(m => m.model === selectedModel?.model && m.provider === selectedModel?.provider)}
             onChange={e => setSelectedModel(models[+e.target.value])}
-            style={{ ...inputStyle, width: 'auto', minWidth: 260, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+            style={{ ...inputStyle, width: isMobile ? '100%' : 'auto', minWidth: isMobile ? 0 : 260, fontFamily: 'var(--font-mono)', fontSize: 12 }}
           >
             {models.map((m, i) => (
               <option key={i} value={i}>{m.label ? `${m.label} — ${m.model}` : m.model}</option>

@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react'
 import { api } from '../lib/api.js'
+import { useMediaQuery } from '../lib/useMediaQuery.js'
 
 export default function SettingsPage() {
+  const isMobile = useMediaQuery('(max-width: 860px)')
   const [stats, setStats] = useState(null)
   const [settings, setSettings] = useState(null)
 
@@ -271,14 +273,14 @@ export default function SettingsPage() {
   const repos = settings?.repos || []
 
   return (
-    <div style={{ maxWidth: 680 }}>
+    <div style={{ maxWidth: 680, width: '100%' }}>
       <h1 style={{ fontSize: 22, fontWeight: 600, marginBottom: 4 }}>Settings</h1>
       <p style={{ color: 'var(--text-2)', marginBottom: 32 }}>Configure GitHub access, manage repositories, and review system status.</p>
 
       {/* Status */}
       <Card title="System Status">
         {stats ? (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 14 }}>
             <StatRow label="OpenRouter API key" value={stats.api_key_configured ? 'Configured ✓' : 'Not set ✗'} ok={stats.api_key_configured} />
             <StatRow label="GitHub tokens" value={
               settings?.github_tokens?.length
@@ -350,7 +352,7 @@ export default function SettingsPage() {
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
           {modelsList.map((m, i) => (
-            <div key={i} style={{ display: 'grid', gridTemplateColumns: '160px 1fr 160px auto', gap: 8, alignItems: 'center', background: 'var(--surface2)', borderRadius: 8, padding: '10px 12px' }}>
+            <div key={i} style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '160px 1fr 160px auto', gap: 8, alignItems: 'center', background: 'var(--surface2)', borderRadius: 8, padding: '10px 12px' }}>
               <div>
                 {i === 0 && <label style={labelStyle}>Label</label>}
                 <input
@@ -416,7 +418,7 @@ export default function SettingsPage() {
         <p style={{ color: 'var(--text-2)', fontSize: 13, marginBottom: 16 }}>
           Emails allowed to sign in and use the app. Changes take effect within ~30s — no redeploy.
         </p>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginBottom: 8 }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: isMobile ? 'stretch' : 'flex-end', flexDirection: isMobile ? 'column' : 'row', marginBottom: 8 }}>
           <div style={{ flex: 1 }}>
             <label style={labelStyle}>Add user by email</label>
             <input value={newEmail} onChange={e => setNewEmail(e.target.value)}
@@ -473,7 +475,7 @@ export default function SettingsPage() {
           </div>
         )}
 
-        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginBottom: 6 }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: isMobile ? 'stretch' : 'flex-end', flexDirection: isMobile ? 'column' : 'row', marginBottom: 6 }}>
           <div style={{ flex: 1 }}>
             <label style={labelStyle}>Add GitHub token</label>
             <input type="password" value={tokenInput} onChange={e => setTokenInput(e.target.value)}
@@ -496,7 +498,7 @@ export default function SettingsPage() {
         <p style={{ color: 'var(--text-2)', fontSize: 13, marginBottom: 16 }}>
           Required to receive GitHub pull-request events. Leave blank to keep the current value.
         </p>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginBottom: 6 }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: isMobile ? 'stretch' : 'flex-end', flexDirection: isMobile ? 'column' : 'row', marginBottom: 6 }}>
           <div style={{ flex: 1 }}>
             <label style={labelStyle}>
               Webhook secret {settings && (settings.webhook_secret_set
@@ -528,8 +530,8 @@ export default function SettingsPage() {
         {owners.length > 0 && (
           <div style={{ marginBottom: 14 }}>
             <label style={labelStyle}>Browse from GitHub</label>
-            <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
-              <select value={browseOwner} onChange={e => setBrowseOwner(e.target.value)} style={{ ...inputStyle, flex: '0 0 210px' }}>
+            <div style={{ display: 'flex', gap: 10, alignItems: isMobile ? 'stretch' : 'flex-end', flexDirection: isMobile ? 'column' : 'row' }}>
+              <select value={browseOwner} onChange={e => setBrowseOwner(e.target.value)} style={{ ...inputStyle, flex: isMobile ? 'auto' : '0 0 210px' }}>
                 <option value="">Select owner…</option>
                 {owners.map(o => <option key={o.login} value={`${o.login}::${o.type}`}>{o.login}{o.type === 'user' ? ' (you)' : ''}</option>)}
               </select>
@@ -564,14 +566,14 @@ export default function SettingsPage() {
           </div>
         )}
 
-        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginBottom: 8 }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: isMobile ? 'stretch' : 'flex-end', flexDirection: isMobile ? 'column' : 'row', marginBottom: 8 }}>
           <div style={{ flex: 1 }}>
             <label style={labelStyle}>Add manually (owner/repo)</label>
             <input value={newRepo} onChange={e => setNewRepo(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && addRepo()}
               placeholder="my-org/my-repo" style={inputStyle} />
           </div>
-          <div style={{ width: 110 }}>
+          <div style={{ width: isMobile ? '100%' : 110 }}>
             <label style={labelStyle}>Backfill pages</label>
             <input type="number" min={1} max={50} value={pages}
               onChange={e => setPages(Number(e.target.value))} style={inputStyle} />
@@ -589,7 +591,7 @@ export default function SettingsPage() {
               const op = openPrs[r] || {}
               return (
                 <div key={r} style={{ background: 'var(--surface2)', borderRadius: 8, padding: '10px 14px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ display: 'flex', alignItems: isMobile ? 'stretch' : 'center', flexDirection: isMobile ? 'column' : 'row', gap: 10 }}>
                     <code style={{ flex: 1, fontSize: 13, color: 'var(--text)', fontFamily: 'var(--font-mono)' }}>{r}</code>
                     <button onClick={() => toggleOpenPrs(r)} style={smallBtn}>
                       {op.open ? '▾ Open PRs' : '▸ Open PRs'}

@@ -26,9 +26,9 @@ export default function LoginPage() {
   }
 
   return (
-    <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
+    <div style={{ minHeight: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', padding: 16 }}>
       <div style={{
-        width: 340, background: 'var(--surface)', border: '1px solid var(--border)',
+        width: '100%', maxWidth: 340, background: 'var(--surface)', border: '1px solid var(--border)',
         borderRadius: 12, padding: '32px 28px',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 8 }}>
