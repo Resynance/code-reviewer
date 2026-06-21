@@ -12,6 +12,7 @@ export default function AssessmentPage() {
   const [error, setError] = useState(null)
   const [result, setResult] = useState(null)
   const [history, setHistory] = useState([])
+  const [hipaa, setHipaa] = useState(false)
   const jobRef = useRef(null)
   useEffect(() => () => { jobRef.current = null }, [])
 
@@ -45,6 +46,7 @@ export default function AssessmentPage() {
         repo,
         model: selectedModel?.model || undefined,
         provider: selectedModel?.provider || undefined,
+        hipaa,
       })
       jobRef.current = id
       api.runAssessment(id).catch(() => {})
@@ -105,6 +107,12 @@ export default function AssessmentPage() {
             />
           )}
         </div>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+          <input type="checkbox" checked={hipaa} onChange={e => setHipaa(e.target.checked)}
+            style={{ accentColor: 'var(--accent)', cursor: 'pointer' }} />
+          <span style={{ fontSize: 13, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>Check HIPAA compliance</span>
+        </label>
 
         <button onClick={submit} disabled={loading || !repo} style={btnStyle(loading || !repo)}>
           {loading ? '⟳ Analysing…' : '▶ Run Assessment'}
