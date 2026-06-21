@@ -74,6 +74,7 @@ def client(tmp_path, monkeypatch, clean_env):
     import review_jobs
     import assessment_store
     import access_store
+    import rate_limit
     import backend.main as main
     from starlette.testclient import TestClient
 
@@ -83,6 +84,7 @@ def client(tmp_path, monkeypatch, clean_env):
     monkeypatch.setattr(assessment_store, "_FILE_PATH", tmp_path / "assessments.json")
     monkeypatch.setattr(access_store, "_FILE_PATH", tmp_path / "access.json")
     access_store._CACHE["emails"] = None  # reset cache between tests
+    rate_limit._windows.clear()  # reset per-user sliding windows between tests
     # Reset lazily-built singletons so each test gets a fresh, temp-backed store.
     monkeypatch.setattr(main, "_store", None)
     monkeypatch.setattr(main, "_engine", None)
