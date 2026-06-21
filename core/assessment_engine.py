@@ -52,6 +52,7 @@ class AssessmentRequest:
     repo: str
     model: Optional[str] = None
     provider: Optional[str] = None
+    hipaa: bool = False
 
 
 @dataclass
@@ -167,7 +168,7 @@ class AssessmentEngine:
             raise ValueError("No GitHub token configured for this repo's owner")
 
         tree_lines, file_contents = self._fetch_repo_content(request.repo, token)
-        prompt = self._build_prompt(request.repo, tree_lines, file_contents)
+        prompt = self._build_prompt(request.repo, tree_lines, file_contents, request.hipaa)
 
         model = request.model or self._model_override or config_store.get_model()
         provider = request.provider if request.provider is not None else config_store.get_provider()
@@ -302,22 +303,35 @@ class AssessmentEngine:
     # Prompt + parsing
     # ------------------------------------------------------------------ #
 
-    def _build_prompt(self, repo: str, tree_lines: list, files: dict) -> str:
+    def _build_prompt(self, repo: str, tree_lines: list, files: dict, hipaa: bool = False) -> str:
         tree_text = "\n".join(tree_lines[:400])
         truncated = len(tree_lines) > 400
         files_text = ""
         for path, content in files.items():
             files_text += f"\n--- {path} ---\n{content}\n"
 
-        header = (
+        hipaa_section = (
+            "\n## HIPAA Compliance\n"
+            "This assessment must evaluate HIPAA compliance. In addition to the standard "
+            "security findings, flag any of the following as high or critical severity:\n"
+            "- PHI (Protected Health Information) stored or transmitted without encryption\n"
+            "- PHI appearing in logs, error messages, or debug output\n"
+            "- Missing or insufficient access controls around health data\n"
+            "- Absence of audit trails for PHI access or modification\n"
+            "- Data access broader than the minimum necessary principle allows\n"
+            "- PHI used in test fixtures, seeds, or non-production environments\n"
+            "- Third-party integrations that may receive PHI without BAA consideration\n"
+        ) if hipaa else ""
+
+        return (
             f"# Repository: {repo}\n\n"
             f"## File tree ({len(tree_lines)} files total"
             + (", first 400 shown" if truncated else "")
             + ")\n"
             f"```\n{tree_text}\n```\n\n"
             f"## Key file contents\n{files_text}"
+            f"{hipaa_section}"
         )
-        return header
 
     def _extract_tool_input(self, response) -> dict:
         message = response.choices[0].message

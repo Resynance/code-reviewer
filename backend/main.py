@@ -126,6 +126,7 @@ class ReviewRequestBody(BaseModel):
     # Optional per-review model override (frontend sends the slug of the chosen slot).
     model: Optional[str] = None
     provider: Optional[str] = None
+    hipaa: bool = False
 
 
 class DecisionUpsertBody(BaseModel):
@@ -196,6 +197,7 @@ class AssessmentRequestBody(BaseModel):
     repo: str
     model: Optional[str] = None
     provider: Optional[str] = None
+    hipaa: bool = False
 
 
 # ------------------------------------------------------------------ #
@@ -241,6 +243,7 @@ def _execute_review(body: ReviewRequestBody, source: str) -> dict:
         files_changed=body.files_changed,
         model=body.model or None,
         provider=body.provider or None,
+        hipaa=body.hipaa,
     )
     result = engine.review(request)
     _save_review(request, result, source=source)
@@ -382,6 +385,7 @@ def _execute_assessment(body: AssessmentRequestBody) -> dict:
         repo=body.repo,
         model=body.model or None,
         provider=body.provider or None,
+        hipaa=body.hipaa,
     )
     result = engine.assess(request)
     try:

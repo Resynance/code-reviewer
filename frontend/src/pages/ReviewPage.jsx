@@ -40,6 +40,7 @@ export default function ReviewPage() {
   const [models, setModels] = useState(null) // [{label, model, provider}]
   // Which model slot the user picked; null = model 1 (default).
   const [selectedModel, setSelectedModel] = useState(null)
+  const [hipaa, setHipaa] = useState(false)
   // Tracks the in-flight review job so a superseded/unmounted poll stops.
   const jobRef = useRef(null)
   useEffect(() => () => { jobRef.current = null }, [])
@@ -122,6 +123,7 @@ export default function ReviewPage() {
         files_changed: form.files_changed.filter(Boolean),
         model: selectedModel?.model || undefined,
         provider: selectedModel?.provider || undefined,
+        hipaa,
       })
       jobRef.current = id
       // Drive the work in the background; the result is read via polling, so a
@@ -244,6 +246,12 @@ export default function ReviewPage() {
           </select>
         </div>
       )}
+
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, cursor: 'pointer', width: 'fit-content' }}>
+        <input type="checkbox" checked={hipaa} onChange={e => setHipaa(e.target.checked)}
+          style={{ accentColor: 'var(--accent)', cursor: 'pointer' }} />
+        <span style={{ fontSize: 13, color: 'var(--text-2)' }}>Check HIPAA compliance</span>
+      </label>
 
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 28 }}>
         <button onClick={submit} disabled={loading} style={btnStyle(loading)}>
