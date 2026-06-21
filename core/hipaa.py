@@ -16,6 +16,7 @@ from typing import Iterable
 
 
 DEFAULT_POLICY = {
+    "enabled": False,
     "notes": "",
     "approved_vendors": [],
     "disallowed_vendors": [],
@@ -245,6 +246,8 @@ def _normalize_policy(raw) -> dict:
     policy = copy.deepcopy(DEFAULT_POLICY)
     if not isinstance(raw, dict):
         return policy
+    if isinstance(raw.get("enabled"), bool):
+        policy["enabled"] = raw["enabled"]
     for key in ("notes",):
         if isinstance(raw.get(key), str):
             policy[key] = raw[key].strip()

@@ -243,6 +243,28 @@ export default function SettingsPage() {
     }
   }
 
+  async function setRepoHipaaEnabled(repo, enabled) {
+    setRepoErr(null)
+    const current = settings?.hipaa_policies || { default: {}, repos: {} }
+    const next = {
+      ...current,
+      repos: {
+        ...(current.repos || {}),
+        [repo]: {
+          ...((current.repos || {})[repo] || {}),
+          enabled,
+        },
+      },
+    }
+    try {
+      const saved = await api.saveSettings({ hipaa_policies: next })
+      setSettings(saved)
+      setHipaaPoliciesInput(JSON.stringify(saved.hipaa_policies || { default: {}, repos: {} }, null, 2))
+    } catch (e) {
+      setRepoErr(e.message)
+    }
+  }
+
   async function runBackfill(r) {
     setBackfillState(b => ({ ...b, [r]: { status: 'running' } }))
     try {
@@ -587,10 +609,20 @@ export default function SettingsPage() {
             {repos.map(r => {
               const bf = backfillState[r] || {}
               const op = openPrs[r] || {}
+              const hipaaEnabled = !!settings?.hipaa_policies?.repos?.[r]?.enabled
               return (
                 <div key={r} style={{ background: 'var(--surface2)', borderRadius: 8, padding: '10px 14px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <code style={{ flex: 1, fontSize: 13, color: 'var(--text)', fontFamily: 'var(--font-mono)' }}>{r}</code>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>
+                      <input
+                        type="checkbox"
+                        checked={hipaaEnabled}
+                        onChange={e => setRepoHipaaEnabled(r, e.target.checked)}
+                        style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+                      />
+                      HIPAA required
+                    </label>
                     <button onClick={() => toggleOpenPrs(r)} style={smallBtn}>
                       {op.open ? '▾ Open PRs' : '▸ Open PRs'}
                     </button>

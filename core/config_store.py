@@ -249,6 +249,10 @@ def get_hipaa_policy(repo: str) -> dict:
     return hipaa.policy_for_repo(get_hipaa_policies(), repo)
 
 
+def repo_requires_hipaa(repo: str) -> bool:
+    return bool(get_hipaa_policy(repo).get("enabled"))
+
+
 def add_repo(repo: str) -> list:
     repos = get_repos()
     if repo not in repos:

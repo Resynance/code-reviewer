@@ -282,6 +282,18 @@ def _llm_execution_mode() -> str:
     return config_store.get_llm_execution_mode()
 
 
+def _repo_hipaa_enabled(repo: str) -> bool:
+    return config_store.repo_requires_hipaa(repo)
+
+
+def _review_body_with_repo_defaults(body: ReviewRequestBody) -> ReviewRequestBody:
+    return ReviewRequestBody(**{**body.model_dump(), "hipaa": _repo_hipaa_enabled(body.repo)})
+
+
+def _assessment_body_with_repo_defaults(body: AssessmentRequestBody) -> AssessmentRequestBody:
+    return AssessmentRequestBody(**{**body.model_dump(), "hipaa": _repo_hipaa_enabled(body.repo)})
+
+
 def _require_worker_secret(provided: Optional[str]):
     expected = config_store.get_llm_worker_secret()
     if not expected:
@@ -390,7 +402,8 @@ def create_review(body: ReviewRequestBody):
     executor = _llm_execution_mode()
     if executor == "inline" and not os.getenv("OPENROUTER_API_KEY"):
         raise HTTPException(status_code=400, detail="OPENROUTER_API_KEY not set")
-    job = review_jobs.create_job(body.model_dump(), job_type="review", executor=executor)
+    effective = _review_body_with_repo_defaults(body)
+    job = review_jobs.create_job(effective.model_dump(), job_type="review", executor=executor)
     return {"id": job["id"], "status": job["status"]}
 
 
@@ -463,7 +476,8 @@ def create_assessment(body: AssessmentRequestBody):
     executor = _llm_execution_mode()
     if executor == "inline" and not os.getenv("OPENROUTER_API_KEY"):
         raise HTTPException(status_code=400, detail="OPENROUTER_API_KEY not set")
-    payload = body.model_dump()
+    effective = _assessment_body_with_repo_defaults(body)
+    payload = effective.model_dump()
     payload["_type"] = "assessment"
     job = review_jobs.create_job(payload, job_type="assessment", executor=executor)
     return {"id": job["id"], "status": job["status"]}
@@ -1018,6 +1032,7 @@ async def github_webhook(request: Request):
         author=(pr.get("user") or {}).get("login", "unknown"),
         base_branch=(pr.get("base") or {}).get("ref", "main"),
         files_changed=[],
+        hipaa=_repo_hipaa_enabled(repo),
     )
     result = engine.review(request_obj)
     _save_review(request_obj, result, source="webhook")

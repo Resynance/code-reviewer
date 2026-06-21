@@ -20,6 +20,7 @@ def test_defaults_when_no_file(cfg):
         "embedding_model": "",
         "hipaa_policies": {
             "default": {
+                "enabled": False,
                 "notes": "",
                 "approved_vendors": [],
                 "disallowed_vendors": [],
@@ -250,19 +251,32 @@ def test_get_models_backward_compat_with_model2(cfg):
 def test_get_hipaa_policy_merges_repo_override(cfg):
     cfg.save_config({
         "hipaa_policies": {
-            "default": {"approved_vendors": ["aws"], "notes": "default note"},
-            "repos": {"org/a": {"approved_vendors": ["aws", "sentry"], "notes": "repo note"}},
+            "default": {"enabled": False, "approved_vendors": ["aws"], "notes": "default note"},
+            "repos": {"org/a": {"enabled": True, "approved_vendors": ["aws", "sentry"], "notes": "repo note"}},
         }
     })
     policy = cfg.get_hipaa_policy("org/a")
+    assert policy["enabled"] is True
     assert policy["approved_vendors"] == ["aws", "sentry"]
     assert policy["notes"] == "repo note"
 
 
 def test_get_hipaa_policy_uses_default_when_repo_missing(cfg):
-    cfg.save_config({"hipaa_policies": {"default": {"disallowed_vendors": ["segment"]}, "repos": {}}})
+    cfg.save_config({"hipaa_policies": {"default": {"enabled": True, "disallowed_vendors": ["segment"]}, "repos": {}}})
     policy = cfg.get_hipaa_policy("org/missing")
+    assert policy["enabled"] is True
     assert policy["disallowed_vendors"] == ["segment"]
+
+
+def test_repo_requires_hipaa_reads_repo_setting(cfg):
+    cfg.save_config({
+        "hipaa_policies": {
+            "default": {"enabled": False},
+            "repos": {"org/a": {"enabled": True}},
+        }
+    })
+    assert cfg.repo_requires_hipaa("org/a") is True
+    assert cfg.repo_requires_hipaa("org/b") is False
 
 
 def test_get_model_and_provider_derive_from_models_list(cfg):
