@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import config_store
+import hipaa
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 GITHUB_API_BASE = "https://api.github.com"
@@ -120,6 +121,23 @@ _ASSESSMENT_SCHEMA = {
                 "required": ["severity", "title", "description", "recommendation"],
             },
         },
+        "hipaa_review": {
+            "type": "object",
+            "description": "HIPAA-focused assessment findings. Use this when HIPAA mode is enabled.",
+            "properties": {
+                "hipaa_relevant": {"type": "boolean"},
+                "requires_manual_compliance_review": {"type": "boolean"},
+                "summary": {"type": "string"},
+                "policy_notes_applied": {"type": "array", "items": {"type": "string"}},
+                "hipaa_findings": {"type": "array", "items": {"type": "object"}},
+                "phi_exposure_risk": {"type": "array", "items": {"type": "object"}},
+                "encryption_gaps": {"type": "array", "items": {"type": "object"}},
+                "access_control_gaps": {"type": "array", "items": {"type": "object"}},
+                "audit_trail_gaps": {"type": "array", "items": {"type": "object"}},
+                "minimum_necessary_gaps": {"type": "array", "items": {"type": "object"}},
+                "third_party_baa_risks": {"type": "array", "items": {"type": "object"}},
+            },
+        },
     },
     "required": ["summary", "purpose", "tech_stack", "key_components", "vulnerabilities"],
 }
@@ -142,6 +160,9 @@ Based on the provided file tree and key source files, produce a thorough analysi
 - High-level security vulnerabilities or architectural risks — focus on real, observable
   concerns from the code (exposed secrets, missing auth, dangerous patterns). Skip
   speculative items with no evidence in the provided files.
+
+If HIPAA mode is enabled, populate hipaa_review with evidence-backed findings and
+separate manual-review concerns from direct code-level violations.
 
 Call submit_assessment exactly once with your findings."""
 
@@ -190,14 +211,38 @@ class AssessmentEngine:
         response = self._client.chat.completions.create(**kwargs)
         payload = self._extract_tool_input(response)
 
+        deterministic_hipaa = None
+        if request.hipaa:
+            deterministic_hipaa = hipaa.assessment_findings(
+                tree_lines,
+                file_contents,
+                config_store.get_hipaa_policy(request.repo),
+            )
+        hipaa_review = hipaa.normalize_result(
+            payload.get("hipaa_review"),
+            deterministic_hipaa,
+            enabled=request.hipaa,
+        )
+        vulnerabilities = (payload.get("vulnerabilities", []) or []) + hipaa.assessment_vulnerability_overlays(
+            hipaa_review,
+            enabled=request.hipaa,
+        )
+        deduped_vulns = []
+        seen_vulns = set()
+        for vuln in vulnerabilities:
+            key = (vuln.get("severity"), vuln.get("title"), vuln.get("description"))
+            if key not in seen_vulns:
+                seen_vulns.add(key)
+                deduped_vulns.append(vuln)
+
         result = AssessmentResult(
             repo=request.repo,
             summary=payload.get("summary", ""),
             purpose=payload.get("purpose", ""),
             tech_stack=payload.get("tech_stack", []) or [],
             key_components=payload.get("key_components", []) or [],
-            vulnerabilities=payload.get("vulnerabilities", []) or [],
-            hipaa_review={"enabled": request.hipaa, "hipaa_relevant": request.hipaa},
+            vulnerabilities=deduped_vulns,
+            hipaa_review=hipaa_review,
         )
         result.model = model
         return result
@@ -305,25 +350,18 @@ class AssessmentEngine:
     # Prompt + parsing
     # ------------------------------------------------------------------ #
 
-    def _build_prompt(self, repo: str, tree_lines: list, files: dict, hipaa: bool = False) -> str:
+    def _build_prompt(self, repo: str, tree_lines: list, files: dict, hipaa_enabled: bool = False) -> str:
         tree_text = "\n".join(tree_lines[:400])
         truncated = len(tree_lines) > 400
         files_text = ""
         for path, content in files.items():
             files_text += f"\n--- {path} ---\n{content}\n"
 
-        hipaa_section = (
-            "\n## HIPAA Compliance\n"
-            "This assessment must evaluate HIPAA compliance. In addition to the standard "
-            "security findings, flag any of the following as high or critical severity:\n"
-            "- PHI (Protected Health Information) stored or transmitted without encryption\n"
-            "- PHI appearing in logs, error messages, or debug output\n"
-            "- Missing or insufficient access controls around health data\n"
-            "- Absence of audit trails for PHI access or modification\n"
-            "- Data access broader than the minimum necessary principle allows\n"
-            "- PHI used in test fixtures, seeds, or non-production environments\n"
-            "- Third-party integrations that may receive PHI without BAA consideration\n"
-        ) if hipaa else ""
+        hipaa_section = ""
+        if hipaa_enabled:
+            policy = config_store.get_hipaa_policy(repo)
+            deterministic = hipaa.assessment_findings(tree_lines, files, policy)
+            hipaa_section = hipaa.prompt_section(policy, deterministic)
 
         return (
             f"# Repository: {repo}\n\n"

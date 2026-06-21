@@ -18,6 +18,18 @@ def test_defaults_when_no_file(cfg):
         "openrouter_model_2": "",
         "openrouter_provider_2": "",
         "embedding_model": "",
+        "hipaa_policies": {
+            "default": {
+                "notes": "",
+                "approved_vendors": [],
+                "disallowed_vendors": [],
+                "required_auth_signals": ["require_user", "Depends(require_user)", "@login_required"],
+                "required_audit_signals": ["audit", "audit_log", "audit trail", "access_log"],
+                "required_encryption": ["at_rest", "in_transit"],
+                "phi_field_patterns": [],
+            },
+            "repos": {},
+        },
     }
 
 
@@ -233,6 +245,24 @@ def test_get_models_backward_compat_with_model2(cfg):
     assert len(models) == 2
     assert models[1]["model"] == "m/two"
     assert models[1]["provider"] == "Azure"
+
+
+def test_get_hipaa_policy_merges_repo_override(cfg):
+    cfg.save_config({
+        "hipaa_policies": {
+            "default": {"approved_vendors": ["aws"], "notes": "default note"},
+            "repos": {"org/a": {"approved_vendors": ["aws", "sentry"], "notes": "repo note"}},
+        }
+    })
+    policy = cfg.get_hipaa_policy("org/a")
+    assert policy["approved_vendors"] == ["aws", "sentry"]
+    assert policy["notes"] == "repo note"
+
+
+def test_get_hipaa_policy_uses_default_when_repo_missing(cfg):
+    cfg.save_config({"hipaa_policies": {"default": {"disallowed_vendors": ["segment"]}, "repos": {}}})
+    policy = cfg.get_hipaa_policy("org/missing")
+    assert policy["disallowed_vendors"] == ["segment"]
 
 
 def test_get_model_and_provider_derive_from_models_list(cfg):

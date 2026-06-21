@@ -15,7 +15,10 @@ tool. Never echo the raw token/secret back to the client; expose booleans only.
 import os
 import json
 import threading
+import copy
 from pathlib import Path
+
+import hipaa
 
 _CONFIG_PATH = Path(__file__).parent.parent / "config.json"
 _LOCK = threading.Lock()
@@ -36,6 +39,7 @@ _DEFAULTS = {
     "openrouter_model_2": "",
     "openrouter_provider_2": "",
     "embedding_model": "",
+    "hipaa_policies": hipaa.default_policies(),
 }
 
 DEFAULT_MODEL = "anthropic/claude-sonnet-4.5"
@@ -48,9 +52,12 @@ def _is_postgres() -> bool:
 
 def _merge(data: dict) -> dict:
     """Merge a raw config dict onto the defaults and normalize."""
-    merged = dict(_DEFAULTS)
+    merged = copy.deepcopy(_DEFAULTS)
     for key in _DEFAULTS:
-        merged[key] = data.get(key, merged[key])
+        if key == "hipaa_policies":
+            merged[key] = hipaa.normalize_policies(data.get(key))
+        else:
+            merged[key] = data.get(key, merged[key])
     merged["repos"] = [r for r in (merged.get("repos") or []) if isinstance(r, str)]
     return merged
 
@@ -112,12 +119,14 @@ def save_config(update: dict):
         current = _pg_read()
         current.update(update)
         current["repos"] = [r for r in (current.get("repos") or []) if isinstance(r, str)]
+        current["hipaa_policies"] = hipaa.normalize_policies(current.get("hipaa_policies"))
         _pg_write(current)
         return current
     with _LOCK:
         current = _read()
         current.update(update)
         current["repos"] = [r for r in (current.get("repos") or []) if isinstance(r, str)]
+        current["hipaa_policies"] = hipaa.normalize_policies(current.get("hipaa_policies"))
         _write(current)
         return current
 
@@ -230,6 +239,14 @@ def get_provider_2() -> str:
 
 def get_embedding_model() -> str:
     return load_config().get("embedding_model") or os.getenv("EMBEDDING_MODEL") or DEFAULT_EMBEDDING_MODEL
+
+
+def get_hipaa_policies() -> dict:
+    return hipaa.normalize_policies(load_config().get("hipaa_policies"))
+
+
+def get_hipaa_policy(repo: str) -> dict:
+    return hipaa.policy_for_repo(get_hipaa_policies(), repo)
 
 
 def add_repo(repo: str) -> list:

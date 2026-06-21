@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from backend.auth import require_user, require_admin
+import rate_limit as _rate_limit
 
 # Add parent dir so we can import the core modules
 sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
@@ -46,6 +47,51 @@ from github_backfill import (
     post_pr_comment,
     create_issue,
 )
+
+
+# ------------------------------------------------------------------ #
+# Rate limiting
+# ------------------------------------------------------------------ #
+
+def _rate_limit_key(request: Request) -> str:
+    """User email from JWT, or remote IP as fallback when auth is disabled."""
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        try:
+            from backend.auth import _decode
+            claims = _decode(auth[len("Bearer "):])
+            return claims.get("email") or "anon"
+        except Exception:
+            pass
+    return request.client.host if request.client else "anon"
+
+
+async def require_review_quota(request: Request):
+    key = _rate_limit_key(request)
+    try:
+        allowed, retry_after = _rate_limit.check(f"review:{key}")
+    except Exception:
+        return  # fail open — a limiter bug must not take down the API
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Try again in {retry_after}s.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+
+async def require_assessment_quota(request: Request):
+    key = _rate_limit_key(request)
+    try:
+        allowed, retry_after = _rate_limit.check(f"assess:{key}")
+    except Exception:
+        return  # fail open — a limiter bug must not take down the API
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Try again in {retry_after}s.",
+            headers={"Retry-After": str(retry_after)},
+        )
 
 
 # ------------------------------------------------------------------ #
@@ -164,6 +210,7 @@ class SettingsBody(BaseModel):
     embedding_model: Optional[str] = None
     llm_execution_mode: Optional[str] = None
     llm_worker_secret: Optional[str] = None
+    hipaa_policies: Optional[dict] = None
 
 
 class RepoBody(BaseModel):
@@ -332,7 +379,7 @@ def _execute_review(body: ReviewRequestBody, source: str) -> dict:
     }
 
 
-@app.post("/api/review")
+@app.post("/api/review", dependencies=[Depends(require_review_quota)])
 def create_review(body: ReviewRequestBody):
     """Enqueue an async review and return its job id.
 
@@ -410,7 +457,7 @@ def list_review_history(repo: Optional[str] = None, pr_number: Optional[int] = N
     return {"reviews": reviews, "count": len(reviews)}
 
 
-@app.post("/api/assessments")
+@app.post("/api/assessments", dependencies=[Depends(require_assessment_quota)])
 def create_assessment(body: AssessmentRequestBody):
     """Enqueue an async project assessment and return its job id."""
     executor = _llm_execution_mode()
@@ -481,6 +528,7 @@ def _execute_assessment(body: AssessmentRequestBody) -> dict:
             "tech_stack": result.tech_stack,
             "key_components": result.key_components,
             "vulnerabilities": result.vulnerabilities,
+            "hipaa_review": result.hipaa_review,
             "model": result.model,
         })
     except Exception:
@@ -611,6 +659,7 @@ def get_settings():
         "openrouter_model_2": config_store.get_model_2(),
         "openrouter_provider_2": config_store.get_provider_2(),
         "embedding_model": config_store.get_embedding_model(),
+        "hipaa_policies": config_store.get_hipaa_policies(),
     }
 
 
@@ -647,6 +696,8 @@ def update_settings(body: SettingsBody):
         update["llm_execution_mode"] = mode
     if body.llm_worker_secret is not None:
         update["llm_worker_secret"] = body.llm_worker_secret.strip()
+    if body.hipaa_policies is not None:
+        update["hipaa_policies"] = body.hipaa_policies
     if update:
         config_store.save_config(update)
     return get_settings()

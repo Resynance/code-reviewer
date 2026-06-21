@@ -113,7 +113,7 @@ export default function AssessmentPage() {
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
           <input type="checkbox" checked={hipaa} onChange={e => setHipaa(e.target.checked)}
             style={{ accentColor: 'var(--accent)', cursor: 'pointer' }} />
-          <span style={{ fontSize: 13, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>Check HIPAA compliance</span>
+          <span style={{ fontSize: 13, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>Run HIPAA-focused assessment</span>
         </label>
 
         <button onClick={submit} disabled={loading || !repo} style={btnStyle(loading || !repo)}>
@@ -279,6 +279,37 @@ function AssessmentResult({ result }) {
         )}
       </div>
 
+      {result.hipaa_review?.enabled && (
+        <Section title="HIPAA Review">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, marginBottom: 12 }}>
+            <InfoPill label="Relevant" value={result.hipaa_review.hipaa_relevant ? 'Yes' : 'No'} />
+            <InfoPill label="Manual Review" value={result.hipaa_review.requires_manual_compliance_review ? 'Required' : 'Not flagged'} />
+            <InfoPill label="Findings" value={String(result.hipaa_review.hipaa_findings?.length || 0)} />
+          </div>
+          {result.hipaa_review.summary && (
+            <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--text)', lineHeight: 1.5 }}>{result.hipaa_review.summary}</p>
+          )}
+          {(result.hipaa_review.hipaa_findings || []).map((item, i) => (
+            <div key={i} style={{
+              borderLeft: `3px solid ${SEV_COLORS[item.severity] || 'var(--border2)'}`,
+              background: 'var(--surface2)', borderRadius: '0 8px 8px 0', padding: '10px 12px', marginBottom: 8,
+            }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 10, fontWeight: 600, color: SEV_COLORS[item.severity] || 'var(--text-2)' }}>
+                  {(item.severity || 'medium').toUpperCase()}
+                </span>
+                <span style={{ fontSize: 12, color: 'var(--text-2)' }}>{item.category}</span>
+                {item.file && <code style={{ fontSize: 11, color: 'var(--text-3)' }}>{item.file}</code>}
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--text)', marginBottom: 4 }}>{item.title}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 4 }}>{item.evidence}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-2)' }}>💡 {item.recommendation}</div>
+            </div>
+          ))}
+          <HipaaBuckets review={result.hipaa_review} />
+        </Section>
+      )}
+
       {/* Tech stack */}
       {result.tech_stack?.length > 0 && (
         <Section title="Tech Stack">
@@ -417,6 +448,42 @@ function Section({ title, children, onSelectAll, allSelected }) {
         )}
       </div>
       {children}
+    </div>
+  )
+}
+
+function HipaaBuckets({ review }) {
+  const groups = [
+    ['PHI Exposure', review.phi_exposure_risk],
+    ['Encryption', review.encryption_gaps],
+    ['Access Control', review.access_control_gaps],
+    ['Audit Trail', review.audit_trail_gaps],
+    ['Minimum Necessary', review.minimum_necessary_gaps],
+    ['Third-Party / BAA', review.third_party_baa_risks],
+  ].filter(([, items]) => (items || []).length > 0)
+  if (!groups.length) return null
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10, marginTop: 12 }}>
+      {groups.map(([label, items]) => (
+        <div key={label} style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}>
+          <div style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', marginBottom: 8 }}>{label}</div>
+          {items.map((item, i) => (
+            <div key={i} style={{ fontSize: 12, color: 'var(--text)', marginBottom: i === items.length - 1 ? 0 : 8 }}>
+              <div>{item.summary}</div>
+              {item.details && <div style={{ color: 'var(--text-2)', marginTop: 2 }}>{item.details}</div>}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function InfoPill({ label, value }) {
+  return (
+    <div style={{ background: 'var(--surface2)', borderRadius: 8, padding: '10px 12px' }}>
+      <div style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 13, color: 'var(--text)' }}>{value}</div>
     </div>
   )
 }

@@ -4,6 +4,7 @@ import hmac
 import hashlib
 
 import config_store
+import rate_limit
 from review_engine import ReviewResult
 from assessment_engine import AssessmentResult
 
@@ -173,7 +174,7 @@ def test_review_enqueues_and_runs(client, monkeypatch):
         def review(self, req):
             return ReviewResult(pr_number=req.pr_number, summary="ok", approved=True,
                                 confidence=0.8, issues=[], suggestions=[], past_decisions_applied=[],
-                                hipaa_review={"enabled": req.hipaa})
+                                hipaa_review={"enabled": req.hipaa, "hipaa_relevant": req.hipaa})
 
     monkeypatch.setattr(main, "get_engine", lambda: FakeEngine())
 
@@ -186,7 +187,7 @@ def test_review_enqueues_and_runs(client, monkeypatch):
     assert run["status"] == "done"
     body = run["result"]
     assert body["pr_number"] == 7 and body["approved"] is True and body["confidence"] == 0.8
-    assert body["hipaa_review"] == {"enabled": False}
+    assert body["hipaa_review"]["enabled"] is False
 
     # Poll → the same finished job.
     polled = tc.get(f"/api/review/{job['id']}").json()
@@ -316,7 +317,8 @@ def test_review_is_saved_to_history(client, monkeypatch):
     class FakeEngine:
         def review(self, req):
             return ReviewResult(pr_number=req.pr_number, summary="ok", approved=True,
-                                confidence=0.9, issues=[], suggestions=[], past_decisions_applied=[])
+                                confidence=0.9, issues=[], suggestions=[], past_decisions_applied=[],
+                                hipaa_review={"enabled": req.hipaa})
 
     monkeypatch.setattr(main, "get_engine", lambda: FakeEngine())
     assert tc.get("/api/reviews").json()["count"] == 0
@@ -326,6 +328,7 @@ def test_review_is_saved_to_history(client, monkeypatch):
     assert hist["count"] == 1
     r = hist["reviews"][0]
     assert r["pr_number"] == 7 and r["repo"] == "org/a" and r["source"] == "api"
+    assert r["hipaa_review"] == {"enabled": False}
 
 
 # ----- backfill ----- #
@@ -498,6 +501,7 @@ def test_assessment_enqueues_and_runs(client, monkeypatch):
     assert run["status"] == "done"
     assert run["result"]["repo"] == "org/a"
     assert run["result"]["summary"] == "A fine app"
+    assert run["result"]["hipaa_review"]["enabled"] is False
 
     polled = tc.get(f"/api/assessments/{job['id']}").json()
     assert polled["status"] == "done" and polled["result"]["repo"] == "org/a"
@@ -564,6 +568,17 @@ def test_assessment_is_saved_to_history(client, monkeypatch):
     assert hist["count"] == 1
     assert hist["assessments"][0]["repo"] == "org/b"
     assert hist["assessments"][0]["summary"] == "A fine app"
+    assert hist["assessments"][0]["hipaa_review"] == {"enabled": False, "hipaa_relevant": False}
+
+
+def test_assessment_run_preserves_hipaa_flag(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    monkeypatch.setattr(main, "AssessmentEngine", _fake_assessment_engine())
+
+    job = tc.post("/api/assessments", json={"repo": "org/a", "hipaa": True}).json()
+    run = tc.post(f"/api/assessments/{job['id']}/run").json()
+    assert run["result"]["hipaa_review"]["enabled"] is True
 
 
 def test_list_assessments(client, monkeypatch):
@@ -581,3 +596,90 @@ def test_list_assessments(client, monkeypatch):
 
     only_a = tc.get("/api/assessments", params={"repo": "org/a"}).json()
     assert only_a["count"] == 1 and only_a["assessments"][0]["repo"] == "org/a"
+
+
+# ----- rate limiting ----- #
+
+def _reset_rate_limit():
+    """Clear the in-memory rate limit windows between tests."""
+    rate_limit._windows.clear()
+
+
+def test_rate_limit_review_blocks_after_limit(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    monkeypatch.setenv("RATE_LIMIT_REQUESTS", "2")
+    monkeypatch.setenv("RATE_LIMIT_WINDOW", "60")
+    _reset_rate_limit()
+
+    class FakeEngine:
+        def review(self, req):
+            return ReviewResult(pr_number=req.pr_number, summary="ok", approved=True,
+                                confidence=0.9, issues=[], suggestions=[], past_decisions_applied=[])
+
+    monkeypatch.setattr(main, "get_engine", lambda: FakeEngine())
+
+    body = {"pr_number": 1, "repo": "org/a", "title": "t", "diff": "+x"}
+    assert tc.post("/api/review", json=body).status_code == 200
+    assert tc.post("/api/review", json=body).status_code == 200
+    resp = tc.post("/api/review", json=body)
+    assert resp.status_code == 429
+    assert "Retry-After" in resp.headers
+
+
+def test_rate_limit_assessment_blocks_after_limit(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    monkeypatch.setenv("RATE_LIMIT_REQUESTS", "1")
+    monkeypatch.setenv("RATE_LIMIT_WINDOW", "60")
+    _reset_rate_limit()
+    monkeypatch.setattr(main, "AssessmentEngine", _fake_assessment_engine())
+
+    assert tc.post("/api/assessments", json={"repo": "org/a"}).status_code == 200
+    assert tc.post("/api/assessments", json={"repo": "org/a"}).status_code == 429
+
+
+def test_rate_limit_disabled_when_zero(client, monkeypatch):
+    tc, _ = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    monkeypatch.setenv("RATE_LIMIT_REQUESTS", "0")
+    _reset_rate_limit()
+
+    body = {"pr_number": 1, "repo": "org/a", "title": "t", "diff": "+x"}
+    for _ in range(5):
+        assert tc.post("/api/review", json=body).status_code == 200
+
+
+def test_rate_limit_review_independent_from_assessment(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    monkeypatch.setenv("RATE_LIMIT_REQUESTS", "1")
+    monkeypatch.setenv("RATE_LIMIT_WINDOW", "60")
+    _reset_rate_limit()
+    monkeypatch.setattr(main, "AssessmentEngine", _fake_assessment_engine())
+
+    class FakeEngine:
+        def review(self, req):
+            return ReviewResult(pr_number=req.pr_number, summary="ok", approved=True,
+                                confidence=0.9, issues=[], suggestions=[], past_decisions_applied=[])
+
+    monkeypatch.setattr(main, "get_engine", lambda: FakeEngine())
+
+    # one review allowed, one assessment allowed — separate buckets
+    assert tc.post("/api/review", json={"pr_number": 1, "repo": "org/a", "title": "t", "diff": "+x"}).status_code == 200
+    assert tc.post("/api/assessments", json={"repo": "org/a"}).status_code == 200
+    # second of each is blocked
+    assert tc.post("/api/review", json={"pr_number": 1, "repo": "org/a", "title": "t", "diff": "+x"}).status_code == 429
+    assert tc.post("/api/assessments", json={"repo": "org/a"}).status_code == 429
+
+
+def test_settings_roundtrip_hipaa_policies(client):
+    tc, _ = client
+    body = tc.put("/api/settings", json={
+        "hipaa_policies": {
+            "default": {"approved_vendors": ["aws"], "notes": "default"},
+            "repos": {"org/a": {"disallowed_vendors": ["segment"]}},
+        }
+    }).json()
+    assert body["hipaa_policies"]["default"]["approved_vendors"] == ["aws"]
+    assert body["hipaa_policies"]["repos"]["org/a"]["disallowed_vendors"] == ["segment"]

@@ -8,6 +8,7 @@ export default function SettingsPage() {
   // Model list + embedding form
   const [modelsList, setModelsList] = useState([]) // [{label, model, provider}]
   const [embeddingInput, setEmbeddingInput] = useState('')
+  const [hipaaPoliciesInput, setHipaaPoliciesInput] = useState('')
   const [savingModel, setSavingModel] = useState(false)
   const [modelMsg, setModelMsg] = useState(null)
   const [llmExecutionMode, setLlmExecutionMode] = useState('inline')
@@ -57,6 +58,7 @@ export default function SettingsPage() {
       setModelsList(s.openrouter_models || [])
       setEmbeddingInput(s.embedding_model || '')
       setLlmExecutionMode(s.llm_execution_mode || 'inline')
+      setHipaaPoliciesInput(JSON.stringify(s.hipaa_policies || { default: {}, repos: {} }, null, 2))
     }).catch(() => {})
     api.listAccess().then(r => setAccessEmails(r.emails || [])).catch(() => {})
     api.githubOwners().then(r => setOwners(r.owners || [])).catch(() => {})
@@ -126,13 +128,23 @@ export default function SettingsPage() {
     setSavingModel(true)
     setModelMsg(null)
     try {
+      let parsedPolicies
+      try {
+        parsedPolicies = JSON.parse(hipaaPoliciesInput || '{}')
+      } catch {
+        setModelMsg('HIPAA policies must be valid JSON')
+        setSavingModel(false)
+        return
+      }
       const s = await api.saveSettings({
         openrouter_models: modelsList,
         embedding_model: embeddingInput.trim(),
+        hipaa_policies: parsedPolicies,
       })
       setSettings(s)
       setModelsList(s.openrouter_models || [])
       setEmbeddingInput(s.embedding_model || '')
+      setHipaaPoliciesInput(JSON.stringify(s.hipaa_policies || { default: {}, repos: {} }, null, 2))
       setModelMsg('Saved ✓')
       refreshStats()
     } catch (e) {
@@ -379,6 +391,16 @@ export default function SettingsPage() {
           <label style={labelStyle}>Embedding model — used to index/search decisions (pgvector backend)</label>
           <input value={embeddingInput} onChange={e => setEmbeddingInput(e.target.value)}
             placeholder="openai/text-embedding-3-small" style={inputStyle} />
+        </div>
+
+        <div style={{ marginTop: 16 }}>
+          <label style={labelStyle}>HIPAA policy JSON — default policy plus per-repo overrides</label>
+          <textarea
+            value={hipaaPoliciesInput}
+            onChange={e => setHipaaPoliciesInput(e.target.value)}
+            rows={14}
+            style={{ ...inputStyle, fontFamily: 'var(--font-mono)', fontSize: 12, resize: 'vertical' }}
+          />
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14 }}>

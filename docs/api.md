@@ -37,6 +37,8 @@ Request:
 ```
 Only `pr_number`, `repo`, `title`, and `diff` are required. Returns
 `{ "id": "<uuid>", "status": "queued" }`.
+`{ "id": "<uuid>", "status": "queued" }`. `400` if `OPENROUTER_API_KEY` is not set.
+`429` if the per-user rate limit is exceeded (see [Rate limiting](#rate-limiting)).
 
 When `llm_execution_mode=inline` (default), `OPENROUTER_API_KEY` must be set and
 the client then calls `POST /api/review/{id}/run` and polls `GET /api/review/{id}`.
@@ -150,6 +152,8 @@ or queue → local worker → poll when `llm_execution_mode=local_queue`).
 `model` and `provider` are optional (fall back to the configured default). Returns
 `{ "id": "<uuid>", "status": "queued" }`. `400` if `OPENROUTER_API_KEY` is not set
 in `inline` mode.
+`{ "id": "<uuid>", "status": "queued" }`. `400` if `OPENROUTER_API_KEY` is not set.
+`429` if the per-user rate limit is exceeded (see [Rate limiting](#rate-limiting)).
 
 ### `POST /api/assessments/{id}/run`
 Execute a queued assessment job. Idempotent — a job already running/finished is
@@ -350,6 +354,34 @@ Fetch one PR's metadata + unified diff + changed files, shaped for the review fo
   "files_changed": ["src/cache.py"] }
 ```
 `400` without a token; `502` on GitHub errors.
+
+## Rate limiting
+
+`POST /api/review` and `POST /api/assessments` are rate-limited per user to
+prevent runaway LLM costs. The limit is enforced with a **sliding window** keyed
+by the authenticated user's email (or remote IP when auth is disabled).
+
+When the limit is exceeded the server responds with:
+```
+HTTP 429 Too Many Requests
+Retry-After: <seconds>
+{ "detail": "Rate limit exceeded. Try again in <N>s." }
+```
+
+Configured via environment variables (no redeploy required):
+
+| Variable | Default | Description |
+|---|---|---|
+| `RATE_LIMIT_REQUESTS` | `20` | Max requests per window. Set to `0` to disable. |
+| `RATE_LIMIT_WINDOW` | `3600` | Window size in seconds (default 1 hour). |
+
+Review and assessment quotas are tracked in **separate buckets** — hitting the
+review limit does not affect assessment submissions and vice versa.
+
+> **Note:** The limiter is in-process. On Vercel each function instance maintains
+> its own window, so the effective limit is per-instance rather than global. This
+> bounds accidental bursts within a session; strict global enforcement would
+> require a shared counter (e.g. a Supabase table).
 
 ## Status
 

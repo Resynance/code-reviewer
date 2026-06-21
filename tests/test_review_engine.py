@@ -83,6 +83,15 @@ def test_build_prompt_contains_key_parts(store, monkeypatch):
     assert "no relevant past decisions" in prompt
 
 
+def test_build_prompt_contains_hipaa_context(store, cfg, monkeypatch):
+    cfg.save_config({"hipaa_policies": {"default": {"notes": "Use approved BAAs only"}, "repos": {}}})
+    eng = make_engine(store, review_payload(), monkeypatch)
+    prompt = eng._build_prompt(make_req(hipaa=True, diff='+ logger.info("patient_ssn")'), [])
+    assert "HIPAA Review Mode" in prompt
+    assert "Use approved BAAs only" in prompt
+    assert "Potential PHI in logs or debug output" in prompt
+
+
 def test_retrieve_context_scopes_to_repo_plus_global(store, monkeypatch):
     _seed(store)
     eng = make_engine(store, review_payload(), monkeypatch)
@@ -124,6 +133,40 @@ def test_past_decisions_enriched_from_store(store, cfg, monkeypatch):
     assert applied["ref"] == "PR #1"
     assert applied["summary"] == "auth in api"  # filled in from the store
     assert applied["how_applied"] == "followed jwt precedent"
+
+
+def test_hipaa_result_merges_deterministic_findings(store, cfg, monkeypatch):
+    payload = review_payload(
+        hipaa_review={
+            "hipaa_relevant": True,
+            "requires_manual_compliance_review": True,
+            "summary": "Needs HIPAA review",
+            "hipaa_findings": [
+                {
+                    "category": "manual_review",
+                    "severity": "medium",
+                    "title": "Vendor review required",
+                    "evidence": "External processor usage is policy-sensitive.",
+                    "recommendation": "Confirm BAA coverage.",
+                    "manual_review": True,
+                }
+            ],
+        }
+    )
+    eng = make_engine(store, payload, monkeypatch)
+    req = make_req(
+        hipaa=True,
+        files_changed=["api/patient.py"],
+        diff='+ logger.info("patient_ssn")\n+ requests.post("http://vendor", json={"patient_id": 1})',
+    )
+    result = eng.review(req)
+    assert result.hipaa_review["enabled"] is True
+    assert result.hipaa_review["hipaa_relevant"] is True
+    assert result.hipaa_review["requires_manual_compliance_review"] is True
+    titles = {f["title"] for f in result.hipaa_review["hipaa_findings"]}
+    assert "Potential PHI in logs or debug output" in titles
+    assert "Vendor review required" in titles
+    assert any(i["description"] == "Potential PHI in logs or debug output" for i in result.issues)
 
 
 def test_missing_tool_call_raises(store, cfg, monkeypatch):
