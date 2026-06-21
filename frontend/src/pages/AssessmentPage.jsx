@@ -15,7 +15,7 @@ export default function AssessmentPage() {
   const [error, setError] = useState(null)
   const [result, setResult] = useState(null)
   const [history, setHistory] = useState([])
-  const [hipaa, setHipaa] = useState(false)
+  const [hipaaPolicies, setHipaaPolicies] = useState({ default: {}, repos: {} })
   const jobRef = useRef(null)
   useEffect(() => () => { jobRef.current = null }, [])
 
@@ -31,8 +31,11 @@ export default function AssessmentPage() {
       setModels(slots)
       setSelectedModel(slots[0] || null)
       setExecutionMode(s.llm_execution_mode || 'inline')
+      setHipaaPolicies(s.hipaa_policies || { default: {}, repos: {} })
     }).catch(() => {})
   }, [])
+
+  const hipaaEnabled = !!hipaaPolicies?.repos?.[repo]?.enabled
 
   // Reload history whenever the selected repo changes.
   useEffect(() => {
@@ -50,7 +53,6 @@ export default function AssessmentPage() {
         repo,
         model: selectedModel?.model || undefined,
         provider: selectedModel?.provider || undefined,
-        hipaa,
       })
       jobRef.current = id
       if (executionMode === 'inline') api.runAssessment(id).catch(() => {})
@@ -112,11 +114,11 @@ export default function AssessmentPage() {
           )}
         </div>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-          <input type="checkbox" checked={hipaa} onChange={e => setHipaa(e.target.checked)}
-            style={{ accentColor: 'var(--accent)', cursor: 'pointer' }} />
-          <span style={{ fontSize: 13, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>Run HIPAA-focused assessment</span>
-        </label>
+        <span style={{ fontSize: 13, color: hipaaEnabled ? 'var(--text)' : 'var(--text-2)', whiteSpace: 'nowrap' }}>
+          {hipaaEnabled
+            ? 'HIPAA-focused assessment is enabled for this repository.'
+            : 'HIPAA-focused assessment is not enabled for this repository.'}
+        </span>
 
         <button onClick={submit} disabled={loading || !repo} style={btnStyle(loading || !repo)}>
           {loading ? '⟳ Analysing…' : '▶ Run Assessment'}

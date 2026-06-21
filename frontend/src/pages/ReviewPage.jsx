@@ -44,7 +44,7 @@ export default function ReviewPage() {
   // Which model slot the user picked; null = model 1 (default).
   const [selectedModel, setSelectedModel] = useState(null)
   const [executionMode, setExecutionMode] = useState('inline')
-  const [hipaa, setHipaa] = useState(false)
+  const [hipaaPolicies, setHipaaPolicies] = useState({ default: {}, repos: {} })
   // Tracks the in-flight review job so a superseded/unmounted poll stops.
   const jobRef = useRef(null)
   useEffect(() => () => { jobRef.current = null }, [])
@@ -69,8 +69,11 @@ export default function ReviewPage() {
       setModels(slots)
       setSelectedModel(slots[0] || null)
       setExecutionMode(s.llm_execution_mode || 'inline')
+      setHipaaPolicies(s.hipaa_policies || { default: {}, repos: {} })
     }).catch(() => {})
   }, [])
+
+  const hipaaEnabled = !!hipaaPolicies?.repos?.[form.repo]?.enabled
 
   // Whenever the selected repo changes, load its PRs (open first) for the picker.
   useEffect(() => {
@@ -128,7 +131,6 @@ export default function ReviewPage() {
         files_changed: form.files_changed.filter(Boolean),
         model: selectedModel?.model || undefined,
         provider: selectedModel?.provider || undefined,
-        hipaa,
       })
       jobRef.current = id
       // Drive the work in the background; the result is read via polling, so a
@@ -252,11 +254,11 @@ export default function ReviewPage() {
         </div>
       )}
 
-      <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, cursor: 'pointer', width: 'fit-content' }}>
-        <input type="checkbox" checked={hipaa} onChange={e => setHipaa(e.target.checked)}
-          style={{ accentColor: 'var(--accent)', cursor: 'pointer' }} />
-        <span style={{ fontSize: 13, color: 'var(--text-2)' }}>Run HIPAA-focused review</span>
-      </label>
+      <div style={{ marginBottom: 14, fontSize: 13, color: hipaaEnabled ? 'var(--text)' : 'var(--text-2)' }}>
+        {hipaaEnabled
+          ? 'HIPAA-focused review is enabled for this repository in Settings.'
+          : 'HIPAA-focused review is not enabled for this repository.'}
+      </div>
 
       <div style={{ display: 'flex', gap: 12, alignItems: isMobile ? 'stretch' : 'center', flexDirection: isMobile ? 'column' : 'row', marginBottom: 28 }}>
         <button onClick={submit} disabled={loading} style={btnStyle(loading)}>

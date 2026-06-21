@@ -36,7 +36,6 @@ Request:
 }
 ```
 Only `pr_number`, `repo`, `title`, and `diff` are required. Returns
-`{ "id": "<uuid>", "status": "queued" }`.
 `{ "id": "<uuid>", "status": "queued" }`. `400` if `OPENROUTER_API_KEY` is not set.
 `429` if the per-user rate limit is exceeded (see [Rate limiting](#rate-limiting)).
 
@@ -44,6 +43,7 @@ When `llm_execution_mode=inline` (default), `OPENROUTER_API_KEY` must be set and
 the client then calls `POST /api/review/{id}/run` and polls `GET /api/review/{id}`.
 When `llm_execution_mode=local_queue`, the request is just persisted and a local
 worker claims it via `/worker/llm/claim`.
+HIPAA mode is determined from the repository's settings entry, not a per-request toggle.
 
 ### `POST /api/review/{id}/run`
 Execute a queued job when `llm_execution_mode=inline` (runs the review, persists
@@ -150,10 +150,9 @@ or queue → local worker → poll when `llm_execution_mode=local_queue`).
 { "repo": "org/a", "model": "anthropic/claude-sonnet-4.5", "provider": "" }
 ```
 `model` and `provider` are optional (fall back to the configured default). Returns
-`{ "id": "<uuid>", "status": "queued" }`. `400` if `OPENROUTER_API_KEY` is not set
-in `inline` mode.
 `{ "id": "<uuid>", "status": "queued" }`. `400` if `OPENROUTER_API_KEY` is not set.
 `429` if the per-user rate limit is exceeded (see [Rate limiting](#rate-limiting)).
+HIPAA mode is determined from the repository's settings entry, not a per-request toggle.
 
 ### `POST /api/assessments/{id}/run`
 Execute a queued assessment job. Idempotent — a job already running/finished is
@@ -201,6 +200,10 @@ Secrets are reported as booleans, never echoed.
   "webhook_secret_set": false,
   "llm_execution_mode": "inline",
   "llm_worker_secret_set": false,
+  "hipaa_policies": {
+    "default": { "enabled": false, "notes": "" },
+    "repos": { "org/a": { "enabled": true } }
+  },
   "openrouter_model": "anthropic/claude-sonnet-4.5",
   "openrouter_provider": "",
   "openrouter_models": [
@@ -222,6 +225,10 @@ value (falls back to env/default), omit/null to leave unchanged.
   "webhook_secret": "…",
   "llm_execution_mode": "local_queue",
   "llm_worker_secret": "shared-secret",
+  "hipaa_policies": {
+    "default": { "enabled": false },
+    "repos": { "org/a": { "enabled": true } }
+  },
   "repos": ["org/a", "org/b"],
   "openrouter_models": [
     { "label": "Fast",  "model": "openai/gpt-4o-mini",              "provider": "" },
@@ -230,7 +237,9 @@ value (falls back to env/default), omit/null to leave unchanged.
 }
 ```
 Each model slot requires `model`; `label` and `provider` are optional. Slots with
-a blank `model` are silently dropped. Returns the same shape as `GET /api/settings`.
+a blank `model` are silently dropped. `hipaa_policies.repos.<repo>.enabled=true`
+marks that repository as always requiring HIPAA-focused reviews and assessments.
+Returns the same shape as `GET /api/settings`.
 
 ## Local worker
 
