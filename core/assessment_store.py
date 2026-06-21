@@ -16,12 +16,12 @@ _LOCK = threading.Lock()
 
 _FIELDS = (
     "repo", "summary", "purpose",
-    "tech_stack", "key_components", "vulnerabilities", "model",
+    "tech_stack", "key_components", "vulnerabilities", "hipaa_review", "model",
 )
 
 _PG_COLS = [
     "id", "repo", "summary", "purpose",
-    "tech_stack", "key_components", "vulnerabilities", "model", "created_at",
+    "tech_stack", "key_components", "vulnerabilities", "hipaa_review", "model", "created_at",
 ]
 
 
@@ -37,6 +37,7 @@ def _normalize(record: dict) -> dict:
     rec = {k: record.get(k) for k in _FIELDS}
     for k in ("tech_stack", "key_components", "vulnerabilities"):
         rec[k] = rec.get(k) or []
+    rec["hipaa_review"] = rec.get("hipaa_review") or {}
     return rec
 
 
@@ -95,12 +96,12 @@ def _pg_save(rec):
     with db.connect() as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO assessments "
-            "(repo, summary, purpose, tech_stack, key_components, vulnerabilities, model) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id, created_at",
+            "(repo, summary, purpose, tech_stack, key_components, vulnerabilities, hipaa_review, model) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id, created_at",
             (
                 rec["repo"], rec.get("summary"), rec.get("purpose"),
                 Jsonb(rec["tech_stack"]), Jsonb(rec["key_components"]),
-                Jsonb(rec["vulnerabilities"]), rec.get("model"),
+                Jsonb(rec["vulnerabilities"]), Jsonb(rec["hipaa_review"]), rec.get("model"),
             ),
         )
         assessment_id, created_at = cur.fetchone()

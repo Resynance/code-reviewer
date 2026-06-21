@@ -68,7 +68,10 @@ def _rate_limit_key(request: Request) -> str:
 
 async def require_review_quota(request: Request):
     key = _rate_limit_key(request)
-    allowed, retry_after = _rate_limit.check(f"review:{key}")
+    try:
+        allowed, retry_after = _rate_limit.check(f"review:{key}")
+    except Exception:
+        return  # fail open — a limiter bug must not take down the API
     if not allowed:
         raise HTTPException(
             status_code=429,
@@ -79,7 +82,10 @@ async def require_review_quota(request: Request):
 
 async def require_assessment_quota(request: Request):
     key = _rate_limit_key(request)
-    allowed, retry_after = _rate_limit.check(f"assess:{key}")
+    try:
+        allowed, retry_after = _rate_limit.check(f"assess:{key}")
+    except Exception:
+        return  # fail open — a limiter bug must not take down the API
     if not allowed:
         raise HTTPException(
             status_code=429,
@@ -202,6 +208,7 @@ class SettingsBody(BaseModel):
     openrouter_model_2: Optional[str] = None
     openrouter_provider_2: Optional[str] = None
     embedding_model: Optional[str] = None
+    hipaa_policies: Optional[dict] = None
 
 
 class RepoBody(BaseModel):
@@ -295,6 +302,7 @@ def _execute_review(body: ReviewRequestBody, source: str) -> dict:
         "issues": result.issues,
         "suggestions": result.suggestions,
         "past_decisions_applied": result.past_decisions_applied,
+        "hipaa_review": result.hipaa_review,
         "model": result.model,
     }
 
@@ -357,6 +365,7 @@ def _save_review(request, result, source):
             "issues": result.issues,
             "suggestions": result.suggestions,
             "past_decisions": result.past_decisions_applied,
+            "hipaa_review": result.hipaa_review,
             "source": source,
             "model": result.model,
         })
@@ -397,6 +406,7 @@ def run_assessment_job(job_id: str):
             repo=req["repo"],
             model=req.get("model"),
             provider=req.get("provider"),
+            hipaa=req.get("hipaa", False),
         ))
         return review_jobs.update_job(job_id, status="done", result=result)
     except Exception as e:
@@ -436,6 +446,7 @@ def _execute_assessment(body: AssessmentRequestBody) -> dict:
             "tech_stack": result.tech_stack,
             "key_components": result.key_components,
             "vulnerabilities": result.vulnerabilities,
+            "hipaa_review": result.hipaa_review,
             "model": result.model,
         })
     except Exception:
@@ -447,6 +458,7 @@ def _execute_assessment(body: AssessmentRequestBody) -> dict:
         "tech_stack": result.tech_stack,
         "key_components": result.key_components,
         "vulnerabilities": result.vulnerabilities,
+        "hipaa_review": result.hipaa_review,
         "model": result.model,
     }
 
@@ -561,6 +573,7 @@ def get_settings():
         "openrouter_model_2": config_store.get_model_2(),
         "openrouter_provider_2": config_store.get_provider_2(),
         "embedding_model": config_store.get_embedding_model(),
+        "hipaa_policies": config_store.get_hipaa_policies(),
     }
 
 
@@ -590,6 +603,8 @@ def update_settings(body: SettingsBody):
         update["openrouter_provider_2"] = body.openrouter_provider_2.strip()
     if body.embedding_model is not None:
         update["embedding_model"] = body.embedding_model.strip()
+    if body.hipaa_policies is not None:
+        update["hipaa_policies"] = body.hipaa_policies
     if update:
         config_store.save_config(update)
     return get_settings()

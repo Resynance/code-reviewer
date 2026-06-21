@@ -12,6 +12,7 @@ function historyToResult(r) {
     issues: r.issues || [],
     suggestions: r.suggestions || [],
     past_decisions_applied: r.past_decisions || [],
+    hipaa_review: r.hipaa_review || {},
     model: r.model || '',
   }
 }
@@ -250,7 +251,7 @@ export default function ReviewPage() {
       <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, cursor: 'pointer', width: 'fit-content' }}>
         <input type="checkbox" checked={hipaa} onChange={e => setHipaa(e.target.checked)}
           style={{ accentColor: 'var(--accent)', cursor: 'pointer' }} />
-        <span style={{ fontSize: 13, color: 'var(--text-2)' }}>Check HIPAA compliance</span>
+        <span style={{ fontSize: 13, color: 'var(--text-2)' }}>Run HIPAA-focused review</span>
       </label>
 
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 28 }}>
@@ -425,6 +426,40 @@ function ReviewResult({ result, repo }) {
         </Section>
       )}
 
+      {result.hipaa_review?.enabled && (
+        <Section title="🏥 HIPAA Review">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, marginBottom: 14 }}>
+            <InfoPill label="Relevant" value={result.hipaa_review.hipaa_relevant ? 'Yes' : 'No'} />
+            <InfoPill label="Manual Review" value={result.hipaa_review.requires_manual_compliance_review ? 'Required' : 'Not flagged'} />
+            <InfoPill label="Findings" value={String(result.hipaa_review.hipaa_findings?.length || 0)} />
+          </div>
+          {result.hipaa_review.summary && (
+            <div style={{ fontSize: 13, color: 'var(--text)', marginBottom: 12 }}>{result.hipaa_review.summary}</div>
+          )}
+          {result.hipaa_review.hipaa_findings?.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+              {result.hipaa_review.hipaa_findings.map((item, i) => (
+                <IssueCard
+                  key={`hipaa-${i}`}
+                  issue={{
+                    severity: item.severity,
+                    file: item.file || item.category,
+                    description: item.title,
+                    suggestion: item.recommendation,
+                    past_decision_ref: item.manual_review ? 'manual review' : item.source,
+                  }}
+                  selected={false}
+                  onToggle={() => {}}
+                  readOnly
+                  extra={item.evidence}
+                />
+              ))}
+            </div>
+          )}
+          <HipaaGapGrid review={result.hipaa_review} />
+        </Section>
+      )}
+
       {/* Issues */}
       {result.issues?.length > 0 && (
         <Section
@@ -473,7 +508,7 @@ function ReviewResult({ result, repo }) {
   )
 }
 
-function IssueCard({ issue, selected, onToggle }) {
+function IssueCard({ issue, selected, onToggle, readOnly = false, extra = '' }) {
   const sevColors = { critical: '#EF4444', high: '#F97316', medium: '#EAB308', low: '#6366F1' }
   const color = sevColors[issue.severity] || 'var(--text-2)'
   return (
@@ -483,8 +518,10 @@ function IssueCard({ issue, selected, onToggle }) {
       background: `${color}08`,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-        <input type="checkbox" checked={selected} onChange={onToggle}
-          style={{ accentColor: 'var(--accent)', cursor: 'pointer' }} />
+        {!readOnly && (
+          <input type="checkbox" checked={selected} onChange={onToggle}
+            style={{ accentColor: 'var(--accent)', cursor: 'pointer' }} />
+        )}
         <span style={{
           fontSize: 10, fontWeight: 600, letterSpacing: '0.05em',
           color, background: `${color}20`, padding: '2px 6px', borderRadius: 4,
@@ -497,9 +534,50 @@ function IssueCard({ issue, selected, onToggle }) {
         )}
       </div>
       <div style={{ fontSize: 13, color: 'var(--text)', marginBottom: 6 }}>{issue.description}</div>
+      {extra && (
+        <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 6 }}>{extra}</div>
+      )}
       <div style={{ fontSize: 12, color: 'var(--text-2)', paddingLeft: 10, borderLeft: '2px solid var(--border2)' }}>
         💡 {issue.suggestion}
       </div>
+    </div>
+  )
+}
+
+function HipaaGapGrid({ review }) {
+  const groups = [
+    ['PHI Exposure', review.phi_exposure_risk],
+    ['Encryption', review.encryption_gaps],
+    ['Access Control', review.access_control_gaps],
+    ['Audit Trail', review.audit_trail_gaps],
+    ['Minimum Necessary', review.minimum_necessary_gaps],
+    ['Third-Party / BAA', review.third_party_baa_risks],
+  ].filter(([, items]) => (items || []).length > 0)
+
+  if (!groups.length) return null
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }}>
+      {groups.map(([label, items]) => (
+        <div key={label} style={{ background: 'var(--surface2)', borderRadius: 8, padding: '10px 12px' }}>
+          <div style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', marginBottom: 8 }}>{label}</div>
+          {items.map((item, i) => (
+            <div key={i} style={{ fontSize: 12, color: 'var(--text)', marginBottom: i === items.length - 1 ? 0 : 8 }}>
+              <div>{item.summary}</div>
+              {item.details && <div style={{ color: 'var(--text-2)', marginTop: 2 }}>{item.details}</div>}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function InfoPill({ label, value }) {
+  return (
+    <div style={{ background: 'var(--surface2)', borderRadius: 8, padding: '10px 12px' }}>
+      <div style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 13, color: 'var(--text)' }}>{value}</div>
     </div>
   )
 }

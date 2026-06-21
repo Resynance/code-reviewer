@@ -21,7 +21,7 @@ _LOCK = threading.Lock()
 # Fields accepted on a review record (besides id/created_at, which are assigned).
 _FIELDS = (
     "repo", "pr_number", "title", "author", "approved", "confidence",
-    "summary", "issues", "suggestions", "past_decisions", "source", "model",
+    "summary", "issues", "suggestions", "past_decisions", "hipaa_review", "source", "model",
 )
 
 
@@ -37,6 +37,7 @@ def _normalize(record: dict) -> dict:
     rec = {k: record.get(k) for k in _FIELDS}
     for k in ("issues", "suggestions", "past_decisions"):
         rec[k] = rec.get(k) or []
+    rec["hipaa_review"] = rec.get("hipaa_review") or {}
     return rec
 
 
@@ -92,7 +93,7 @@ def _file_list(repo, pr_number, limit):
 
 _PG_COLS = [
     "id", "repo", "pr_number", "title", "author", "approved", "confidence",
-    "summary", "issues", "suggestions", "past_decisions", "source", "model", "created_at",
+    "summary", "issues", "suggestions", "past_decisions", "hipaa_review", "source", "model", "created_at",
 ]
 
 
@@ -103,13 +104,14 @@ def _pg_save(rec):
         cur.execute(
             "INSERT INTO reviews "
             "(repo, pr_number, title, author, approved, confidence, summary, "
-            " issues, suggestions, past_decisions, source, model) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id, created_at",
+            " issues, suggestions, past_decisions, hipaa_review, source, model) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id, created_at",
             (
                 rec["repo"], rec["pr_number"], rec.get("title"), rec.get("author"),
                 rec.get("approved"), rec.get("confidence"), rec.get("summary"),
                 json.dumps(rec["issues"]), json.dumps(rec["suggestions"]),
-                json.dumps(rec["past_decisions"]), rec.get("source"), rec.get("model"),
+                json.dumps(rec["past_decisions"]), json.dumps(rec["hipaa_review"]),
+                rec.get("source"), rec.get("model"),
             ),
         )
         review_id, created_at = cur.fetchone()
