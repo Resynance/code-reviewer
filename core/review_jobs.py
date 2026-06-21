@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 
 _FILE_PATH = Path(__file__).parent.parent / "review_jobs.json"
 _LOCK = threading.Lock()
+_PG_SCHEMA_LOCK = threading.Lock()
+_PG_SCHEMA_READY = False
 
 # Columns mirror the postgres table; the file backend stores the same shape.
 _FIELDS = (
@@ -173,9 +175,47 @@ def _row_to_job(row):
     return job
 
 
+def _pg_ensure_schema():
+    """Create/upgrade the review_jobs table in-place for older deployments."""
+    global _PG_SCHEMA_READY
+    if _PG_SCHEMA_READY:
+        return
+    import db
+
+    with _PG_SCHEMA_LOCK:
+        if _PG_SCHEMA_READY:
+            return
+        with db.connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS public.review_jobs ("
+                "  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),"
+                "  status text NOT NULL DEFAULT 'queued',"
+                "  request jsonb NOT NULL,"
+                "  result jsonb,"
+                "  error text,"
+                "  created_at timestamptz NOT NULL DEFAULT now(),"
+                "  updated_at timestamptz NOT NULL DEFAULT now()"
+                ")"
+            )
+            cur.execute(
+                "ALTER TABLE public.review_jobs "
+                "ADD COLUMN IF NOT EXISTS job_type text NOT NULL DEFAULT 'review', "
+                "ADD COLUMN IF NOT EXISTS executor text NOT NULL DEFAULT 'inline', "
+                "ADD COLUMN IF NOT EXISTS claimed_by text, "
+                "ADD COLUMN IF NOT EXISTS started_at timestamptz, "
+                "ADD COLUMN IF NOT EXISTS completed_at timestamptz"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS review_jobs_queue_idx "
+                "ON public.review_jobs (executor, status, created_at)"
+            )
+        _PG_SCHEMA_READY = True
+
+
 def _pg_create(request, job_type, executor):
     import db
 
+    _pg_ensure_schema()
     with db.connect() as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO review_jobs (job_type, executor, request) VALUES (%s, %s, %s) "
@@ -189,6 +229,7 @@ def _pg_create(request, job_type, executor):
 def _pg_get(job_id):
     import db
 
+    _pg_ensure_schema()
     with db.connect() as conn, conn.cursor() as cur:
         cur.execute(_SELECT + " WHERE id = %s", (job_id,))
         row = cur.fetchone()
@@ -198,6 +239,7 @@ def _pg_get(job_id):
 def _pg_claim_next(job_types, executor, worker_id):
     import db
 
+    _pg_ensure_schema()
     where = ["status = 'queued'", "executor = %s"]
     params = [executor]
     if job_types:
@@ -224,6 +266,7 @@ def _pg_claim_next(job_types, executor, worker_id):
 def _pg_update(job_id, status, result, error, claimed_by):
     import db
 
+    _pg_ensure_schema()
     sets, params = [], []
     if status is not None:
         sets.append("status = %s")

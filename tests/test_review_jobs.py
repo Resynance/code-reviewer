@@ -1,5 +1,8 @@
 """Tests for core/review_jobs.py queue transitions."""
 
+from datetime import datetime, timezone
+import sys
+
 import pytest
 
 import review_jobs
@@ -37,3 +40,62 @@ def test_update_job_marks_completed(jobs):
     assert updated["status"] == "done"
     assert updated["result"]["summary"] == "ok"
     assert updated["completed_at"]
+
+
+def test_pg_create_auto_ensures_queue_schema(monkeypatch):
+    monkeypatch.setenv("REVIEW_STORE_BACKEND", "postgres")
+    monkeypatch.setattr(review_jobs, "_PG_SCHEMA_READY", False)
+
+    now = datetime.now(timezone.utc)
+    calls = []
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql, params=None):
+            calls.append((sql, params))
+
+        def fetchone(self):
+            return (
+                "123",
+                "review",
+                "inline",
+                "queued",
+                {"repo": "org/a"},
+                None,
+                None,
+                None,
+                None,
+                None,
+                now,
+                now,
+            )
+
+    class FakeConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    class FakeDb:
+        @staticmethod
+        def connect():
+            return FakeConn()
+
+    monkeypatch.setitem(sys.modules, "db", FakeDb)
+
+    job = review_jobs.create_job({"repo": "org/a"}, job_type="review", executor="inline")
+
+    assert job["id"] == "123"
+    assert "create table if not exists public.review_jobs" in calls[0][0].lower()
+    assert "alter table public.review_jobs" in calls[1][0].lower()
+    assert "create index if not exists review_jobs_queue_idx" in calls[2][0].lower()
+    assert "insert into review_jobs (job_type, executor, request)" in calls[3][0].lower()
