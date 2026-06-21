@@ -10,6 +10,10 @@ export default function SettingsPage() {
   const [embeddingInput, setEmbeddingInput] = useState('')
   const [savingModel, setSavingModel] = useState(false)
   const [modelMsg, setModelMsg] = useState(null)
+  const [llmExecutionMode, setLlmExecutionMode] = useState('inline')
+  const [workerSecret, setWorkerSecret] = useState('')
+  const [savingLlm, setSavingLlm] = useState(false)
+  const [llmMsg, setLlmMsg] = useState(null)
 
   // GitHub token list
   const [tokenInput, setTokenInput] = useState('')
@@ -52,6 +56,7 @@ export default function SettingsPage() {
       setSettings(s)
       setModelsList(s.openrouter_models || [])
       setEmbeddingInput(s.embedding_model || '')
+      setLlmExecutionMode(s.llm_execution_mode || 'inline')
     }).catch(() => {})
     api.listAccess().then(r => setAccessEmails(r.emails || [])).catch(() => {})
     api.githubOwners().then(r => setOwners(r.owners || [])).catch(() => {})
@@ -134,6 +139,26 @@ export default function SettingsPage() {
       setModelMsg(e.message)
     } finally {
       setSavingModel(false)
+    }
+  }
+
+  async function saveLlmSettings() {
+    setSavingLlm(true)
+    setLlmMsg(null)
+    try {
+      const s = await api.saveSettings({
+        llm_execution_mode: llmExecutionMode,
+        llm_worker_secret: workerSecret,
+      })
+      setSettings(s)
+      setLlmExecutionMode(s.llm_execution_mode || 'inline')
+      setWorkerSecret('')
+      setLlmMsg('Saved ✓')
+      refreshStats()
+    } catch (e) {
+      setLlmMsg(e.message)
+    } finally {
+      setSavingLlm(false)
     }
   }
 
@@ -251,11 +276,50 @@ export default function SettingsPage() {
             <StatRow label="Model" value={stats.model || '—'} />
             <StatRow label="Provider" value={stats.provider || 'auto'} />
             <StatRow label="Embedding model" value={stats.embedding_model || '—'} />
+            <StatRow label="LLM execution" value={stats.llm_execution_mode === 'local_queue' ? 'Local queue' : 'Inline'} />
+            <StatRow label="Worker secret" value={stats.llm_worker_secret_set ? 'Configured ✓' : 'Not set ✗'} ok={stats.llm_worker_secret_set} />
             <StatRow label="Vector backend" value={stats.backend} />
             <StatRow label="Repositories" value={`${repos.length}`} />
             <StatRow label="Decisions stored (sample)" value={`~${stats.decisions_sampled}`} />
           </div>
         ) : <div style={{ color: 'var(--text-3)' }}>Loading…</div>}
+      </Card>
+
+      <Card title="LLM Execution">
+        <p style={{ color: 'var(--text-2)', fontSize: 13, marginBottom: 16 }}>
+          Choose whether reviews and assessments run inside this API process or are queued in the database for a separate local worker to claim.
+        </p>
+
+        <div style={{ marginBottom: 14 }}>
+          <label style={labelStyle}>Execution mode</label>
+          <select value={llmExecutionMode} onChange={e => setLlmExecutionMode(e.target.value)} style={inputStyle}>
+            <option value="inline">Inline in this app</option>
+            <option value="local_queue">Queue for local worker</option>
+          </select>
+        </div>
+
+        <div>
+          <label style={labelStyle}>
+            Worker secret {settings?.llm_worker_secret_set
+              ? <span style={{ color: 'var(--green)' }}>· set</span>
+              : <span style={{ color: 'var(--text-3)' }}>· not set</span>}
+          </label>
+          <input
+            type="password"
+            value={workerSecret}
+            onChange={e => setWorkerSecret(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && saveLlmSettings()}
+            placeholder={settings?.llm_worker_secret_set ? 'Leave blank to clear or replace' : 'Shared secret for /worker/llm/*'}
+            style={inputStyle}
+          />
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14 }}>
+          <button onClick={saveLlmSettings} disabled={savingLlm} style={primaryBtn(savingLlm)}>
+            {savingLlm ? 'Saving…' : 'Save'}
+          </button>
+          {llmMsg && <span style={{ fontSize: 13, color: llmMsg === 'Saved ✓' ? 'var(--green)' : 'var(--red)' }}>{llmMsg}</span>}
+        </div>
       </Card>
 
       {/* Model list */}

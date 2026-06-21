@@ -63,6 +63,7 @@ class AssessmentResult:
     tech_stack: list = field(default_factory=list)
     key_components: list = field(default_factory=list)
     vulnerabilities: list = field(default_factory=list)
+    hipaa_review: dict = field(default_factory=dict)
     model: str = ""
 
 
@@ -196,6 +197,7 @@ class AssessmentEngine:
             tech_stack=payload.get("tech_stack", []) or [],
             key_components=payload.get("key_components", []) or [],
             vulnerabilities=payload.get("vulnerabilities", []) or [],
+            hipaa_review={"enabled": request.hipaa, "hipaa_relevant": request.hipaa},
         )
         result.model = model
         return result

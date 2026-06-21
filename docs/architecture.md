@@ -72,14 +72,14 @@ grounded in that repo's precedent **and** org-wide policies, but not other repos
 ## Request lifecycle — a review
 
 1. The UI (or webhook) POSTs PR metadata + diff to `/api/review`.
-2. `main.py` checks `OPENROUTER_API_KEY`, then calls `engine.review(request)`.
-3. The engine queries the store with the PR's title/description/files, scoped to
-   `repo + global`, to get the most relevant past decisions.
-4. It builds a prompt embedding those decisions and the diff, and calls
-   OpenRouter with `tool_choice` forcing the `submit_review` function — so the
-   model must return a schema-valid JSON payload.
-5. The payload is parsed into a `ReviewResult` (summary, approved, confidence,
-   issues, suggestions, applied past decisions) and returned as JSON.
+2. `main.py` persists a `review_jobs` row tagged with an execution mode:
+   `inline` or `local_queue`.
+3. In `inline` mode, the client calls `/api/review/{id}/run` and the backend
+   executes the review immediately.
+4. In `local_queue` mode, a separate worker polls `/worker/llm/claim`, runs the
+   model locally, then posts the result to `/worker/llm/{id}/complete`.
+5. Either way, the finished payload is saved to history and returned via
+   `GET /api/review/{id}` polling.
 
 Model and provider are resolved from `config_store` **per review**, so changing
 them in the UI takes effect on the next request without a restart.

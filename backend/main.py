@@ -16,7 +16,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends, Query
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends, Query, Header, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
@@ -162,6 +162,8 @@ class SettingsBody(BaseModel):
     openrouter_model_2: Optional[str] = None
     openrouter_provider_2: Optional[str] = None
     embedding_model: Optional[str] = None
+    llm_execution_mode: Optional[str] = None
+    llm_worker_secret: Optional[str] = None
 
 
 class RepoBody(BaseModel):
@@ -200,6 +202,19 @@ class AssessmentRequestBody(BaseModel):
     hipaa: bool = False
 
 
+class WorkerClaimBody(BaseModel):
+    worker_id: str = ""
+    job_types: list[str] = []
+
+
+class WorkerCompleteBody(BaseModel):
+    result: dict
+
+
+class WorkerErrorBody(BaseModel):
+    error: str
+
+
 # ------------------------------------------------------------------ #
 # Helpers
 # ------------------------------------------------------------------ #
@@ -214,6 +229,63 @@ def _token_for(repo: str) -> str:
     if not token:
         raise HTTPException(status_code=400, detail="GitHub token not configured")
     return token
+
+
+def _llm_execution_mode() -> str:
+    return config_store.get_llm_execution_mode()
+
+
+def _require_worker_secret(provided: Optional[str]):
+    expected = config_store.get_llm_worker_secret()
+    if not expected:
+        raise HTTPException(status_code=403, detail="LLM worker secret not configured")
+    if not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="Invalid worker secret")
+
+
+def _save_review_payload(request_payload: dict, result_payload: dict, source: str):
+    """Persist a review payload without requiring a live ReviewResult object."""
+    try:
+        review_store.save_review({
+            "repo": request_payload.get("repo"),
+            "pr_number": result_payload.get("pr_number", request_payload.get("pr_number")),
+            "title": request_payload.get("title"),
+            "author": request_payload.get("author", "unknown"),
+            "approved": result_payload.get("approved"),
+            "confidence": result_payload.get("confidence"),
+            "summary": result_payload.get("summary"),
+            "issues": result_payload.get("issues") or [],
+            "suggestions": result_payload.get("suggestions") or [],
+            "past_decisions": result_payload.get("past_decisions_applied") or [],
+            "hipaa_review": result_payload.get("hipaa_review") or {},
+            "source": source,
+            "model": result_payload.get("model"),
+        })
+    except Exception:
+        pass
+
+
+def _save_assessment_payload(result_payload: dict):
+    try:
+        assessment_store.save_assessment({
+            "repo": result_payload.get("repo"),
+            "summary": result_payload.get("summary"),
+            "purpose": result_payload.get("purpose"),
+            "tech_stack": result_payload.get("tech_stack") or [],
+            "key_components": result_payload.get("key_components") or [],
+            "vulnerabilities": result_payload.get("vulnerabilities") or [],
+            "hipaa_review": result_payload.get("hipaa_review") or {},
+            "model": result_payload.get("model"),
+        })
+    except Exception:
+        logger.warning("Failed to persist worker assessment for %s", result_payload.get("repo"), exc_info=True)
+
+
+def _persist_local_job_result(job: dict, result_payload: dict):
+    if job.get("job_type") == "assessment":
+        _save_assessment_payload(result_payload)
+    else:
+        _save_review_payload(job.get("request") or {}, result_payload, source="local_worker")
 
 
 # ------------------------------------------------------------------ #
@@ -255,6 +327,7 @@ def _execute_review(body: ReviewRequestBody, source: str) -> dict:
         "issues": result.issues,
         "suggestions": result.suggestions,
         "past_decisions_applied": result.past_decisions_applied,
+        "hipaa_review": result.hipaa_review,
         "model": result.model,
     }
 
@@ -267,9 +340,10 @@ def create_review(body: ReviewRequestBody):
     if held in one request (a 504). Instead the client enqueues here, kicks off
     POST /api/review/{id}/run, and polls GET /api/review/{id} for the result.
     """
-    if not os.getenv("OPENROUTER_API_KEY"):
+    executor = _llm_execution_mode()
+    if executor == "inline" and not os.getenv("OPENROUTER_API_KEY"):
         raise HTTPException(status_code=400, detail="OPENROUTER_API_KEY not set")
-    job = review_jobs.create_job(body.model_dump())
+    job = review_jobs.create_job(body.model_dump(), job_type="review", executor=executor)
     return {"id": job["id"], "status": job["status"]}
 
 
@@ -284,6 +358,10 @@ def run_review_job(job_id: str):
     job = review_jobs.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Review job not found")
+    if job.get("job_type") != "review":
+        raise HTTPException(status_code=404, detail="Review job not found")
+    if job.get("executor") != "inline":
+        return job
     if job["status"] != "queued":
         return job
     review_jobs.update_job(job_id, status="running")
@@ -298,7 +376,7 @@ def run_review_job(job_id: str):
 def get_review_job(job_id: str):
     """Poll a review job's status/result."""
     job = review_jobs.get_job(job_id)
-    if not job:
+    if not job or job.get("job_type") != "review":
         raise HTTPException(status_code=404, detail="Review job not found")
     return job
 
@@ -317,6 +395,7 @@ def _save_review(request, result, source):
             "issues": result.issues,
             "suggestions": result.suggestions,
             "past_decisions": result.past_decisions_applied,
+            "hipaa_review": result.hipaa_review,
             "source": source,
             "model": result.model,
         })
@@ -334,11 +413,12 @@ def list_review_history(repo: Optional[str] = None, pr_number: Optional[int] = N
 @app.post("/api/assessments")
 def create_assessment(body: AssessmentRequestBody):
     """Enqueue an async project assessment and return its job id."""
-    if not os.getenv("OPENROUTER_API_KEY"):
+    executor = _llm_execution_mode()
+    if executor == "inline" and not os.getenv("OPENROUTER_API_KEY"):
         raise HTTPException(status_code=400, detail="OPENROUTER_API_KEY not set")
     payload = body.model_dump()
     payload["_type"] = "assessment"
-    job = review_jobs.create_job(payload)
+    job = review_jobs.create_job(payload, job_type="assessment", executor=executor)
     return {"id": job["id"], "status": job["status"]}
 
 
@@ -348,6 +428,10 @@ def run_assessment_job(job_id: str):
     job = review_jobs.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Assessment job not found")
+    if job.get("job_type") != "assessment":
+        raise HTTPException(status_code=404, detail="Assessment job not found")
+    if job.get("executor") != "inline":
+        return job
     if job["status"] != "queued":
         return job
     review_jobs.update_job(job_id, status="running")
@@ -357,6 +441,7 @@ def run_assessment_job(job_id: str):
             repo=req["repo"],
             model=req.get("model"),
             provider=req.get("provider"),
+            hipaa=req.get("hipaa", False),
         ))
         return review_jobs.update_job(job_id, status="done", result=result)
     except Exception as e:
@@ -367,7 +452,7 @@ def run_assessment_job(job_id: str):
 def get_assessment_job(job_id: str):
     """Poll an assessment job's status/result."""
     job = review_jobs.get_job(job_id)
-    if not job:
+    if not job or job.get("job_type") != "assessment":
         raise HTTPException(status_code=404, detail="Assessment job not found")
     return job
 
@@ -407,6 +492,7 @@ def _execute_assessment(body: AssessmentRequestBody) -> dict:
         "tech_stack": result.tech_stack,
         "key_components": result.key_components,
         "vulnerabilities": result.vulnerabilities,
+        "hipaa_review": result.hipaa_review,
         "model": result.model,
     }
 
@@ -494,6 +580,8 @@ def get_stats():
         "model": config_store.get_model(),
         "provider": config_store.get_provider(),
         "embedding_model": config_store.get_embedding_model(),
+        "llm_execution_mode": config_store.get_llm_execution_mode(),
+        "llm_worker_secret_set": bool(config_store.get_llm_worker_secret()),
         "api_key_configured": bool(os.getenv("OPENROUTER_API_KEY")),
         "github_token_configured": bool(config_store.get_github_token()),
     }
@@ -513,6 +601,8 @@ def get_settings():
         "github_token_set": bool(config_store.get_github_token()),
         "github_tokens": [{"username": t["username"], "orgs": t.get("orgs", [])} for t in tokens],
         "webhook_secret_set": bool(config_store.get_webhook_secret()),
+        "llm_execution_mode": config_store.get_llm_execution_mode(),
+        "llm_worker_secret_set": bool(config_store.get_llm_worker_secret()),
         # Model list — not secret, return the effective resolved values.
         "openrouter_models": config_store.get_models(),
         # Legacy fields for backward compat with older frontend versions.
@@ -550,9 +640,60 @@ def update_settings(body: SettingsBody):
         update["openrouter_provider_2"] = body.openrouter_provider_2.strip()
     if body.embedding_model is not None:
         update["embedding_model"] = body.embedding_model.strip()
+    if body.llm_execution_mode is not None:
+        mode = body.llm_execution_mode.strip().lower()
+        if mode not in {"inline", "local_queue"}:
+            raise HTTPException(status_code=400, detail="llm_execution_mode must be inline or local_queue")
+        update["llm_execution_mode"] = mode
+    if body.llm_worker_secret is not None:
+        update["llm_worker_secret"] = body.llm_worker_secret.strip()
     if update:
         config_store.save_config(update)
     return get_settings()
+
+
+@app.post("/worker/llm/claim")
+def claim_llm_job(body: WorkerClaimBody, x_worker_secret: Optional[str] = Header(default=None, alias="X-Worker-Secret")):
+    """Claim the next queued local-queue LLM job for an external worker."""
+    _require_worker_secret(x_worker_secret)
+    wanted = [t for t in body.job_types if t in {"review", "assessment"}]
+    job = review_jobs.claim_next_job(job_types=wanted or None, executor="local_queue", worker_id=body.worker_id.strip())
+    if not job:
+        return Response(status_code=204)
+    return job
+
+
+@app.post("/worker/llm/{job_id}/complete")
+def complete_llm_job(
+    job_id: str,
+    body: WorkerCompleteBody,
+    x_worker_secret: Optional[str] = Header(default=None, alias="X-Worker-Secret"),
+):
+    """Store a local worker result and mark the job done."""
+    _require_worker_secret(x_worker_secret)
+    job = review_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="LLM job not found")
+    if job.get("executor") != "local_queue":
+        raise HTTPException(status_code=400, detail="Job is not configured for local queue execution")
+    _persist_local_job_result(job, body.result)
+    return review_jobs.update_job(job_id, status="done", result=body.result)
+
+
+@app.post("/worker/llm/{job_id}/error")
+def fail_llm_job(
+    job_id: str,
+    body: WorkerErrorBody,
+    x_worker_secret: Optional[str] = Header(default=None, alias="X-Worker-Secret"),
+):
+    """Store a local worker failure and mark the job errored."""
+    _require_worker_secret(x_worker_secret)
+    job = review_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="LLM job not found")
+    if job.get("executor") != "local_queue":
+        raise HTTPException(status_code=400, detail="Job is not configured for local queue execution")
+    return review_jobs.update_job(job_id, status="error", error=body.error)
 
 
 @app.get("/api/repos")

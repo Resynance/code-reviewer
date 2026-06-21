@@ -53,6 +53,7 @@ class ReviewResult:
     issues: list = field(default_factory=list)
     suggestions: list = field(default_factory=list)
     past_decisions_applied: list = field(default_factory=list)
+    hipaa_review: dict = field(default_factory=dict)
     model: str = ""
 
 
@@ -311,4 +312,5 @@ class CodeReviewEngine:
             issues=payload.get("issues", []) or [],
             suggestions=payload.get("suggestions", []) or [],
             past_decisions_applied=applied,
+            hipaa_review={"enabled": request.hipaa},
         )

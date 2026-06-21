@@ -40,6 +40,7 @@ export default function ReviewPage() {
   const [models, setModels] = useState(null) // [{label, model, provider}]
   // Which model slot the user picked; null = model 1 (default).
   const [selectedModel, setSelectedModel] = useState(null)
+  const [executionMode, setExecutionMode] = useState('inline')
   const [hipaa, setHipaa] = useState(false)
   // Tracks the in-flight review job so a superseded/unmounted poll stops.
   const jobRef = useRef(null)
@@ -64,6 +65,7 @@ export default function ReviewPage() {
       const slots = s.openrouter_models || []
       setModels(slots)
       setSelectedModel(slots[0] || null)
+      setExecutionMode(s.llm_execution_mode || 'inline')
     }).catch(() => {})
   }, [])
 
@@ -128,7 +130,7 @@ export default function ReviewPage() {
       jobRef.current = id
       // Drive the work in the background; the result is read via polling, so a
       // dropped run connection still recovers once the job finishes.
-      api.runReview(id).catch(() => {})
+      if (executionMode === 'inline') api.runReview(id).catch(() => {})
       poll(id)
     } catch (e) {
       setError(e.message)

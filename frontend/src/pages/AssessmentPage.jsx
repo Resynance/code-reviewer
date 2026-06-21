@@ -8,6 +8,7 @@ export default function AssessmentPage() {
   const [repo, setRepo] = useState('')
   const [models, setModels] = useState(null)
   const [selectedModel, setSelectedModel] = useState(null)
+  const [executionMode, setExecutionMode] = useState('inline')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [result, setResult] = useState(null)
@@ -27,6 +28,7 @@ export default function AssessmentPage() {
       const slots = s.openrouter_models || []
       setModels(slots)
       setSelectedModel(slots[0] || null)
+      setExecutionMode(s.llm_execution_mode || 'inline')
     }).catch(() => {})
   }, [])
 
@@ -49,7 +51,7 @@ export default function AssessmentPage() {
         hipaa,
       })
       jobRef.current = id
-      api.runAssessment(id).catch(() => {})
+      if (executionMode === 'inline') api.runAssessment(id).catch(() => {})
       poll(id)
     } catch (e) {
       setError(e.message)

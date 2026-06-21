@@ -6,6 +6,7 @@ approve/changes verdict — informed by semantically-similar prior PRs and ADRs.
 
 **Features**
 - LLM reviews via [OpenRouter](https://openrouter.ai) — any model, configurable in the UI.
+- Optional **local LLM queue** mode — persist requests in the DB for a separate worker running on your machine to claim and complete.
 - A searchable **decision store** (ChromaDB or pgvector) seeded by backfilling
   closed GitHub PRs.
 - **Per-repo + global** decision scoping — a review sees its repo's precedent plus org-wide policies.
@@ -81,6 +82,8 @@ server-side to `config.json` (gitignored):
 - **Model & provider** — the OpenRouter model slug, and an optional upstream
   provider to pin (e.g. `Anthropic`). Changes take effect on the next review,
   no restart needed.
+- **LLM execution mode** — run inside this app (`inline`) or queue jobs for a
+  local worker (`local_queue`) using a shared worker secret.
 - **GitHub token** and **webhook secret** — entered in the GitHub Access form.
 - **Repositories** — added/removed in the Repositories card; each has a
   **Backfill** button that imports its closed PRs into the decision store.
