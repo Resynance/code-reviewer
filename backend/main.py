@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from backend.auth import require_user, require_admin
+import rate_limit as _rate_limit
 
 # Add parent dir so we can import the core modules
 sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
@@ -46,6 +47,45 @@ from github_backfill import (
     post_pr_comment,
     create_issue,
 )
+
+
+# ------------------------------------------------------------------ #
+# Rate limiting
+# ------------------------------------------------------------------ #
+
+def _rate_limit_key(request: Request) -> str:
+    """User email from JWT, or remote IP as fallback when auth is disabled."""
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        try:
+            from backend.auth import _decode
+            claims = _decode(auth[len("Bearer "):])
+            return claims.get("email") or "anon"
+        except Exception:
+            pass
+    return request.client.host if request.client else "anon"
+
+
+async def require_review_quota(request: Request):
+    key = _rate_limit_key(request)
+    allowed, retry_after = _rate_limit.check(f"review:{key}")
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Try again in {retry_after}s.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+
+async def require_assessment_quota(request: Request):
+    key = _rate_limit_key(request)
+    allowed, retry_after = _rate_limit.check(f"assess:{key}")
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Try again in {retry_after}s.",
+            headers={"Retry-After": str(retry_after)},
+        )
 
 
 # ------------------------------------------------------------------ #
@@ -259,7 +299,7 @@ def _execute_review(body: ReviewRequestBody, source: str) -> dict:
     }
 
 
-@app.post("/api/review")
+@app.post("/api/review", dependencies=[Depends(require_review_quota)])
 def create_review(body: ReviewRequestBody):
     """Enqueue an async review and return its job id.
 
@@ -331,7 +371,7 @@ def list_review_history(repo: Optional[str] = None, pr_number: Optional[int] = N
     return {"reviews": reviews, "count": len(reviews)}
 
 
-@app.post("/api/assessments")
+@app.post("/api/assessments", dependencies=[Depends(require_assessment_quota)])
 def create_assessment(body: AssessmentRequestBody):
     """Enqueue an async project assessment and return its job id."""
     if not os.getenv("OPENROUTER_API_KEY"):

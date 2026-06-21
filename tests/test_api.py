@@ -4,6 +4,7 @@ import hmac
 import hashlib
 
 import config_store
+import rate_limit
 from review_engine import ReviewResult
 from assessment_engine import AssessmentResult
 
@@ -466,3 +467,78 @@ def test_list_assessments(client, monkeypatch):
 
     only_a = tc.get("/api/assessments", params={"repo": "org/a"}).json()
     assert only_a["count"] == 1 and only_a["assessments"][0]["repo"] == "org/a"
+
+
+# ----- rate limiting ----- #
+
+def _reset_rate_limit():
+    """Clear the in-memory rate limit windows between tests."""
+    rate_limit._windows.clear()
+
+
+def test_rate_limit_review_blocks_after_limit(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    monkeypatch.setenv("RATE_LIMIT_REQUESTS", "2")
+    monkeypatch.setenv("RATE_LIMIT_WINDOW", "60")
+    _reset_rate_limit()
+
+    class FakeEngine:
+        def review(self, req):
+            return ReviewResult(pr_number=req.pr_number, summary="ok", approved=True,
+                                confidence=0.9, issues=[], suggestions=[], past_decisions_applied=[])
+
+    monkeypatch.setattr(main, "get_engine", lambda: FakeEngine())
+
+    body = {"pr_number": 1, "repo": "org/a", "title": "t", "diff": "+x"}
+    assert tc.post("/api/review", json=body).status_code == 200
+    assert tc.post("/api/review", json=body).status_code == 200
+    resp = tc.post("/api/review", json=body)
+    assert resp.status_code == 429
+    assert "Retry-After" in resp.headers
+
+
+def test_rate_limit_assessment_blocks_after_limit(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    monkeypatch.setenv("RATE_LIMIT_REQUESTS", "1")
+    monkeypatch.setenv("RATE_LIMIT_WINDOW", "60")
+    _reset_rate_limit()
+    monkeypatch.setattr(main, "AssessmentEngine", _fake_assessment_engine())
+
+    assert tc.post("/api/assessments", json={"repo": "org/a"}).status_code == 200
+    assert tc.post("/api/assessments", json={"repo": "org/a"}).status_code == 429
+
+
+def test_rate_limit_disabled_when_zero(client, monkeypatch):
+    tc, _ = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    monkeypatch.setenv("RATE_LIMIT_REQUESTS", "0")
+    _reset_rate_limit()
+
+    body = {"pr_number": 1, "repo": "org/a", "title": "t", "diff": "+x"}
+    for _ in range(5):
+        assert tc.post("/api/review", json=body).status_code == 200
+
+
+def test_rate_limit_review_independent_from_assessment(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    monkeypatch.setenv("RATE_LIMIT_REQUESTS", "1")
+    monkeypatch.setenv("RATE_LIMIT_WINDOW", "60")
+    _reset_rate_limit()
+    monkeypatch.setattr(main, "AssessmentEngine", _fake_assessment_engine())
+
+    class FakeEngine:
+        def review(self, req):
+            return ReviewResult(pr_number=req.pr_number, summary="ok", approved=True,
+                                confidence=0.9, issues=[], suggestions=[], past_decisions_applied=[])
+
+    monkeypatch.setattr(main, "get_engine", lambda: FakeEngine())
+
+    # one review allowed, one assessment allowed — separate buckets
+    assert tc.post("/api/review", json={"pr_number": 1, "repo": "org/a", "title": "t", "diff": "+x"}).status_code == 200
+    assert tc.post("/api/assessments", json={"repo": "org/a"}).status_code == 200
+    # second of each is blocked
+    assert tc.post("/api/review", json={"pr_number": 1, "repo": "org/a", "title": "t", "diff": "+x"}).status_code == 429
+    assert tc.post("/api/assessments", json={"repo": "org/a"}).status_code == 429
