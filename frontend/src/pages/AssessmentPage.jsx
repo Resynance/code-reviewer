@@ -12,6 +12,7 @@ export default function AssessmentPage() {
   const [error, setError] = useState(null)
   const [result, setResult] = useState(null)
   const [history, setHistory] = useState([])
+  const [hipaa, setHipaa] = useState(false)
   const jobRef = useRef(null)
   useEffect(() => () => { jobRef.current = null }, [])
 
@@ -45,6 +46,7 @@ export default function AssessmentPage() {
         repo,
         model: selectedModel?.model || undefined,
         provider: selectedModel?.provider || undefined,
+        hipaa,
       })
       jobRef.current = id
       api.runAssessment(id).catch(() => {})
@@ -106,6 +108,12 @@ export default function AssessmentPage() {
           )}
         </div>
 
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+          <input type="checkbox" checked={hipaa} onChange={e => setHipaa(e.target.checked)}
+            style={{ accentColor: 'var(--accent)', cursor: 'pointer' }} />
+          <span style={{ fontSize: 13, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>Check HIPAA compliance</span>
+        </label>
+
         <button onClick={submit} disabled={loading || !repo} style={btnStyle(loading || !repo)}>
           {loading ? '⟳ Analysing…' : '▶ Run Assessment'}
         </button>
@@ -143,7 +151,7 @@ export default function AssessmentPage() {
       )}
 
       {/* Result */}
-      {result && <AssessmentResult result={result} />}
+      {result && <AssessmentResult key={result.id ?? result.created_at ?? result.repo} result={result} />}
 
       {/* History */}
       {history.length > 0 && !loading && (
@@ -188,6 +196,54 @@ export default function AssessmentPage() {
 function AssessmentResult({ result }) {
   const vulnCount = result.vulnerabilities?.length || 0
   const criticalCount = result.vulnerabilities?.filter(v => v.severity === 'critical' || v.severity === 'high').length || 0
+
+  const [selVulns, setSelVulns] = useState(new Set())
+  const [issuing, setIssuing] = useState(false)
+  const [issueUrl, setIssueUrl] = useState(null)
+  const [issueErr, setIssueErr] = useState(null)
+
+  const toggleVuln = (i) => {
+    const n = new Set(selVulns)
+    n.has(i) ? n.delete(i) : n.add(i)
+    setSelVulns(n)
+  }
+
+  function buildIssueBody() {
+    const vulns = [...selVulns].sort((a, b) => a - b)
+      .map(i => result.vulnerabilities[i]).filter(Boolean)
+    const lines = ['## 🔍 Assessment Findings', '']
+    vulns.forEach(v => {
+      lines.push(`### [${(v.severity || '').toUpperCase()}] ${v.title}`)
+      lines.push(v.description)
+      if (v.recommendation) lines.push(`\n> 💡 ${v.recommendation}`)
+      lines.push('')
+    })
+    lines.push(`—\nFrom assessment of \`${result.repo}\``)
+    return lines.join('\n')
+  }
+
+  function issueTitle() {
+    const vulns = [...selVulns].sort((a, b) => a - b)
+      .map(i => result.vulnerabilities[i]).filter(Boolean)
+    if (vulns.length === 1) {
+      return `[${(vulns[0].severity || '').toUpperCase()}] ${vulns[0].title}`.slice(0, 250)
+    }
+    return `Security findings — ${result.repo} (${vulns.length})`
+  }
+
+  async function postIssue() {
+    const body = buildIssueBody()
+    if (!selVulns.size) return
+    setIssuing(true); setIssueErr(null); setIssueUrl(null)
+    try {
+      const res = await api.createIssue({ repo: result.repo, title: issueTitle(), body })
+      setIssueUrl(res.html_url)
+    } catch (e) {
+      setIssueErr(e.message)
+    } finally {
+      setIssuing(false)
+    }
+  }
 
   return (
     <div style={{ animation: 'fadeIn 0.3s ease' }}>
@@ -268,32 +324,64 @@ function AssessmentResult({ result }) {
 
       {/* Vulnerabilities */}
       {result.vulnerabilities?.length > 0 ? (
-        <Section title={`Security Findings (${result.vulnerabilities.length})`}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {result.vulnerabilities.map((v, i) => {
-              const color = SEV_COLORS[v.severity] || 'var(--text-2)'
-              return (
-                <div key={i} style={{
-                  border: `1px solid ${color}33`, borderLeft: `3px solid ${color}`,
-                  borderRadius: '0 8px 8px 0', padding: '12px 16px',
-                  background: `${color}08`,
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                    <span style={{
-                      fontSize: 10, fontWeight: 600, letterSpacing: '0.05em',
-                      color, background: `${color}20`, padding: '2px 6px', borderRadius: 4,
-                    }}>{v.severity.toUpperCase()}</span>
-                    <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--text)' }}>{v.title}</span>
-                  </div>
-                  <div style={{ fontSize: 13, color: 'var(--text)', marginBottom: 6, lineHeight: 1.5 }}>{v.description}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-2)', paddingLeft: 10, borderLeft: '2px solid var(--border2)', lineHeight: 1.5 }}>
-                    💡 {v.recommendation}
-                  </div>
-                </div>
-              )
-            })}
+        <>
+          {/* Action bar */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14,
+            padding: '10px 16px', background: 'var(--surface)',
+            border: '1px solid var(--border)', borderRadius: 10,
+          }}>
+            <span style={{ fontSize: 13, color: 'var(--text-2)' }}>
+              {selVulns.size} selected — tick findings to create a GitHub issue on <code style={{ fontFamily: 'var(--font-mono)' }}>{result.repo}</code>
+            </span>
+            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+              <button onClick={postIssue} disabled={!selVulns.size || issuing} style={{
+                background: (!selVulns.size || issuing) ? 'var(--surface2)' : 'var(--accent)',
+                color: (!selVulns.size || issuing) ? 'var(--text-3)' : '#fff',
+                border: 'none', borderRadius: 8, padding: '8px 16px',
+                fontSize: 13, fontWeight: 500, cursor: (!selVulns.size || issuing) ? 'default' : 'pointer',
+              }}>{issuing ? 'Creating…' : '🐛 Create issue'}</button>
+              {issueUrl && <a href={issueUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: 'var(--green)' }}>✓ Created ↗</a>}
+              {issueErr && <span style={{ fontSize: 12, color: 'var(--red)' }}>⚠ {issueErr}</span>}
+            </div>
           </div>
-        </Section>
+
+          <Section
+            title={`Security Findings (${result.vulnerabilities.length})`}
+            allSelected={selVulns.size === result.vulnerabilities.length}
+            onSelectAll={() => {
+              if (selVulns.size === result.vulnerabilities.length) setSelVulns(new Set())
+              else setSelVulns(new Set(result.vulnerabilities.map((_, i) => i)))
+            }}
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {result.vulnerabilities.map((v, i) => {
+                const color = SEV_COLORS[v.severity] || 'var(--text-2)'
+                return (
+                  <div key={i} style={{
+                    border: `1px solid ${color}33`, borderLeft: `3px solid ${color}`,
+                    borderRadius: '0 8px 8px 0', padding: '12px 16px',
+                    background: `${color}08`,
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                      <input type="checkbox" checked={selVulns.has(i)} onChange={() => toggleVuln(i)}
+                        style={{ accentColor: 'var(--accent)', cursor: 'pointer' }} />
+                      <span style={{
+                        fontSize: 10, fontWeight: 600, letterSpacing: '0.05em',
+                        color, background: `${color}20`, padding: '2px 6px', borderRadius: 4,
+                      }}>{v.severity.toUpperCase()}</span>
+                      <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--text)' }}>{v.title}</span>
+                    </div>
+                    <div style={{ fontSize: 13, color: 'var(--text)', marginBottom: 6, lineHeight: 1.5 }}>{v.description}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-2)', paddingLeft: 10, borderLeft: '2px solid var(--border2)', lineHeight: 1.5 }}>
+                      💡 {v.recommendation}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </Section>
+        </>
       ) : result.vulnerabilities && (
         <Section title="Security Findings">
           <div style={{ fontSize: 13, color: 'var(--text-2)' }}>No notable vulnerabilities found in the reviewed files.</div>
@@ -303,17 +391,28 @@ function AssessmentResult({ result }) {
   )
 }
 
-function Section({ title, children }) {
+function Section({ title, children, onSelectAll, allSelected }) {
   return (
     <div style={{
       background: 'var(--surface)', border: '1px solid var(--border)',
       borderRadius: 10, padding: '16px 20px', marginBottom: 14,
     }}>
-      <div style={{
-        fontSize: 12, fontWeight: 600, letterSpacing: '0.04em',
-        color: 'var(--text-2)', marginBottom: 12, textTransform: 'uppercase',
-      }}>
-        {title}
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
+        <div style={{
+          fontSize: 12, fontWeight: 600, letterSpacing: '0.04em',
+          color: 'var(--text-2)', textTransform: 'uppercase', flex: 1,
+        }}>
+          {title}
+        </div>
+        {onSelectAll && (
+          <button onClick={onSelectAll} style={{
+            background: 'transparent', border: 'none', cursor: 'pointer',
+            fontSize: 11, color: 'var(--accent)', padding: '2px 4px',
+            fontWeight: 500, letterSpacing: '0.03em',
+          }}>
+            {allSelected ? 'Deselect all' : 'Select all'}
+          </button>
+        )}
       </div>
       {children}
     </div>

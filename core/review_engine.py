@@ -41,6 +41,7 @@ class ReviewRequest:
     # which configured model slot to run against.
     model: Optional[str] = None
     provider: Optional[str] = None
+    hipaa: bool = False
 
 
 @dataclass
@@ -252,6 +253,18 @@ class CodeReviewEngine:
             decisions_block = "(no relevant past decisions found)"
 
         files = ", ".join(request.files_changed) or "(not specified)"
+        hipaa_section = (
+            "\n## HIPAA Compliance\n"
+            "This review must check for HIPAA compliance in addition to the standard criteria. "
+            "Flag any of the following as high or critical severity:\n"
+            "- PHI (Protected Health Information) stored or transmitted without encryption\n"
+            "- PHI appearing in logs, error messages, or debug output\n"
+            "- Missing or insufficient access controls around health data endpoints\n"
+            "- Absence of audit trails for PHI access or modification\n"
+            "- Broader data access than the minimum necessary principle allows\n"
+            "- PHI used in test fixtures, dev seeds, or non-production environments\n"
+            "- Third-party integrations that may receive PHI without BAA consideration\n"
+        ) if request.hipaa else ""
         return (
             f"# Pull Request #{request.pr_number} — {request.repo}\n"
             f"Title: {request.title}\n"
@@ -259,8 +272,9 @@ class CodeReviewEngine:
             f"Base branch: {request.base_branch}\n"
             f"Files changed: {files}\n\n"
             f"## Description\n{request.description or '(none)'}\n\n"
-            f"## Relevant past decisions\n{decisions_block}\n\n"
-            f"## Diff\n```diff\n{request.diff}\n```\n"
+            f"## Relevant past decisions\n{decisions_block}\n"
+            f"{hipaa_section}"
+            f"\n## Diff\n```diff\n{request.diff}\n```\n"
         )
 
     def _extract_tool_input(self, response) -> dict:
