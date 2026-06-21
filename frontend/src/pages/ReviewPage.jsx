@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { api } from '../lib/api.js'
+import { useMediaQuery } from '../lib/useMediaQuery.js'
 
 // Map a stored history record to the live result shape the panel renders.
 // (History persists `past_decisions`; a fresh run returns `past_decisions_applied`.)
@@ -18,6 +19,7 @@ function historyToResult(r) {
 }
 
 export default function ReviewPage() {
+  const isMobile = useMediaQuery('(max-width: 860px)')
   const [form, setForm] = useState({
     pr_number: '',
     repo: '',
@@ -162,14 +164,14 @@ export default function ReviewPage() {
   }
 
   return (
-    <div style={{ maxWidth: 900 }}>
+    <div style={{ maxWidth: 900, width: '100%' }}>
       <h1 style={{ fontSize: 22, fontWeight: 600, marginBottom: 4 }}>Review a Pull Request</h1>
       <p style={{ color: 'var(--text-2)', marginBottom: 28 }}>
         Select a pull request to load it from GitHub, or fill the fields manually,
         then run an AI review with historical context.
       </p>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16, marginBottom: 16 }}>
         <Field label="Repository">
           {repos.length > 0 ? (
             <select value={form.repo} onChange={e => set('repo', e.target.value)} style={inputStyle}>
@@ -186,7 +188,7 @@ export default function ReviewPage() {
         </Field>
         {repos.length > 0 && (
           <Field label="Load a pull request" style={{ gridColumn: '1 / -1' }}>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 8, flexDirection: isMobile ? 'column' : 'row' }}>
               <select value={selectedPr} onChange={e => loadPr(e.target.value)} style={{ ...inputStyle, flex: 1 }} disabled={loadingPrs || loadingPr}>
                 <option value="">
                   {loadingPrs ? 'Loading pull requests…' : loadingPr ? 'Loading PR…' : 'Select a pull request…'}
@@ -236,12 +238,12 @@ export default function ReviewPage() {
       </Field>
 
       {models && models.length > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: isMobile ? 'stretch' : 'center', flexDirection: isMobile ? 'column' : 'row', gap: 10, marginBottom: 14 }}>
           <span style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>Model</span>
           <select
             value={models.findIndex(m => m.model === selectedModel?.model && m.provider === selectedModel?.provider)}
             onChange={e => setSelectedModel(models[+e.target.value])}
-            style={{ ...inputStyle, width: 'auto', minWidth: 260, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+            style={{ ...inputStyle, width: isMobile ? '100%' : 'auto', minWidth: isMobile ? 0 : 260, fontFamily: 'var(--font-mono)', fontSize: 12 }}
           >
             {models.map((m, i) => (
               <option key={i} value={i}>{m.label ? `${m.label} — ${m.model}` : m.model}</option>
@@ -256,7 +258,7 @@ export default function ReviewPage() {
         <span style={{ fontSize: 13, color: 'var(--text-2)' }}>Run HIPAA-focused review</span>
       </label>
 
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 28 }}>
+      <div style={{ display: 'flex', gap: 12, alignItems: isMobile ? 'stretch' : 'center', flexDirection: isMobile ? 'column' : 'row', marginBottom: 28 }}>
         <button onClick={submit} disabled={loading} style={btnStyle(loading)}>
           {loading ? '⟳ Reviewing…' : '▶ Run Review'}
         </button>

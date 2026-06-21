@@ -10,72 +10,114 @@ const NAV = [
   { key: 'settings', label: 'Settings', icon: '⚙' },
 ]
 
-export default function Sidebar({ current, onNav }) {
-  return (
-    <aside
-      style={{
-        width: 220,
-        flexShrink: 0,
-        background: 'var(--surface)',
-        borderRight: '1px solid var(--border)',
-        display: 'flex',
-        flexDirection: 'column',
-        padding: '20px 14px',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 10px 24px' }}>
-        <span style={{ fontSize: 20 }}>⌘</span>
-        <span style={{ fontSize: 16, fontWeight: 600, letterSpacing: '0.02em' }}>ReviewBot</span>
-      </div>
+export default function Sidebar({ current, onNav, mobile = false, open = false, onClose = () => {} }) {
+  if (mobile && !open) return null
 
-      <nav style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {NAV.map((item) => {
-          const active = item.key === current
-          return (
+  return (
+    <>
+      {mobile && (
+        <button
+          onClick={onClose}
+          aria-label="Close navigation"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            border: 'none',
+            background: 'rgba(4, 8, 14, 0.62)',
+            backdropFilter: 'blur(6px)',
+            zIndex: 20,
+          }}
+        />
+      )}
+      <aside
+        style={{
+          width: mobile ? 280 : 220,
+          maxWidth: mobile ? '84vw' : 220,
+          flexShrink: 0,
+          background: 'var(--surface)',
+          borderRight: '1px solid var(--border)',
+          display: 'flex',
+          flexDirection: 'column',
+          padding: mobile ? '18px 14px max(18px, env(safe-area-inset-bottom))' : '20px 14px',
+          position: mobile ? 'fixed' : 'relative',
+          inset: mobile ? '0 auto 0 0' : 'auto',
+          zIndex: mobile ? 21 : 'auto',
+          boxShadow: mobile ? '0 24px 60px rgba(0, 0, 0, 0.45)' : 'none',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '4px 10px 24px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 20 }}>⌘</span>
+            <span style={{ fontSize: 16, fontWeight: 600, letterSpacing: '0.02em' }}>ReviewBot</span>
+          </div>
+          {mobile && (
             <button
-              key={item.key}
-              onClick={() => onNav(item.key)}
+              onClick={onClose}
+              aria-label="Close navigation"
               style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 12,
-                padding: '10px 12px',
-                borderRadius: 8,
-                border: 'none',
-                cursor: 'pointer',
-                fontSize: 13,
-                fontWeight: 500,
-                textAlign: 'left',
-                color: active ? 'var(--text)' : 'var(--text-2)',
-                background: active ? 'var(--accent-glow)' : 'transparent',
-                transition: 'background 0.15s, color 0.15s',
+                width: 34,
+                height: 34,
+                borderRadius: 9,
+                border: '1px solid var(--border)',
+                background: 'var(--surface2)',
+                color: 'var(--text-2)',
+                fontSize: 16,
               }}
             >
-              <span style={{ width: 16, textAlign: 'center', color: active ? 'var(--accent)' : 'var(--text-3)' }}>
-                {item.icon}
-              </span>
-              {item.label}
+              ✕
             </button>
-          )
-        })}
-      </nav>
-
-      <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <BalanceBadge />
-        {authEnabled && (
-          <button onClick={() => signOut()} style={{
-            margin: '0 10px', background: 'transparent', border: '1px solid var(--border)',
-            color: 'var(--text-2)', borderRadius: 8, padding: '7px 10px', fontSize: 12,
-            display: 'flex', alignItems: 'center', gap: 8,
-          }}>
-            <span style={{ color: 'var(--text-3)' }}>⎋</span> Sign out
-          </button>
-        )}
-        <div style={{ padding: '0 10px', fontSize: 11, color: 'var(--text-3)' }}>
-          ReviewBot
+          )}
         </div>
-      </div>
-    </aside>
+
+        <nav style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {NAV.map((item) => {
+            const active = item.key === current
+            return (
+              <button
+                key={item.key}
+                onClick={() => onNav(item.key)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 12,
+                  padding: mobile ? '12px 14px' : '10px 12px',
+                  borderRadius: 8,
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: mobile ? 14 : 13,
+                  fontWeight: 500,
+                  textAlign: 'left',
+                  color: active ? 'var(--text)' : 'var(--text-2)',
+                  background: active ? 'var(--accent-glow)' : 'transparent',
+                  transition: 'background 0.15s, color 0.15s',
+                }}
+              >
+                <span style={{ width: 16, textAlign: 'center', color: active ? 'var(--accent)' : 'var(--text-3)' }}>
+                  {item.icon}
+                </span>
+                {item.label}
+              </button>
+            )
+          })}
+        </nav>
+
+        <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <BalanceBadge />
+          {authEnabled && (
+            <button onClick={() => signOut()} style={{
+              margin: '0 10px', background: 'transparent', border: '1px solid var(--border)',
+              color: 'var(--text-2)', borderRadius: 8, padding: '7px 10px', fontSize: 12,
+              display: 'flex', alignItems: 'center', gap: 8,
+            }}>
+              <span style={{ color: 'var(--text-3)' }}>⎋</span> Sign out
+            </button>
+          )}
+          <div style={{ padding: '0 10px', fontSize: 11, color: 'var(--text-3)' }}>
+            ReviewBot
+          </div>
+        </div>
+      </aside>
+    </>
   )
 }
 

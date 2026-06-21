@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api.js'
+import { useMediaQuery } from '../lib/useMediaQuery.js'
 
 export default function ReviewsPage() {
+  const isMobile = useMediaQuery('(max-width: 860px)')
   const [reviews, setReviews] = useState([])
   const [loading, setLoading] = useState(true)
   const [repos, setRepos] = useState([])
@@ -26,15 +28,15 @@ export default function ReviewsPage() {
   useEffect(() => { load() }, [load])
 
   return (
-    <div style={{ maxWidth: 880 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+    <div style={{ maxWidth: 880, width: '100%' }}>
+      <div style={{ display: 'flex', alignItems: isMobile ? 'stretch' : 'center', flexDirection: isMobile ? 'column' : 'row', gap: 12, justifyContent: 'space-between', marginBottom: 24 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 600, marginBottom: 4 }}>Review History</h1>
           <p style={{ color: 'var(--text-2)' }}>Every review run, newest first — from the UI and GitHub webhooks.</p>
         </div>
         <select value={repoFilter} onChange={e => setRepoFilter(e.target.value)} style={{
           background: 'var(--surface)', border: '1px solid var(--border)',
-          color: 'var(--text)', borderRadius: 8, padding: '9px 12px', fontSize: 13, outline: 'none',
+          color: 'var(--text)', borderRadius: 8, padding: '9px 12px', fontSize: 13, outline: 'none', width: isMobile ? '100%' : 'auto',
         }}>
           <option value="">All repos</option>
           {repos.map(r => <option key={r} value={r}>{r}</option>)}

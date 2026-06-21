@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api.js'
+import { useMediaQuery } from '../lib/useMediaQuery.js'
 
 export default function DecisionsPage() {
+  const isMobile = useMediaQuery('(max-width: 860px)')
   const [decisions, setDecisions] = useState([])
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
@@ -48,8 +50,8 @@ export default function DecisionsPage() {
   }
 
   return (
-    <div style={{ maxWidth: 860 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+    <div style={{ maxWidth: 860, width: '100%' }}>
+      <div style={{ display: 'flex', alignItems: isMobile ? 'stretch' : 'center', flexDirection: isMobile ? 'column' : 'row', gap: 12, justifyContent: 'space-between', marginBottom: 24 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 600, marginBottom: 4 }}>Decision Store</h1>
           <p style={{ color: 'var(--text-2)' }}>Past PR decisions and architectural choices the reviewer has learned from.</p>
@@ -61,7 +63,7 @@ export default function DecisionsPage() {
       </div>
 
       {/* Search */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexDirection: isMobile ? 'column' : 'row' }}>
         <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && search()}
           placeholder="Search decisions by topic, file, or concept…"
