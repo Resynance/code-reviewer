@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import config_store
+import hipaa
 
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -54,6 +55,7 @@ class ReviewResult:
     suggestions: list = field(default_factory=list)
     past_decisions_applied: list = field(default_factory=list)
     model: str = ""
+    hipaa_review: dict = field(default_factory=dict)
 
 
 # JSON schema for the structured review. The model is forced to call the
@@ -133,6 +135,38 @@ _REVIEW_SCHEMA = {
                 "required": ["ref", "summary", "how_applied"],
             },
         },
+        "hipaa_review": {
+            "type": "object",
+            "description": "HIPAA-focused findings. Use this only when HIPAA review mode is enabled.",
+            "properties": {
+                "hipaa_relevant": {"type": "boolean"},
+                "requires_manual_compliance_review": {"type": "boolean"},
+                "summary": {"type": "string"},
+                "policy_notes_applied": {"type": "array", "items": {"type": "string"}},
+                "hipaa_findings": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "category": {"type": "string"},
+                            "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+                            "title": {"type": "string"},
+                            "evidence": {"type": "string"},
+                            "recommendation": {"type": "string"},
+                            "file": {"type": "string"},
+                            "manual_review": {"type": "boolean"},
+                        },
+                        "required": ["category", "severity", "title", "evidence", "recommendation"],
+                    },
+                },
+                "phi_exposure_risk": {"type": "array", "items": {"type": "object"}},
+                "encryption_gaps": {"type": "array", "items": {"type": "object"}},
+                "access_control_gaps": {"type": "array", "items": {"type": "object"}},
+                "audit_trail_gaps": {"type": "array", "items": {"type": "object"}},
+                "minimum_necessary_gaps": {"type": "array", "items": {"type": "object"}},
+                "third_party_baa_risks": {"type": "array", "items": {"type": "object"}},
+            },
+        },
     },
     "required": ["summary", "approved", "confidence", "issues", "suggestions"],
 }
@@ -156,7 +190,13 @@ When a past decision applies to the current change, follow that precedent and ci
 its ref. Report it in past_decisions_applied so the author sees the connection.
 
 Call the submit_review function exactly once with your structured findings. Set
-approved=false if there is any critical or high-severity issue."""
+approved=false if there is any critical or high-severity issue.
+
+If HIPAA review mode is enabled, use the hipaa_review object for evidence-backed
+HIPAA findings. Do not claim legal certification. Mark
+requires_manual_compliance_review=true when the change is HIPAA-relevant but the
+remaining decision depends on organizational process, BAA status, or deployment
+controls that are not provable from code alone."""
 
 
 class CodeReviewEngine:
@@ -253,18 +293,11 @@ class CodeReviewEngine:
             decisions_block = "(no relevant past decisions found)"
 
         files = ", ".join(request.files_changed) or "(not specified)"
-        hipaa_section = (
-            "\n## HIPAA Compliance\n"
-            "This review must check for HIPAA compliance in addition to the standard criteria. "
-            "Flag any of the following as high or critical severity:\n"
-            "- PHI (Protected Health Information) stored or transmitted without encryption\n"
-            "- PHI appearing in logs, error messages, or debug output\n"
-            "- Missing or insufficient access controls around health data endpoints\n"
-            "- Absence of audit trails for PHI access or modification\n"
-            "- Broader data access than the minimum necessary principle allows\n"
-            "- PHI used in test fixtures, dev seeds, or non-production environments\n"
-            "- Third-party integrations that may receive PHI without BAA consideration\n"
-        ) if request.hipaa else ""
+        hipaa_section = ""
+        if request.hipaa:
+            policy = config_store.get_hipaa_policy(request.repo)
+            deterministic = hipaa.review_findings(request.diff, request.files_changed, policy)
+            hipaa_section = hipaa.prompt_section(policy, deterministic)
         return (
             f"# Pull Request #{request.pr_number} — {request.repo}\n"
             f"Title: {request.title}\n"
@@ -303,12 +336,37 @@ class CodeReviewEngine:
         confidence = float(payload.get("confidence", 0.0) or 0.0)
         confidence = max(0.0, min(1.0, confidence))
 
+        deterministic_hipaa = None
+        if request.hipaa:
+            deterministic_hipaa = hipaa.review_findings(
+                request.diff,
+                request.files_changed,
+                config_store.get_hipaa_policy(request.repo),
+            )
+        hipaa_review = hipaa.normalize_result(
+            payload.get("hipaa_review"),
+            deterministic_hipaa,
+            enabled=request.hipaa,
+        )
+        issues = payload.get("issues", []) or []
+        issues.extend(hipaa.review_issue_overlays(hipaa_review, enabled=request.hipaa))
+        deduped_issues = []
+        seen_issues = set()
+        for issue in issues:
+            key = (issue.get("severity"), issue.get("file"), issue.get("description"))
+            if key not in seen_issues:
+                seen_issues.add(key)
+                deduped_issues.append(issue)
+
         return ReviewResult(
             pr_number=request.pr_number,
             summary=payload.get("summary", ""),
-            approved=bool(payload.get("approved", False)),
+            approved=bool(payload.get("approved", False)) and not any(
+                i.get("severity") in {"critical", "high"} for i in deduped_issues
+            ),
             confidence=confidence,
-            issues=payload.get("issues", []) or [],
+            issues=deduped_issues,
             suggestions=payload.get("suggestions", []) or [],
             past_decisions_applied=applied,
+            hipaa_review=hipaa_review,
         )
