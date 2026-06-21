@@ -54,8 +54,8 @@ class ReviewResult:
     issues: list = field(default_factory=list)
     suggestions: list = field(default_factory=list)
     past_decisions_applied: list = field(default_factory=list)
-    model: str = ""
     hipaa_review: dict = field(default_factory=dict)
+    model: str = ""
 
 
 # JSON schema for the structured review. The model is forced to call the

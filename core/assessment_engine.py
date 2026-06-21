@@ -64,8 +64,8 @@ class AssessmentResult:
     tech_stack: list = field(default_factory=list)
     key_components: list = field(default_factory=list)
     vulnerabilities: list = field(default_factory=list)
-    model: str = ""
     hipaa_review: dict = field(default_factory=dict)
+    model: str = ""
 
 
 _ASSESSMENT_SCHEMA = {

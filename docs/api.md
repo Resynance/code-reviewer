@@ -36,18 +36,24 @@ Request:
 }
 ```
 Only `pr_number`, `repo`, `title`, and `diff` are required. Returns
+`{ "id": "<uuid>", "status": "queued" }`.
 `{ "id": "<uuid>", "status": "queued" }`. `400` if `OPENROUTER_API_KEY` is not set.
 `429` if the per-user rate limit is exceeded (see [Rate limiting](#rate-limiting)).
 
-The client then calls `POST /api/review/{id}/run` and polls `GET /api/review/{id}`.
+When `llm_execution_mode=inline` (default), `OPENROUTER_API_KEY` must be set and
+the client then calls `POST /api/review/{id}/run` and polls `GET /api/review/{id}`.
+When `llm_execution_mode=local_queue`, the request is just persisted and a local
+worker claims it via `/worker/llm/claim`.
 
 ### `POST /api/review/{id}/run`
-Execute a queued job (runs the review, persists the outcome to the job). Idempotent
-— a job already running/finished is returned as-is. Returns the job (see below).
+Execute a queued job when `llm_execution_mode=inline` (runs the review, persists
+the outcome to the job). Idempotent — a job already running/finished is returned
+as-is. In `local_queue` mode this endpoint returns the queued job unchanged.
 
 ### `GET /api/review/{id}`
-Poll a job. Returns `{ id, status, request, result, error, created_at, updated_at }`
-where `status` ∈ `queued|running|done|error`. When `done`, `result` is:
+Poll a job. Returns `{ id, job_type, executor, status, request, result, error,
+claimed_by, started_at, completed_at, created_at, updated_at }` where `status`
+∈ `queued|running|done|error`. When `done`, `result` is:
 ```json
 {
   "pr_number": 201,
@@ -136,23 +142,28 @@ Removes a decision. Returns `{ "deleted": "<doc_id>" }`.
 
 ## Assessments
 
-Assessments run **asynchronously** (same enqueue → run → poll pattern as reviews).
+Assessments run **asynchronously** (same enqueue → run → poll pattern as reviews,
+or queue → local worker → poll when `llm_execution_mode=local_queue`).
 
 ### `POST /api/assessments` — enqueue
 ```json
 { "repo": "org/a", "model": "anthropic/claude-sonnet-4.5", "provider": "" }
 ```
 `model` and `provider` are optional (fall back to the configured default). Returns
+`{ "id": "<uuid>", "status": "queued" }`. `400` if `OPENROUTER_API_KEY` is not set
+in `inline` mode.
 `{ "id": "<uuid>", "status": "queued" }`. `400` if `OPENROUTER_API_KEY` is not set.
 `429` if the per-user rate limit is exceeded (see [Rate limiting](#rate-limiting)).
 
 ### `POST /api/assessments/{id}/run`
 Execute a queued assessment job. Idempotent — a job already running/finished is
-returned as-is. Returns the job (see below).
+returned as-is. In `local_queue` mode this endpoint returns the queued job
+unchanged.
 
 ### `GET /api/assessments/{id}`
-Poll a job. Returns `{ id, status, request, result, error, created_at, updated_at }`
-where `status` ∈ `queued|running|done|error`. When `done`, `result` is:
+Poll a job. Returns `{ id, job_type, executor, status, request, result, error,
+claimed_by, started_at, completed_at, created_at, updated_at }` where `status`
+∈ `queued|running|done|error`. When `done`, `result` is:
 ```json
 {
   "repo": "org/a",
@@ -188,6 +199,8 @@ Secrets are reported as booleans, never echoed.
   "repos": ["org/a"],
   "github_token_set": true,
   "webhook_secret_set": false,
+  "llm_execution_mode": "inline",
+  "llm_worker_secret_set": false,
   "openrouter_model": "anthropic/claude-sonnet-4.5",
   "openrouter_provider": "",
   "openrouter_models": [
@@ -207,6 +220,8 @@ value (falls back to env/default), omit/null to leave unchanged.
 {
   "github_token": "ghp_…",
   "webhook_secret": "…",
+  "llm_execution_mode": "local_queue",
+  "llm_worker_secret": "shared-secret",
   "repos": ["org/a", "org/b"],
   "openrouter_models": [
     { "label": "Fast",  "model": "openai/gpt-4o-mini",              "provider": "" },
@@ -216,6 +231,38 @@ value (falls back to env/default), omit/null to leave unchanged.
 ```
 Each model slot requires `model`; `label` and `provider` are optional. Slots with
 a blank `model` are silently dropped. Returns the same shape as `GET /api/settings`.
+
+## Local worker
+
+These endpoints are for a separate app running on your local machine when
+`llm_execution_mode=local_queue`. They are authenticated with the shared
+`X-Worker-Secret` header matching the configured `llm_worker_secret`.
+
+### `POST /worker/llm/claim`
+Claims the oldest queued local LLM job and marks it `running`.
+```json
+{ "worker_id": "mac-mini", "job_types": ["review", "assessment"] }
+```
+Returns `204 No Content` when no job is waiting, otherwise the full job record.
+
+### `POST /worker/llm/{id}/complete`
+Stores the worker result and marks the job `done`.
+```json
+{
+  "result": {
+    "summary": "…"
+  }
+}
+```
+For review jobs, `result` should match the normal review payload; for assessment
+jobs, it should match the normal assessment payload. Finished jobs are also saved
+to history with source `local_worker` for reviews.
+
+### `POST /worker/llm/{id}/error`
+Marks the job failed.
+```json
+{ "error": "model timed out" }
+```
 
 ## Repositories
 

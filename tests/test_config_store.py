@@ -10,6 +10,8 @@ def test_defaults_when_no_file(cfg):
         "github_tokens": [],
         "webhook_secret": "",
         "repos": [],
+        "llm_execution_mode": "",
+        "llm_worker_secret": "",
         "openrouter_models": [],
         "openrouter_model": "",
         "openrouter_provider": "",
@@ -98,6 +100,21 @@ def test_webhook_secret_fallback(cfg, monkeypatch):
     assert cfg.get_webhook_secret() == "env-secret"
     cfg.save_config({"webhook_secret": "cfg-secret"})
     assert cfg.get_webhook_secret() == "cfg-secret"
+
+
+def test_llm_execution_mode_default_env_then_config(cfg, monkeypatch):
+    assert cfg.get_llm_execution_mode() == "inline"
+    monkeypatch.setenv("LLM_EXECUTION_MODE", "local_queue")
+    assert cfg.get_llm_execution_mode() == "local_queue"
+    cfg.save_config({"llm_execution_mode": "inline"})
+    assert cfg.get_llm_execution_mode() == "inline"
+
+
+def test_llm_worker_secret_fallback(cfg, monkeypatch):
+    monkeypatch.setenv("LLM_WORKER_SECRET", "env-secret")
+    assert cfg.get_llm_worker_secret() == "env-secret"
+    cfg.save_config({"llm_worker_secret": "cfg-secret"})
+    assert cfg.get_llm_worker_secret() == "cfg-secret"
 
 
 def test_model_default_when_unset(cfg):

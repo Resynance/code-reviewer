@@ -28,6 +28,8 @@ _DEFAULTS = {
     "github_tokens": [],  # list of {username, orgs, token}
     "webhook_secret": "",
     "repos": [],
+    "llm_execution_mode": "",
+    "llm_worker_secret": "",
     # New: ordered list of model slots [{label, model, provider}].
     # When set, this supersedes the legacy openrouter_model / openrouter_model_2 fields.
     "openrouter_models": [],
@@ -180,6 +182,15 @@ def get_webhook_secret() -> str:
 
 def get_repos() -> list:
     return load_config().get("repos", [])
+
+
+def get_llm_execution_mode() -> str:
+    mode = (load_config().get("llm_execution_mode") or os.getenv("LLM_EXECUTION_MODE") or "inline").strip().lower()
+    return mode if mode in {"inline", "local_queue"} else "inline"
+
+
+def get_llm_worker_secret() -> str:
+    return load_config().get("llm_worker_secret") or os.getenv("LLM_WORKER_SECRET", "")
 
 
 def get_models() -> list:

@@ -22,6 +22,8 @@ def test_settings_default(client):
     assert body["repos"] == []
     assert body["github_token_set"] is False
     assert body["webhook_secret_set"] is False
+    assert body["llm_execution_mode"] == "inline"
+    assert body["llm_worker_secret_set"] is False
     assert body["openrouter_model"] == config_store.DEFAULT_MODEL
     assert isinstance(body["openrouter_models"], list)
 
@@ -44,16 +46,19 @@ def test_settings_put_updates_and_hides_secrets(client):
     tc, _ = client
     resp = tc.put("/api/settings", json={
         "github_token": "ghp_secret", "webhook_secret": "whs",
+        "llm_worker_secret": "worker-secret", "llm_execution_mode": "local_queue",
         "repos": ["org/a"], "openrouter_model": "openai/gpt-4o",
         "openrouter_provider": "Azure",
     })
     body = resp.json()
     assert body["github_token_set"] is True
+    assert body["llm_execution_mode"] == "local_queue"
+    assert body["llm_worker_secret_set"] is True
     assert body["openrouter_model"] == "openai/gpt-4o"
     assert body["openrouter_provider"] == "Azure"
     # secrets must never be echoed back, in any field
     raw = tc.get("/api/settings").text
-    assert "ghp_secret" not in raw and "whs" not in raw
+    assert "ghp_secret" not in raw and "whs" not in raw and "worker-secret" not in raw
 
 
 def test_settings_put_partial_keeps_other_fields(client):
@@ -64,6 +69,11 @@ def test_settings_put_partial_keeps_other_fields(client):
     assert body["github_token_set"] is True
     assert body["webhook_secret_set"] is True
     assert body["openrouter_model"] == "m/x"
+
+
+def test_settings_put_rejects_bad_llm_mode(client):
+    tc, _ = client
+    assert tc.put("/api/settings", json={"llm_execution_mode": "sidecar"}).status_code == 400
 
 
 # ----- repos ----- #
@@ -139,7 +149,8 @@ def test_stats_shape(client):
     tc, _ = client
     s = tc.get("/api/stats").json()
     assert set(s) >= {"decisions_sampled", "backend", "model", "provider",
-                      "api_key_configured", "github_token_configured"}
+                      "api_key_configured", "github_token_configured",
+                      "llm_execution_mode", "llm_worker_secret_set"}
 
 
 def test_balance_unconfigured(client):
@@ -181,6 +192,64 @@ def test_review_enqueues_and_runs(client, monkeypatch):
     # Poll → the same finished job.
     polled = tc.get(f"/api/review/{job['id']}").json()
     assert polled["status"] == "done" and polled["result"]["pr_number"] == 7
+
+
+def test_review_local_queue_skips_inline_run_and_can_complete_via_worker(client, monkeypatch):
+    tc, main = client
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+
+    class ExplodingEngine:
+        def review(self, req):
+            raise AssertionError("inline engine should not run in local_queue mode")
+
+    monkeypatch.setattr(main, "get_engine", lambda: ExplodingEngine())
+
+    job = tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+x"}).json()
+    run = tc.post(f"/api/review/{job['id']}/run").json()
+    assert run["status"] == "queued"
+
+    claimed = tc.post("/worker/llm/claim", headers={"X-Worker-Secret": "secret"}, json={"worker_id": "mac-mini"}).json()
+    assert claimed["id"] == job["id"]
+    assert claimed["status"] == "running"
+    assert claimed["executor"] == "local_queue"
+    assert claimed["job_type"] == "review"
+    assert claimed["claimed_by"] == "mac-mini"
+
+    done = tc.post(
+        f"/worker/llm/{job['id']}/complete",
+        headers={"X-Worker-Secret": "secret"},
+        json={"result": {
+            "pr_number": 7,
+            "summary": "queued ok",
+            "approved": True,
+            "confidence": 0.75,
+            "issues": [],
+            "suggestions": [],
+            "past_decisions_applied": [],
+            "hipaa_review": {"enabled": False},
+            "model": "local/model",
+        }},
+    ).json()
+    assert done["status"] == "done"
+    assert done["result"]["summary"] == "queued ok"
+
+    hist = tc.get("/api/reviews", params={"repo": "org/a"}).json()
+    assert hist["count"] == 1
+    assert hist["reviews"][0]["source"] == "local_worker"
+
+
+def test_worker_claim_returns_204_when_no_local_jobs(client):
+    tc, _ = client
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+    resp = tc.post("/worker/llm/claim", headers={"X-Worker-Secret": "secret"}, json={"worker_id": "mac"})
+    assert resp.status_code == 204
+
+
+def test_worker_endpoints_require_secret(client):
+    tc, _ = client
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+    assert tc.post("/worker/llm/claim", json={"worker_id": "mac"}).status_code == 401
+    assert tc.post("/worker/llm/claim", headers={"X-Worker-Secret": "wrong"}, json={"worker_id": "mac"}).status_code == 401
 
 
 def test_review_job_not_found(client):
@@ -436,6 +505,49 @@ def test_assessment_enqueues_and_runs(client, monkeypatch):
 
     polled = tc.get(f"/api/assessments/{job['id']}").json()
     assert polled["status"] == "done" and polled["result"]["repo"] == "org/a"
+
+
+def test_assessment_local_queue_can_be_claimed_by_type_and_saved(client):
+    tc, _ = client
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+
+    job = tc.post("/api/assessments", json={"repo": "org/a"}).json()
+    claimed = tc.post(
+        "/worker/llm/claim",
+        headers={"X-Worker-Secret": "secret"},
+        json={"worker_id": "mac-mini", "job_types": ["assessment"]},
+    ).json()
+    assert claimed["id"] == job["id"]
+    assert claimed["job_type"] == "assessment"
+
+    done = tc.post(
+        f"/worker/llm/{job['id']}/complete",
+        headers={"X-Worker-Secret": "secret"},
+        json={"result": {
+            "repo": "org/a",
+            "summary": "assessed",
+            "purpose": "Does things",
+            "tech_stack": ["Python"],
+            "key_components": [],
+            "vulnerabilities": [],
+            "hipaa_review": {"enabled": False, "hipaa_relevant": False},
+            "model": "local/model",
+        }},
+    ).json()
+    assert done["status"] == "done"
+    hist = tc.get("/api/assessments", params={"repo": "org/a"}).json()
+    assert hist["count"] == 1
+    assert hist["assessments"][0]["summary"] == "assessed"
+
+
+def test_assessment_run_preserves_hipaa_flag(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    monkeypatch.setattr(main, "AssessmentEngine", _fake_assessment_engine())
+
+    job = tc.post("/api/assessments", json={"repo": "org/a", "hipaa": True}).json()
+    run = tc.post(f"/api/assessments/{job['id']}/run").json()
+    assert run["result"]["hipaa_review"]["enabled"] is True
 
 
 def test_assessment_job_not_found(client):
