@@ -14,12 +14,12 @@ from review_engine import CodeReviewEngine, ReviewRequest, _REVIEW_SCHEMA
 
 # ----- fakes ----- #
 
-def make_response(payload, name="submit_review", no_tool=False):
+def make_response(payload, name="submit_review", no_tool=False, content=None, raw_arguments=None):
     if no_tool:
-        message = types.SimpleNamespace(tool_calls=[])
+        message = types.SimpleNamespace(tool_calls=[], content=content)
     else:
-        fn = types.SimpleNamespace(name=name, arguments=json.dumps(payload))
-        message = types.SimpleNamespace(tool_calls=[types.SimpleNamespace(function=fn)])
+        fn = types.SimpleNamespace(name=name, arguments=raw_arguments if raw_arguments is not None else json.dumps(payload))
+        message = types.SimpleNamespace(tool_calls=[types.SimpleNamespace(function=fn)], content=content)
     return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
 
 
@@ -36,10 +36,10 @@ class FakeClient:
         return self.response
 
 
-def make_engine(store, payload, monkeypatch, no_tool=False, model_override=None):
+def make_engine(store, payload, monkeypatch, no_tool=False, model_override=None, content=None, raw_arguments=None):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     eng = CodeReviewEngine(store, model=model_override)
-    eng._client = FakeClient(make_response(payload, no_tool=no_tool))
+    eng._client = FakeClient(make_response(payload, no_tool=no_tool, content=content, raw_arguments=raw_arguments))
     return eng
 
 
@@ -425,6 +425,37 @@ def test_missing_tool_call_raises(store, cfg, monkeypatch):
     eng = make_engine(store, review_payload(), monkeypatch, no_tool=True)
     with pytest.raises(RuntimeError, match="submit_review"):
         eng.review(make_req())
+
+
+def test_missing_tool_call_falls_back_to_raw_json_content(store, cfg, monkeypatch):
+    payload = review_payload(summary="gemini fallback")
+    eng = make_engine(store, payload, monkeypatch, no_tool=True, content=json.dumps(payload))
+    result = eng.review(make_req(model="google/gemini-2.5-flash-lite"))
+    assert result.summary == "gemini fallback"
+
+
+def test_missing_tool_call_falls_back_to_fenced_json_content(store, cfg, monkeypatch):
+    payload = review_payload(summary="fenced fallback")
+    eng = make_engine(
+        store,
+        payload,
+        monkeypatch,
+        no_tool=True,
+        content=f"```json\n{json.dumps(payload)}\n```",
+    )
+    result = eng.review(make_req(model="google/gemini-2.5-flash-lite"))
+    assert result.summary == "fenced fallback"
+
+
+def test_tool_call_arguments_tolerate_raw_newlines_in_strings(store, cfg, monkeypatch):
+    payload = review_payload(summary="line one\nline two")
+    raw_arguments = (
+        '{"summary":"line one\nline two","approved":true,"confidence":0.9,'
+        '"issues":[],"suggestions":[],"past_decisions_applied":[],"compliance_review":{}}'
+    )
+    eng = make_engine(store, payload, monkeypatch, raw_arguments=raw_arguments)
+    result = eng.review(make_req())
+    assert result.summary == "line one\nline two"
 
 
 # ----- model & provider resolution ----- #
