@@ -12,6 +12,10 @@ reviews.json
 review_jobs.json
 access.json
 
+# Local-only worker script (private per-machine)
+local_worker.py
+.local/
+
 # Vector store
 .chroma/
 

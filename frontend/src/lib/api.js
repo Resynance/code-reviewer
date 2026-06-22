@@ -111,6 +111,14 @@ export const api = {
     return request(`/api/assessments?${q.toString()}`)
   },
 
+  listQueueJobs: ({ limit = 100, status = '', jobType = '' } = {}) => {
+    const q = new URLSearchParams()
+    q.set('limit', String(limit))
+    if (status) q.set('status', status)
+    if (jobType) q.set('job_type', jobType)
+    return request(`/api/queue?${q.toString()}`)
+  },
+
   listAccess: () => request('/api/access'),
 
   addAccess: (email) => request('/api/access', { method: 'POST', body: { email } }),

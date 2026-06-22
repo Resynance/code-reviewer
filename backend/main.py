@@ -22,11 +22,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from backend.auth import require_user, require_admin
-import rate_limit as _rate_limit
-
 # Add parent dir so we can import the core modules
 sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
+
+from backend.auth import require_user, require_admin
+import rate_limit as _rate_limit
 
 import config_store
 import review_store
@@ -173,6 +173,8 @@ class ReviewRequestBody(BaseModel):
     model: Optional[str] = None
     provider: Optional[str] = None
     compliance: bool = False
+    agentic: bool = False
+    agent_sources: list[str] = []
 
 
 class DecisionUpsertBody(BaseModel):
@@ -211,6 +213,7 @@ class SettingsBody(BaseModel):
     llm_execution_mode: Optional[str] = None
     llm_worker_secret: Optional[str] = None
     compliance_policies: Optional[dict] = None
+    local_review_agents: Optional[list[dict]] = None
 
 
 class RepoBody(BaseModel):
@@ -302,10 +305,64 @@ def _require_worker_secret(provided: Optional[str]):
         raise HTTPException(status_code=401, detail="Invalid worker secret")
 
 
+def _require_local_queue_configured():
+    if not config_store.get_llm_worker_secret():
+        raise HTTPException(status_code=400, detail="LLM worker secret not configured for local_queue mode")
+
+
+def _is_agentic_review_job(job: Optional[dict]) -> bool:
+    req = (job or {}).get("request") or {}
+    return bool(job and job.get("job_type") == "review" and req.get("agentic"))
+
+
 def _normalize_result_payload(result_payload: dict) -> dict:
     payload = dict(result_payload or {})
     payload["compliance_review"] = payload.get("compliance_review") or {}
+    payload["agent_results"] = payload.get("agent_results") or []
+    payload["agent_errors"] = payload.get("agent_errors") or []
     return payload
+
+
+def _summarize_job(job: dict) -> dict:
+    req = dict((job or {}).get("request") or {})
+    diff = req.pop("diff", "")
+    req_summary = {
+        "repo": req.get("repo"),
+        "pr_number": req.get("pr_number"),
+        "title": req.get("title"),
+        "model": req.get("model"),
+        "provider": req.get("provider"),
+        "compliance": bool(req.get("compliance")),
+        "agentic": bool(req.get("agentic")),
+        "agent_sources": req.get("agent_sources") or [],
+        "files_changed_count": len(req.get("files_changed") or []),
+        "diff_lines": diff.count("\n") + 1 if diff else 0,
+    }
+    result = job.get("result")
+    result_summary = None
+    if isinstance(result, dict):
+        result_summary = {
+            "summary": result.get("summary"),
+            "approved": result.get("approved"),
+            "confidence": result.get("confidence"),
+            "model": result.get("model"),
+            "issues_count": len(result.get("issues") or []),
+            "suggestions_count": len(result.get("suggestions") or []),
+        }
+    return {
+        "id": job.get("id"),
+        "job_type": job.get("job_type"),
+        "executor": job.get("executor"),
+        "status": job.get("status"),
+        "claimed_by": job.get("claimed_by"),
+        "started_at": job.get("started_at"),
+        "completed_at": job.get("completed_at"),
+        "created_at": job.get("created_at"),
+        "updated_at": job.get("updated_at"),
+        "error": job.get("error"),
+        "request": req_summary,
+        "result": result_summary,
+    }
 
 
 def _save_review_payload(request_payload: dict, result_payload: dict, source: str):
@@ -383,6 +440,8 @@ def _execute_review(body: ReviewRequestBody, source: str) -> dict:
         model=body.model or None,
         provider=body.provider or None,
         compliance=body.compliance,
+        agentic=body.agentic,
+        agent_sources=body.agent_sources,
     )
     result = engine.review(request)
     _save_review(request, result, source=source)
@@ -408,6 +467,10 @@ def create_review(body: ReviewRequestBody):
     POST /api/review/{id}/run, and polls GET /api/review/{id} for the result.
     """
     executor = _llm_execution_mode()
+    if body.agentic and executor != "local_queue":
+        raise HTTPException(status_code=400, detail="Agentic review is available only in local_queue mode")
+    if executor == "local_queue" and not body.agentic:
+        _require_local_queue_configured()
     if executor == "inline" and not os.getenv("OPENROUTER_API_KEY"):
         raise HTTPException(status_code=400, detail="OPENROUTER_API_KEY not set")
     effective = _review_body_with_repo_defaults(body)
@@ -485,6 +548,8 @@ def list_review_history(repo: Optional[str] = None, pr_number: Optional[int] = N
 def create_assessment(body: AssessmentRequestBody):
     """Enqueue an async project assessment and return its job id."""
     executor = _llm_execution_mode()
+    if executor == "local_queue":
+        _require_local_queue_configured()
     if executor == "inline" and not os.getenv("OPENROUTER_API_KEY"):
         raise HTTPException(status_code=400, detail="OPENROUTER_API_KEY not set")
     effective = _assessment_body_with_repo_defaults(body)
@@ -537,6 +602,17 @@ def list_assessments_history(repo: Optional[str] = None, limit: int = Query(defa
     """Return saved assessments, newest first."""
     items = assessment_store.list_assessments(repo=repo, limit=limit)
     return {"assessments": [_normalize_result_payload(item) for item in items], "count": len(items)}
+
+
+@app.get("/api/queue")
+def list_queue_jobs(
+    limit: int = Query(default=100, ge=1, le=500),
+    status: str = Query(default=""),
+    job_type: str = Query(default=""),
+):
+    """List local-queue jobs newest-first with compact request/result summaries."""
+    jobs = review_jobs.list_jobs(limit=limit, executor="local_queue", status=status.strip(), job_type=job_type.strip())
+    return {"jobs": [_summarize_job(job) for job in jobs], "count": len(jobs)}
 
 
 def _execute_assessment(body: AssessmentRequestBody) -> dict:
@@ -688,6 +764,7 @@ def get_settings():
         "openrouter_provider_2": config_store.get_provider_2(),
         "embedding_model": config_store.get_embedding_model(),
         "compliance_policies": config_store.get_compliance_policies(),
+        "local_review_agents": config_store.get_local_review_agents(),
     }
 
 
@@ -726,6 +803,8 @@ def update_settings(body: SettingsBody):
         update["llm_worker_secret"] = body.llm_worker_secret.strip()
     if body.compliance_policies is not None:
         update["compliance_policies"] = body.compliance_policies
+    if body.local_review_agents is not None:
+        update["local_review_agents"] = body.local_review_agents
     if update:
         config_store.save_config(update)
     return get_settings()
@@ -734,9 +813,17 @@ def update_settings(body: SettingsBody):
 @app.post("/worker/llm/claim")
 def claim_llm_job(body: WorkerClaimBody, x_worker_secret: Optional[str] = Header(default=None, alias="X-Worker-Secret")):
     """Claim the next queued local-queue LLM job for an external worker."""
-    _require_worker_secret(x_worker_secret)
     wanted = [t for t in body.job_types if t in {"review", "assessment"}]
-    job = review_jobs.claim_next_job(job_types=wanted or None, executor="local_queue", worker_id=body.worker_id.strip())
+    expected = config_store.get_llm_worker_secret()
+    if expected:
+        _require_worker_secret(x_worker_secret)
+        job = review_jobs.claim_next_job(job_types=wanted or None, executor="local_queue", worker_id=body.worker_id.strip())
+    else:
+        if x_worker_secret:
+            raise HTTPException(status_code=401, detail="Invalid worker secret")
+        if wanted and "review" not in wanted:
+            return Response(status_code=204)
+        job = review_jobs.claim_next_agentic_review_job(executor="local_queue", worker_id=body.worker_id.strip())
     if not job:
         return Response(status_code=204)
     return job
@@ -749,12 +836,16 @@ def complete_llm_job(
     x_worker_secret: Optional[str] = Header(default=None, alias="X-Worker-Secret"),
 ):
     """Store a local worker result and mark the job done."""
-    _require_worker_secret(x_worker_secret)
     job = review_jobs.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="LLM job not found")
     if job.get("executor") != "local_queue":
         raise HTTPException(status_code=400, detail="Job is not configured for local queue execution")
+    expected = config_store.get_llm_worker_secret()
+    if expected:
+        _require_worker_secret(x_worker_secret)
+    elif x_worker_secret or not _is_agentic_review_job(job):
+        raise HTTPException(status_code=401, detail="Invalid worker secret")
     normalized = _normalize_result_payload(body.result)
     _persist_local_job_result(job, normalized)
     return review_jobs.update_job(job_id, status="done", result=normalized)
@@ -767,12 +858,16 @@ def fail_llm_job(
     x_worker_secret: Optional[str] = Header(default=None, alias="X-Worker-Secret"),
 ):
     """Store a local worker failure and mark the job errored."""
-    _require_worker_secret(x_worker_secret)
     job = review_jobs.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="LLM job not found")
     if job.get("executor") != "local_queue":
         raise HTTPException(status_code=400, detail="Job is not configured for local queue execution")
+    expected = config_store.get_llm_worker_secret()
+    if expected:
+        _require_worker_secret(x_worker_secret)
+    elif x_worker_secret or not _is_agentic_review_job(job):
+        raise HTTPException(status_code=401, detail="Invalid worker secret")
     return review_jobs.update_job(job_id, status="error", error=body.error)
 
 

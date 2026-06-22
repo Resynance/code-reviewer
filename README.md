@@ -64,6 +64,7 @@ See [docs/development.md](docs/development.md#project-layout) for the full layou
 
 **setup.sh**
 - Creates a Python virtualenv at `.venv/`
+- Rebuilds `.venv/` automatically if the embedded `pip` metadata is corrupted
 - Installs FastAPI, uvicorn, ChromaDB, OpenAI SDK (for OpenRouter), etc.
 - Runs `npm install` + `npm run build` for the React frontend
 - Creates a `.env` template if one doesn't exist
@@ -84,6 +85,11 @@ server-side to `config.json` (gitignored):
   no restart needed.
 - **LLM execution mode** — run inside this app (`inline`) or queue jobs for a
   local worker (`local_queue`) using a shared worker secret.
+- **Local review agents** — when using `local_queue`, configure one or more
+  local agent commands (for example Codex and Kimi) that agentic reviews
+  can fan out to from the local worker.
+- **Queue viewer** — inspect queued/running/done/error local-execution jobs,
+  including claim state and worker errors, from the Queue page.
 - **GitHub token** and **webhook secret** — entered in the GitHub Access form.
 - **Repositories** — added/removed in the Repositories card; each has a
   **Backfill** button that imports its closed PRs into the decision store.
@@ -105,6 +111,9 @@ a dropdown of configured repos.
 |---|---|---|
 | `OPENROUTER_API_KEY` | Yes | Get from openrouter.ai/keys |
 | `OPENROUTER_MODEL` | No | Model slug from openrouter.ai/models (default: `anthropic/claude-sonnet-4.5`) |
+| `LLM_EXECUTION_MODE` | No | `inline` (default) or `local_queue` |
+| `LLM_WORKER_SECRET` | No | Shared secret for the local worker endpoints |
+| `LOCAL_LLM_BASE_URL` | No | Base URL for an OpenAI-compatible local LLM server used by `local_worker.py` for queued local-LLM reviews/assessments. Examples: `http://localhost:8080/` or `http://localhost:11434/v1` |
 | `GITHUB_TOKEN` | Fallback | PAT with `repo` read scope (prefer setting it in the UI) |
 | `GITHUB_WEBHOOK_SECRET` | Fallback | Any random string (prefer setting it in the UI) |
 | `DECISION_STORE_BACKEND` | No | `chroma` (default) or `pgvector` |
@@ -123,6 +132,30 @@ python -m pytest
 
 The suite uses temporary config and Chroma directories, mocks all network calls
 (OpenRouter and GitHub), and does not touch your real `config.json` or `.chroma`.
+
+## Local agentic reviews
+
+When the app is set to `local_queue`, the Review page can optionally submit a
+review in **agentic** mode to multiple local sources. The worker reads the
+`local_review_agents` list from Settings, runs each enabled command with the PR
+prompt, and merges the structured outputs into one review result.
+
+For this agentic-only local path, `LLM_WORKER_SECRET` is optional. It is still
+required for queued local-LLM reviews and assessments.
+
+For queued local-LLM reviews and assessments, `local_worker.py` reads
+`LOCAL_LLM_BASE_URL` directly. Both root-style endpoints such as
+`http://localhost:8080/` and versioned endpoints such as
+`http://localhost:11434/v1` are supported.
+
+The default local agent list includes:
+- `codex` using `codex exec`
+- `kimi` using `kimi -p ... --output-format stream-json`
+
+Command entries can use these placeholders:
+- `{schema_path}` — JSON schema file the agent should match
+- `{output_path}` — file path the agent can write its final JSON response to
+- `{prompt}` — full review prompt passed inline for CLIs that do not read stdin directly
 
 ## Seeding the decision store
 

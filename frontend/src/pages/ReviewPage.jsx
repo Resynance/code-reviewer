@@ -15,6 +15,8 @@ function historyToResult(r) {
     past_decisions_applied: r.past_decisions || [],
     compliance_review: r.compliance_review || {},
     model: r.model || '',
+    agent_results: r.agent_results || [],
+    agent_errors: r.agent_errors || [],
   }
 }
 
@@ -45,6 +47,9 @@ export default function ReviewPage() {
   const [selectedModel, setSelectedModel] = useState(null)
   const [executionMode, setExecutionMode] = useState('inline')
   const [compliancePolicies, setCompliancePolicies] = useState({ default: {}, repos: {} })
+  const [localReviewAgents, setLocalReviewAgents] = useState([])
+  const [agenticReview, setAgenticReview] = useState(false)
+  const [selectedAgentSources, setSelectedAgentSources] = useState([])
   // Tracks the in-flight review job so a superseded/unmounted poll stops.
   const jobRef = useRef(null)
   useEffect(() => () => { jobRef.current = null }, [])
@@ -70,10 +75,20 @@ export default function ReviewPage() {
       setSelectedModel(slots[0] || null)
       setExecutionMode(s.llm_execution_mode || 'inline')
       setCompliancePolicies(s.compliance_policies || { default: {}, repos: {} })
+      const agents = s.local_review_agents || []
+      setLocalReviewAgents(agents)
+      setSelectedAgentSources(agents.filter(a => a.enabled).map(a => a.id))
     }).catch(() => {})
   }, [])
 
   const complianceEnabled = !!compliancePolicies?.repos?.[form.repo]?.enabled
+  const availableAgentSources = localReviewAgents.filter(agent => agent.enabled)
+
+  function toggleAgentSource(id) {
+    setSelectedAgentSources(current =>
+      current.includes(id) ? current.filter(v => v !== id) : [...current, id]
+    )
+  }
 
   // Whenever the selected repo changes, load its PRs (open first) for the picker.
   useEffect(() => {
@@ -131,6 +146,8 @@ export default function ReviewPage() {
         files_changed: form.files_changed.filter(Boolean),
         model: selectedModel?.model || undefined,
         provider: selectedModel?.provider || undefined,
+        agentic: executionMode === 'local_queue' && agenticReview,
+        agent_sources: executionMode === 'local_queue' && agenticReview ? selectedAgentSources : [],
       })
       jobRef.current = id
       // Drive the work in the background; the result is read via polling, so a
@@ -260,8 +277,44 @@ export default function ReviewPage() {
           : 'HIPAA / HL7-focused review is not enabled for this repository.'}
       </div>
 
+      {executionMode === 'local_queue' && (
+        <div style={{ marginBottom: 14, padding: '12px 14px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text)', marginBottom: agenticReview ? 10 : 0 }}>
+            <input
+              type="checkbox"
+              checked={agenticReview}
+              onChange={e => setAgenticReview(e.target.checked)}
+              style={{ accentColor: 'var(--accent)' }}
+            />
+            Run agentic review through multiple local sources
+          </label>
+          {agenticReview && (
+            <>
+              <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 8 }}>
+                Choose the enabled local agent sources to fan the review out to.
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {availableAgentSources.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--red)' }}>No enabled local review agents are configured in Settings.</div>
+                ) : availableAgentSources.map(agent => (
+                  <label key={agent.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12, color: 'var(--text)' }}>
+                    <input
+                      type="checkbox"
+                      checked={selectedAgentSources.includes(agent.id)}
+                      onChange={() => toggleAgentSource(agent.id)}
+                      style={{ accentColor: 'var(--accent)' }}
+                    />
+                    {agent.label || agent.id}
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       <div style={{ display: 'flex', gap: 12, alignItems: isMobile ? 'stretch' : 'center', flexDirection: isMobile ? 'column' : 'row', marginBottom: 28 }}>
-        <button onClick={submit} disabled={loading} style={btnStyle(loading)}>
+        <button onClick={submit} disabled={loading || (executionMode === 'local_queue' && agenticReview && selectedAgentSources.length === 0)} style={btnStyle(loading || (executionMode === 'local_queue' && agenticReview && selectedAgentSources.length === 0))}>
           {loading ? '⟳ Reviewing…' : '▶ Run Review'}
         </button>
         {error && <span style={{ color: 'var(--red)', fontSize: 13 }}>⚠ {error}</span>}
@@ -478,6 +531,26 @@ function ReviewResult({ result, repo }) {
         </Section>
       )}
 
+      {(result.agent_results?.length > 0 || result.agent_errors?.length > 0) && (
+        <Section title={`Multi-Agent Results (${result.agent_results?.length || 0})`}>
+          {(result.agent_results || []).map((agent, i) => (
+            <AgentResultCard key={`${agent.source}-${i}`} agent={agent} />
+          ))}
+          {(result.agent_errors || []).length > 0 && (
+            <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {result.agent_errors.map((msg, i) => (
+                <div key={i} style={{
+                  background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8,
+                  padding: '10px 12px', fontSize: 12, color: 'var(--red)', whiteSpace: 'pre-wrap',
+                }}>
+                  {msg}
+                </div>
+              ))}
+            </div>
+          )}
+        </Section>
+      )}
+
       {/* Issues */}
       {result.issues?.length > 0 && (
         <Section
@@ -521,6 +594,90 @@ function ReviewResult({ result, repo }) {
             </div>
           ))}
         </Section>
+      )}
+    </div>
+  )
+}
+
+function AgentResultCard({ agent }) {
+  const [open, setOpen] = useState(false)
+  const result = agent.result || {}
+  const statusColor = result.approved ? 'var(--green)' : 'var(--yellow)'
+
+  return (
+    <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, marginBottom: 10 }}>
+      <button
+        onClick={() => setOpen(v => !v)}
+        style={{ width: '100%', background: 'transparent', border: 'none', padding: '12px 14px', textAlign: 'left', cursor: 'pointer' }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--text)' }}>{agent.source}</span>
+          {result.model && (
+            <span style={{
+              fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-3)',
+              background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 5, padding: '2px 7px',
+            }}>{result.model}</span>
+          )}
+          <span style={{ fontSize: 11, fontWeight: 600, color: statusColor, background: `${statusColor}20`, borderRadius: 5, padding: '2px 7px' }}>
+            {result.approved ? 'APPROVED' : 'CHANGES'}
+          </span>
+          <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-3)' }}>
+            {Math.round((result.confidence || 0) * 100)}%
+          </span>
+          <span style={{ fontSize: 14, color: 'var(--text-3)' }}>{open ? '▾' : '▸'}</span>
+        </div>
+        {result.summary && (
+          <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-2)' }}>{result.summary}</div>
+        )}
+      </button>
+
+      {open && (
+        <div style={{ padding: '0 14px 14px' }}>
+          {result.past_decisions_applied?.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', marginBottom: 6 }}>Past Decisions</div>
+              {result.past_decisions_applied.map((d, i) => (
+                <div key={i} style={{ fontSize: 12, color: 'var(--text)', marginBottom: 6 }}>
+                  <span style={{ color: 'var(--accent)' }}>{d.ref}</span> — {d.summary}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {result.compliance_review?.enabled && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', marginBottom: 6 }}>Compliance</div>
+              <div style={{ fontSize: 12, color: 'var(--text-2)' }}>{result.compliance_review.summary || 'Enabled'}</div>
+            </div>
+          )}
+
+          {result.issues?.length > 0 && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', marginBottom: 6 }}>Issues</div>
+              {result.issues.map((issue, i) => (
+                <IssueCard key={i} issue={issue} selected={false} onToggle={() => {}} readOnly />
+              ))}
+            </div>
+          )}
+
+          {result.suggestions?.length > 0 && (
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', marginBottom: 6 }}>Suggestions</div>
+              {result.suggestions.map((s, i) => (
+                <div key={i} style={{
+                  padding: '10px 12px', background: 'var(--surface)', border: '1px solid var(--border)',
+                  borderRadius: 8, marginBottom: 6, display: 'flex', gap: 10, alignItems: 'flex-start',
+                }}>
+                  <TypeBadge type={s.type} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, color: 'var(--text)' }}>{s.description}</div>
+                    {s.past_decision_ref && <div style={{ fontSize: 11, color: 'var(--accent)', marginTop: 3 }}>ref: {s.past_decision_ref}</div>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </div>
   )

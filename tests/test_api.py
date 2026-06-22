@@ -26,6 +26,7 @@ def test_settings_default(client):
     assert body["llm_worker_secret_set"] is False
     assert body["openrouter_model"] == config_store.DEFAULT_MODEL
     assert isinstance(body["openrouter_models"], list)
+    assert isinstance(body["local_review_agents"], list)
 
 
 def test_settings_put_model_list(client):
@@ -239,6 +240,84 @@ def test_review_local_queue_skips_inline_run_and_can_complete_via_worker(client,
     assert hist["reviews"][0]["source"] == "local_worker"
 
 
+def test_review_rejects_agentic_mode_when_not_local_queue(client, monkeypatch):
+    tc, _ = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    resp = tc.post("/api/review", json={
+        "pr_number": 1,
+        "repo": "org/a",
+        "title": "t",
+        "diff": "+x",
+        "agentic": True,
+        "agent_sources": ["codex"],
+    })
+    assert resp.status_code == 400
+    assert "local_queue" in resp.json()["detail"]
+
+
+def test_review_rejects_local_queue_when_worker_secret_missing(client):
+    tc, _ = client
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": ""})
+    resp = tc.post("/api/review", json={
+        "pr_number": 1,
+        "repo": "org/a",
+        "title": "t",
+        "diff": "+x",
+    })
+    assert resp.status_code == 400
+    assert "worker secret" in resp.json()["detail"]
+
+
+def test_agentic_review_local_queue_does_not_require_worker_secret(client):
+    tc, _ = client
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": ""})
+    job = tc.post("/api/review", json={
+        "pr_number": 7,
+        "repo": "org/a",
+        "title": "t",
+        "diff": "+x",
+        "agentic": True,
+        "agent_sources": ["codex"],
+    }).json()
+    claimed = tc.post("/worker/llm/claim", json={"worker_id": "mac-mini"}).json()
+    assert claimed["id"] == job["id"]
+    assert claimed["request"]["agentic"] is True
+
+    done = tc.post(
+        f"/worker/llm/{job['id']}/complete",
+        json={"result": {
+            "pr_number": 7,
+            "summary": "agentic ok",
+            "approved": True,
+            "confidence": 0.75,
+            "issues": [],
+            "suggestions": [],
+            "past_decisions_applied": [],
+            "compliance_review": {"enabled": False},
+            "model": "agentic: Codex",
+        }},
+    ).json()
+    assert done["status"] == "done"
+    assert done["result"]["summary"] == "agentic ok"
+
+
+def test_review_local_queue_preserves_agentic_request_fields(client):
+    tc, _ = client
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+    job = tc.post("/api/review", json={
+        "pr_number": 7,
+        "repo": "org/a",
+        "title": "t",
+        "diff": "+x",
+        "agentic": True,
+        "agent_sources": ["codex", "kimi"],
+    }).json()
+    claimed = tc.post("/worker/llm/claim", headers={"X-Worker-Secret": "secret"}, json={"worker_id": "mac-mini"}).json()
+    assert claimed["id"] == job["id"]
+    assert claimed["request"]["agentic"] is True
+    assert claimed["request"]["agent_sources"] == ["codex", "kimi"]
+
+
 def test_worker_claim_returns_204_when_no_local_jobs(client):
     tc, _ = client
     tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
@@ -251,6 +330,78 @@ def test_worker_endpoints_require_secret(client):
     tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
     assert tc.post("/worker/llm/claim", json={"worker_id": "mac"}).status_code == 401
     assert tc.post("/worker/llm/claim", headers={"X-Worker-Secret": "wrong"}, json={"worker_id": "mac"}).status_code == 401
+
+
+def test_queue_lists_local_jobs_with_compact_summary(client):
+    tc, _ = client
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": ""})
+    tc.post("/api/review", json={
+        "pr_number": 9,
+        "repo": "org/a",
+        "title": "agentic",
+        "diff": "+x\n+y",
+        "files_changed": ["a.py", "b.py"],
+        "agentic": True,
+        "agent_sources": ["codex"],
+    })
+    body = tc.get("/api/queue").json()
+    assert body["count"] == 1
+    job = body["jobs"][0]
+    assert job["executor"] == "local_queue"
+    assert job["request"]["repo"] == "org/a"
+    assert job["request"]["agentic"] is True
+    assert job["request"]["files_changed_count"] == 2
+    assert job["request"]["diff_lines"] == 2
+    assert "diff" not in job["request"]
+
+
+def test_queue_filters_by_status_and_job_type(client):
+    tc, _ = client
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+    review = tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+x"}).json()
+    assessment = tc.post("/api/assessments", json={"repo": "org/a"}).json()
+    tc.post("/worker/llm/claim", headers={"X-Worker-Secret": "secret"}, json={"worker_id": "mac-mini", "job_types": ["review"]})
+    tc.post(
+        f"/worker/llm/{review['id']}/complete",
+        headers={"X-Worker-Secret": "secret"},
+        json={"result": {
+            "pr_number": 7,
+            "summary": "done",
+            "approved": True,
+            "confidence": 0.75,
+            "issues": [],
+            "suggestions": [],
+            "past_decisions_applied": [],
+            "compliance_review": {"enabled": False},
+            "model": "local/model",
+        }},
+    )
+    queued = tc.get("/api/queue", params={"status": "queued"}).json()
+    assert queued["count"] == 1
+    assert queued["jobs"][0]["id"] == assessment["id"]
+    assessments = tc.get("/api/queue", params={"job_type": "assessment"}).json()
+    assert assessments["count"] == 1
+    assert assessments["jobs"][0]["job_type"] == "assessment"
+
+
+def test_secretless_worker_claim_ignores_non_agentic_jobs(client):
+    tc, _ = client
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": ""})
+    tc.post("/api/review", json={"pr_number": 1, "repo": "org/a", "title": "t", "diff": "+x", "agentic": True, "agent_sources": ["codex"]})
+    resp = tc.post("/worker/llm/claim", json={"worker_id": "mac", "job_types": ["assessment"]})
+    assert resp.status_code == 204
+
+
+def test_secretless_worker_cannot_complete_non_agentic_job(client):
+    tc, _ = client
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+    job = tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+x"}).json()
+    tc.put("/api/settings", json={"llm_worker_secret": ""})
+    resp = tc.post(
+        f"/worker/llm/{job['id']}/complete",
+        json={"result": {"pr_number": 7, "summary": "nope", "approved": True, "confidence": 1, "issues": [], "suggestions": [], "past_decisions_applied": [], "compliance_review": {"enabled": False}, "model": "x"}},
+    )
+    assert resp.status_code == 401
 
 
 def test_review_job_not_found(client):
@@ -543,6 +694,14 @@ def test_assessment_local_queue_can_be_claimed_by_type_and_saved(client):
     assert hist["assessments"][0]["summary"] == "assessed"
 
 
+def test_assessment_rejects_local_queue_when_worker_secret_missing(client):
+    tc, _ = client
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": ""})
+    resp = tc.post("/api/assessments", json={"repo": "org/a"})
+    assert resp.status_code == 400
+    assert "worker secret" in resp.json()["detail"]
+
+
 def test_assessment_uses_repo_compliance_setting(client, monkeypatch):
     tc, main = client
     monkeypatch.setenv("OPENROUTER_API_KEY", "key")
@@ -691,3 +850,15 @@ def test_settings_roundtrip_compliance_policies(client):
     assert body["compliance_policies"]["repos"]["org/a"]["enabled"] is True
     assert body["compliance_policies"]["repos"]["org/a"]["disallowed_vendors"] == ["segment"]
     assert body["compliance_policies"]["repos"]["org/a"]["required_hl7_transport_signals"] == ["mllps"]
+
+
+def test_settings_roundtrip_local_review_agents(client):
+    tc, _ = client
+    body = tc.put("/api/settings", json={
+        "local_review_agents": [
+            {"id": "codex", "label": "Codex", "enabled": True, "command": ["codex", "exec", "-"]},
+            {"id": "kimi", "label": "Kimi", "enabled": False, "command": ["kimi", "-"]},
+        ]
+    }).json()
+    assert body["local_review_agents"][0]["id"] == "codex"
+    assert any(agent["id"] == "kimi" and agent["enabled"] is False for agent in body["local_review_agents"])

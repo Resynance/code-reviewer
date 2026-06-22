@@ -54,12 +54,26 @@ def get_job(job_id: str):
     return _file_get(job_id)
 
 
+def list_jobs(limit: int = 100, executor: str = "", status: str = "", job_type: str = "") -> list:
+    """List jobs newest-first, optionally filtered."""
+    if _backend() == "postgres":
+        return _pg_list(limit, executor, status, job_type)
+    return _file_list(limit, executor, status, job_type)
+
+
 def claim_next_job(job_types=None, executor: str = "local_queue", worker_id: str = ""):
     """Claim the next queued job for an external worker, or None if none exist."""
     job_types = tuple(job_types or ())
     if _backend() == "postgres":
         return _pg_claim_next(job_types, executor, worker_id)
     return _file_claim_next(job_types, executor, worker_id)
+
+
+def claim_next_agentic_review_job(executor: str = "local_queue", worker_id: str = ""):
+    """Claim the next queued agentic review job, or None if none exist."""
+    if _backend() == "postgres":
+        return _pg_claim_next_agentic_review(executor, worker_id)
+    return _file_claim_next_agentic_review(executor, worker_id)
 
 
 def update_job(job_id: str, status=None, result=None, error=None, claimed_by=None):
@@ -117,6 +131,22 @@ def _file_get(job_id):
     return None
 
 
+def _file_list(limit, executor, status, job_type):
+    jobs = list(reversed(_file_read()))
+    out = []
+    for job in jobs:
+        if executor and job.get("executor") != executor:
+            continue
+        if status and job.get("status") != status:
+            continue
+        if job_type and job.get("job_type") != job_type:
+            continue
+        out.append(job)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _file_claim_next(job_types, executor, worker_id):
     with _LOCK:
         jobs = _file_read()
@@ -124,6 +154,24 @@ def _file_claim_next(job_types, executor, worker_id):
             if job.get("status") != "queued" or job.get("executor") != executor:
                 continue
             if job_types and job.get("job_type") not in job_types:
+                continue
+            job["status"] = "running"
+            job["claimed_by"] = worker_id or None
+            job["started_at"] = _now()
+            job["updated_at"] = _now()
+            _file_write(jobs)
+            return job
+    return None
+
+
+def _file_claim_next_agentic_review(executor, worker_id):
+    with _LOCK:
+        jobs = _file_read()
+        for job in jobs:
+            req = job.get("request") or {}
+            if job.get("status") != "queued" or job.get("executor") != executor:
+                continue
+            if job.get("job_type") != "review" or not req.get("agentic"):
                 continue
             job["status"] = "running"
             job["claimed_by"] = worker_id or None
@@ -236,6 +284,32 @@ def _pg_get(job_id):
     return _row_to_job(row) if row else None
 
 
+def _pg_list(limit, executor, status, job_type):
+    import db
+
+    _pg_ensure_schema()
+    where = []
+    params = []
+    if executor:
+        where.append("executor = %s")
+        params.append(executor)
+    if status:
+        where.append("status = %s")
+        params.append(status)
+    if job_type:
+        where.append("job_type = %s")
+        params.append(job_type)
+    params.append(limit)
+    sql = _SELECT
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY created_at DESC LIMIT %s"
+    with db.connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    return [_row_to_job(row) for row in rows]
+
+
 def _pg_claim_next(job_types, executor, worker_id):
     import db
 
@@ -250,6 +324,30 @@ def _pg_claim_next(job_types, executor, worker_id):
         cur.execute(
             "WITH next_job AS ("
             "  SELECT id FROM review_jobs WHERE " + " AND ".join(where) + " "
+            "  ORDER BY created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+            ") "
+            "UPDATE review_jobs j SET status = 'running', claimed_by = %s, "
+            "started_at = COALESCE(j.started_at, now()), updated_at = now() "
+            "FROM next_job WHERE j.id = next_job.id "
+            "RETURNING id, job_type, executor, status, request, result, error, "
+            "claimed_by, started_at, completed_at, created_at, updated_at",
+            params,
+        )
+        row = cur.fetchone()
+    return _row_to_job(row) if row else None
+
+
+def _pg_claim_next_agentic_review(executor, worker_id):
+    import db
+
+    _pg_ensure_schema()
+    params = [executor, worker_id or None]
+    with db.connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "WITH next_job AS ("
+            "  SELECT id FROM review_jobs "
+            "  WHERE status = 'queued' AND executor = %s AND job_type = 'review' "
+            "    AND COALESCE((request->>'agentic')::boolean, false) = true "
             "  ORDER BY created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
             ") "
             "UPDATE review_jobs j SET status = 'running', claimed_by = %s, "

@@ -18,7 +18,8 @@ Run the installer **as your normal user — not with `sudo`**:
 > user. If you hit permission errors, reset with
 > `sudo rm -rf .venv frontend/dist && ./setup.sh` (no sudo).
 
-`setup.sh` creates `.venv/`, installs the Python deps + `pytest`, runs
+`setup.sh` creates `.venv/`, rebuilds it automatically if the bundled `pip`
+metadata is corrupted, installs the Python deps + `pytest`, runs
 `npm install` + `npm run build`, and writes a `.env` template.
 
 ## Running
@@ -50,10 +51,30 @@ frontend/src/
   App.jsx, main.jsx        SPA entry
   lib/api.js               REST client
   components/Sidebar.jsx    nav + balance badge
-  pages/{Review,Decisions,Settings}Page.jsx
+  pages/{Review,Queue,Decisions,Settings}Page.jsx
 tests/                     pytest suite
 docs/                      this documentation
 ```
+
+## Local queue worker
+
+When `llm_execution_mode` is set to `local_queue`, reviews and assessments are
+persisted as jobs for a separate worker to claim.
+
+```bash
+source .venv/bin/activate
+python local_worker.py
+```
+
+Useful worker environment variables:
+
+- `REVIEWBOT_API_URL` — backend base URL, default `http://localhost:1500`
+- `REVIEWBOT_WORKER_SECRET` — required for queued local-LLM reviews and assessments; optional for agentic-only local review jobs
+- `REVIEWBOT_AGENT_TIMEOUT_SECONDS` — per-agent timeout for local agentic review commands, default `600`
+- `LOCAL_LLM_BASE_URL` — local OpenAI-compatible server for queued local-LLM reviews and assessments
+
+For local agentic reviews, Kimi is expected to run in prompt mode with
+`--output-format stream-json`.
 
 ## Tests
 

@@ -15,6 +15,7 @@ export default function SettingsPage() {
   const [modelMsg, setModelMsg] = useState(null)
   const [llmExecutionMode, setLlmExecutionMode] = useState('inline')
   const [workerSecret, setWorkerSecret] = useState('')
+  const [localReviewAgentsInput, setLocalReviewAgentsInput] = useState('')
   const [savingLlm, setSavingLlm] = useState(false)
   const [llmMsg, setLlmMsg] = useState(null)
 
@@ -60,6 +61,7 @@ export default function SettingsPage() {
       setModelsList(s.openrouter_models || [])
       setEmbeddingInput(s.embedding_model || '')
       setLlmExecutionMode(s.llm_execution_mode || 'inline')
+      setLocalReviewAgentsInput(JSON.stringify(s.local_review_agents || [], null, 2))
       setCompliancePoliciesInput(JSON.stringify(s.compliance_policies || { default: {}, repos: {} }, null, 2))
     }).catch(() => {})
     api.listAccess().then(r => setAccessEmails(r.emails || [])).catch(() => {})
@@ -160,12 +162,22 @@ export default function SettingsPage() {
     setSavingLlm(true)
     setLlmMsg(null)
     try {
+      let parsedAgents
+      try {
+        parsedAgents = JSON.parse(localReviewAgentsInput || '[]')
+      } catch {
+        setLlmMsg('Local review agents must be valid JSON')
+        setSavingLlm(false)
+        return
+      }
       const s = await api.saveSettings({
         llm_execution_mode: llmExecutionMode,
         llm_worker_secret: workerSecret,
+        local_review_agents: parsedAgents,
       })
       setSettings(s)
       setLlmExecutionMode(s.llm_execution_mode || 'inline')
+      setLocalReviewAgentsInput(JSON.stringify(s.local_review_agents || [], null, 2))
       setWorkerSecret('')
       setLlmMsg('Saved ✓')
       refreshStats()
@@ -348,6 +360,24 @@ export default function SettingsPage() {
             placeholder={settings?.llm_worker_secret_set ? 'Leave blank to clear or replace' : 'Shared secret for /worker/llm/*'}
             style={inputStyle}
           />
+          <div style={{ color: 'var(--text-3)', fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
+            Required for queued local-LLM reviews and assessments. Optional for local agentic reviews that run only through configured agent sources like Codex or Kimi.
+          </div>
+        </div>
+
+        <div style={{ marginTop: 14 }}>
+          <label style={labelStyle}>Local review agents JSON</label>
+          <textarea
+            value={localReviewAgentsInput}
+            onChange={e => setLocalReviewAgentsInput(e.target.value)}
+            rows={12}
+            style={{ ...inputStyle, fontFamily: 'var(--font-mono)', fontSize: 12, resize: 'vertical' }}
+          />
+          <div style={{ color: 'var(--text-3)', fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
+            Each entry should include <code>id</code>, <code>label</code>, <code>enabled</code>, and a <code>command</code> array.
+            Supported placeholders in commands: <code>{'{schema_path}'}</code>, <code>{'{output_path}'}</code>, and <code>{'{prompt}'}</code>.
+            The default Codex entry works with <code>codex exec</code>; adjust the Kimi command to match the CLI installed on your machine.
+          </div>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14 }}>

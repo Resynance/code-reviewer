@@ -35,6 +35,20 @@ def test_defaults_when_no_file(cfg):
             },
             "repos": {},
         },
+        "local_review_agents": [
+            {
+                "id": "codex",
+                "label": "Codex",
+                "enabled": True,
+                "command": ["codex", "exec", "--skip-git-repo-check", "--output-schema", "{schema_path}", "--output-last-message", "{output_path}", "-"],
+            },
+            {
+                "id": "kimi",
+                "label": "Kimi",
+                "enabled": True,
+                "command": ["kimi", "-p", "{prompt}", "--output-format", "stream-json"],
+            },
+        ],
     }
 
 
@@ -120,6 +134,54 @@ def test_llm_worker_secret_fallback(cfg, monkeypatch):
     assert cfg.get_llm_worker_secret() == "env-secret"
     cfg.save_config({"llm_worker_secret": "cfg-secret"})
     assert cfg.get_llm_worker_secret() == "cfg-secret"
+
+
+def test_local_review_agents_normalized(cfg):
+    cfg.save_config({
+        "local_review_agents": [
+            {"id": "codex", "label": "Codex Local", "enabled": False, "command": ["codex", "exec", "-"]},
+            {"id": "custom", "label": "Custom", "enabled": True, "command": ["custom-agent", "--json"]},
+        ]
+    })
+    agents = cfg.get_local_review_agents()
+    by_id = {item["id"]: item for item in agents}
+    assert by_id["codex"]["label"] == "Codex Local"
+    assert by_id["codex"]["enabled"] is False
+    assert by_id["custom"]["command"] == ["custom-agent", "--json"]
+    assert "kimi" in by_id
+
+
+def test_local_review_agents_upgrade_legacy_kimi_command(cfg):
+    cfg.save_config({
+        "local_review_agents": [
+            {"id": "kimi", "label": "Kimi", "enabled": True, "command": ["kimi", "-"]},
+        ]
+    })
+    agents = cfg.get_local_review_agents()
+    by_id = {item["id"]: item for item in agents}
+    assert by_id["kimi"]["command"] == ["kimi", "-p", "{prompt}", "--output-format", "stream-json"]
+
+
+def test_local_review_agents_upgrade_bare_kimi_command(cfg):
+    cfg.save_config({
+        "local_review_agents": [
+            {"id": "kimi", "label": "Kimi", "enabled": True, "command": ["kimi"]},
+        ]
+    })
+    agents = cfg.get_local_review_agents()
+    by_id = {item["id"]: item for item in agents}
+    assert by_id["kimi"]["command"] == ["kimi", "-p", "{prompt}", "--output-format", "stream-json"]
+
+
+def test_local_review_agents_upgrade_yolo_kimi_command(cfg):
+    cfg.save_config({
+        "local_review_agents": [
+            {"id": "kimi", "label": "Kimi", "enabled": True, "command": ["kimi", "--yolo", "-p", "{prompt}", "--output-format", "stream-json"]},
+        ]
+    })
+    agents = cfg.get_local_review_agents()
+    by_id = {item["id"]: item for item in agents}
+    assert by_id["kimi"]["command"] == ["kimi", "-p", "{prompt}", "--output-format", "stream-json"]
 
 
 def test_model_default_when_unset(cfg):
