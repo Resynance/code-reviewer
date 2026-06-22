@@ -158,6 +158,11 @@ class ChromaDecisionStore:
         result = self._collection.get(ids=ids)
         return set(result.get("ids") or [])
 
+    def close(self):
+        """Release Chroma resources so tests do not leak file descriptors."""
+        if getattr(self, "_client", None) is not None:
+            self._client.close()
+
 
 class PgVectorDecisionStore:
     """Postgres + pgvector backend for production / serverless deployments.

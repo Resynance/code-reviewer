@@ -40,10 +40,40 @@ _DEFAULTS = {
     "openrouter_provider_2": "",
     "embedding_model": "",
     "compliance_policies": compliance.default_policies(),
+    "local_review_agents": [
+        {
+            "id": "codex",
+            "label": "Codex",
+            "enabled": True,
+            "command": [
+                "codex",
+                "exec",
+                "--skip-git-repo-check",
+                "--output-schema",
+                "{schema_path}",
+                "--output-last-message",
+                "{output_path}",
+                "-",
+            ],
+        },
+        {
+            "id": "kimi",
+            "label": "Kimi",
+            "enabled": True,
+            "command": ["kimi", "-p", "{prompt}", "--output-format", "stream-json"],
+        },
+    ],
 }
 
 DEFAULT_MODEL = "anthropic/claude-sonnet-4.5"
 DEFAULT_EMBEDDING_MODEL = "openai/text-embedding-3-small"
+_LEGACY_LOCAL_AGENT_COMMANDS = {
+    "kimi": [
+        ["kimi"],
+        ["kimi", "-"],
+        ["kimi", "--yolo", "-p", "{prompt}", "--output-format", "stream-json"],
+    ],
+}
 
 
 def _is_postgres() -> bool:
@@ -54,9 +84,12 @@ def _merge(data: dict) -> dict:
     """Merge a raw config dict onto the defaults and normalize."""
     merged = copy.deepcopy(_DEFAULTS)
     raw_policies = data.get("compliance_policies")
+    raw_agents = data.get("local_review_agents")
     for key in _DEFAULTS:
         if key == "compliance_policies":
             merged[key] = compliance.normalize_policies(raw_policies)
+        elif key == "local_review_agents":
+            merged[key] = _normalize_local_review_agents(raw_agents)
         else:
             merged[key] = data.get(key, merged[key])
     merged["repos"] = [r for r in (merged.get("repos") or []) if isinstance(r, str)]
@@ -122,6 +155,7 @@ def save_config(update: dict):
         current.update(update)
         current["repos"] = [r for r in (current.get("repos") or []) if isinstance(r, str)]
         current["compliance_policies"] = compliance.normalize_policies(current.get("compliance_policies"))
+        current["local_review_agents"] = _normalize_local_review_agents(current.get("local_review_agents"))
         _pg_write(current)
         return current
     with _LOCK:
@@ -129,8 +163,39 @@ def save_config(update: dict):
         current.update(update)
         current["repos"] = [r for r in (current.get("repos") or []) if isinstance(r, str)]
         current["compliance_policies"] = compliance.normalize_policies(current.get("compliance_policies"))
+        current["local_review_agents"] = _normalize_local_review_agents(current.get("local_review_agents"))
         _write(current)
         return current
+
+
+def _normalize_local_review_agents(raw) -> list:
+    agents = []
+    defaults_by_id = {item["id"]: copy.deepcopy(item) for item in _DEFAULTS["local_review_agents"]}
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            agent_id = str(item.get("id") or "").strip().lower()
+            if not agent_id:
+                continue
+            base = defaults_by_id.get(agent_id, {"id": agent_id, "label": agent_id, "enabled": True, "command": []})
+            command = item.get("command")
+            if isinstance(command, list):
+                normalized_command = [str(v).strip() for v in command if str(v).strip()]
+                if normalized_command in _LEGACY_LOCAL_AGENT_COMMANDS.get(agent_id, []):
+                    normalized_command = copy.deepcopy(defaults_by_id.get(agent_id, base).get("command", []))
+                base["command"] = normalized_command
+            label = item.get("label")
+            if isinstance(label, str) and label.strip():
+                base["label"] = label.strip()
+            if isinstance(item.get("enabled"), bool):
+                base["enabled"] = item["enabled"]
+            agents.append(base)
+    seen = {item["id"] for item in agents}
+    for default in _DEFAULTS["local_review_agents"]:
+        if default["id"] not in seen:
+            agents.append(copy.deepcopy(default))
+    return agents
 
 
 def get_github_tokens() -> list:
@@ -254,6 +319,10 @@ def get_compliance_policy(repo: str) -> dict:
 
 def repo_requires_compliance_review(repo: str) -> bool:
     return bool(get_compliance_policy(repo).get("enabled"))
+
+
+def get_local_review_agents() -> list:
+    return _normalize_local_review_agents(load_config().get("local_review_agents"))
 
 
 def add_repo(repo: str) -> list:

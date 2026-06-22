@@ -11,6 +11,8 @@ import pytest
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 
 ROOT = Path(__file__).parent
+# Make the project root importable for modules like local_worker.py.
+sys.path.insert(0, str(ROOT))
 # Make the core modules importable the same way the backend does.
 sys.path.insert(0, str(ROOT / "core"))
 
@@ -58,7 +60,13 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setenv("CHROMA_PERSIST_DIR", str(tmp_path / "chroma"))
     from decision_store import create_store
 
-    return create_store()
+    store = create_store()
+    try:
+        yield store
+    finally:
+        close = getattr(store, "close", None)
+        if callable(close):
+            close()
 
 
 @pytest.fixture
@@ -91,4 +99,13 @@ def client(tmp_path, monkeypatch, clean_env):
     monkeypatch.setattr(main, "_store", None)
     monkeypatch.setattr(main, "_engine", None)
 
-    return TestClient(main.app), main
+    with TestClient(main.app) as test_client:
+        try:
+            yield test_client, main
+        finally:
+            store = getattr(main, "_store", None)
+            close = getattr(store, "close", None)
+            if callable(close):
+                close()
+            monkeypatch.setattr(main, "_store", None)
+            monkeypatch.setattr(main, "_engine", None)

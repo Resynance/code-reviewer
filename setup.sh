@@ -11,6 +11,52 @@ cd "$SCRIPT_DIR"
 VENV_DIR="$SCRIPT_DIR/.venv"
 FRONTEND_DIR="$SCRIPT_DIR/frontend"
 
+recreate_venv() {
+  local reason="$1"
+  echo "  Rebuilding .venv ($reason) ..."
+  rm -rf "$VENV_DIR"
+  python3 -m venv "$VENV_DIR"
+  echo "  Recreated."
+}
+
+venv_needs_rebuild() {
+  "$VENV_DIR/bin/python" - <<'PY'
+import importlib
+import os
+import site
+import sys
+
+for site_dir in site.getsitepackages():
+    if not site_dir.endswith("site-packages"):
+        continue
+    for name in os.listdir(site_dir):
+        path = os.path.join(site_dir, name)
+        if not os.path.isdir(path):
+            continue
+        if name.endswith(".dist-info"):
+            if " " in name or not os.path.exists(os.path.join(path, "METADATA")):
+                print(f"corrupt dist-info metadata: {name}")
+                sys.exit(1)
+        elif name.endswith(".egg-info"):
+            pkg_info = os.path.join(path, "PKG-INFO")
+            if not os.path.exists(pkg_info):
+                print(f"corrupt egg-info metadata: {name}")
+                sys.exit(1)
+        elif name == "pip":
+            # Keep a direct module-level check for pip because a broken pip
+            # package can exist even when its dist-info directory looks intact.
+            pass
+
+try:
+    importlib.import_module("pip")
+    importlib.import_module("pip._internal.cli")
+except Exception as exc:
+    print(f"broken pip install: {exc}")
+    sys.exit(1)
+sys.exit(0)
+PY
+}
+
 echo ""
 echo "  ⌘  ReviewBot — Setup"
 echo "  ─────────────────────────────"
@@ -32,17 +78,40 @@ if [ ! -d "$VENV_DIR" ]; then
   python3 -m venv "$VENV_DIR"
   echo "  Created."
 else
-  echo "  Already exists, skipping."
+  if [ ! -x "$VENV_DIR/bin/python" ] || [ ! -f "$VENV_DIR/bin/activate" ]; then
+    recreate_venv "missing virtualenv files"
+  else
+    echo "  Already exists, checking integrity."
+  fi
 fi
 
 # Activate
 source "$VENV_DIR/bin/activate"
 
+if ! venv_needs_rebuild; then
+  deactivate
+  recreate_venv "corrupt pip metadata"
+  source "$VENV_DIR/bin/activate"
+fi
+
 # ── 3. Install Python dependencies ──────────────────────────────────
 echo ""
 echo "▸ Installing Python packages..."
-pip install --quiet --upgrade pip
-pip install --quiet -r "$SCRIPT_DIR/requirements.txt"
+python -m pip install --quiet --upgrade pip
+python -m pip install --quiet -r "$SCRIPT_DIR/requirements.txt"
+
+if ! python - <<'PY'
+import importlib
+for module in ("pip", "numpy", "chromadb"):
+    importlib.import_module(module)
+PY
+then
+  deactivate
+  recreate_venv "dependency import check failed"
+  source "$VENV_DIR/bin/activate"
+  python -m pip install --quiet --upgrade pip
+  python -m pip install --quiet -r "$SCRIPT_DIR/requirements.txt"
+fi
 
 echo "  Done."
 
@@ -99,6 +168,17 @@ CHROMA_PERSIST_DIR=.chroma
 
 # For pgvector only:
 # DATABASE_URL=postgresql://user:password@localhost:5432/reviewbot
+
+# Local LLM worker (gitignored local_worker.py only).
+# Set llm_execution_mode to "local_queue" in Settings or via LLM_EXECUTION_MODE,
+# then run: python local_worker.py
+# LLM_EXECUTION_MODE=inline
+# LLM_WORKER_SECRET=change-me-to-a-strong-random-string
+# LOCAL_LLM_BASE_URL=http://localhost:8080/
+# Some servers expect /v1 (for example Ollama: http://localhost:11434/v1);
+# others expose the OpenAI-compatible API at the root path.
+# LOCAL_LLM_API_KEY=local-llm
+# LOCAL_LLM_MODEL=llama3.1:8b
 ENV
   echo "  Created .env — fill in your API keys before starting."
 fi

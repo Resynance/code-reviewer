@@ -5,6 +5,7 @@ import { authEnabled, signOut } from '../lib/auth.js'
 const NAV = [
   { key: 'review', label: 'Review', icon: '▶' },
   { key: 'assess', label: 'Assess', icon: '◎' },
+  { key: 'queue', label: 'Queue', icon: '≣' },
   { key: 'history', label: 'History', icon: '◷' },
   { key: 'decisions', label: 'Decisions', icon: '◈' },
   { key: 'settings', label: 'Settings', icon: '⚙' },

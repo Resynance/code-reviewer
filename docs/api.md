@@ -32,7 +32,9 @@ Request:
   "diff": "diff --git a/... ",
   "author": "dev",
   "base_branch": "main",
-  "files_changed": ["src/auth/middleware.py"]
+  "files_changed": ["src/auth/middleware.py"],
+  "agentic": false,
+  "agent_sources": ["codex", "kimi"]
 }
 ```
 Only `pr_number`, `repo`, `title`, and `diff` are required. Returns
@@ -43,6 +45,8 @@ When `llm_execution_mode=inline` (default), `OPENROUTER_API_KEY` must be set and
 the client then calls `POST /api/review/{id}/run` and polls `GET /api/review/{id}`.
 When `llm_execution_mode=local_queue`, the request is just persisted and a local
 worker claims it via `/worker/llm/claim`.
+`agentic=true` is available only in `local_queue` mode and fans the review out
+to the selected `agent_sources` in the local worker.
 HIPAA mode is determined from the repository's settings entry, not a per-request toggle.
 
 ### `POST /api/review/{id}/run`
@@ -200,6 +204,10 @@ Secrets are reported as booleans, never echoed.
   "webhook_secret_set": false,
   "llm_execution_mode": "inline",
   "llm_worker_secret_set": false,
+  "local_review_agents": [
+    { "id": "codex", "label": "Codex", "enabled": true, "command": ["codex", "exec", "..."] },
+    { "id": "kimi", "label": "Kimi", "enabled": true, "command": ["kimi", "-p", "{prompt}", "--output-format", "stream-json"] }
+  ],
   "compliance_policies": {
     "default": { "enabled": false, "notes": "" },
     "repos": { "org/a": { "enabled": true } }
@@ -225,6 +233,10 @@ value (falls back to env/default), omit/null to leave unchanged.
   "webhook_secret": "…",
   "llm_execution_mode": "local_queue",
   "llm_worker_secret": "shared-secret",
+  "local_review_agents": [
+    { "id": "codex", "label": "Codex", "enabled": true, "command": ["codex", "exec", "..."] },
+    { "id": "kimi", "label": "Kimi", "enabled": false, "command": ["kimi", "-p", "{prompt}", "--output-format", "stream-json"] }
+  ],
   "compliance_policies": {
     "default": { "enabled": false },
     "repos": { "org/a": { "enabled": true } }
@@ -244,8 +256,10 @@ Returns the same shape as `GET /api/settings`.
 ## Local worker
 
 These endpoints are for a separate app running on your local machine when
-`llm_execution_mode=local_queue`. They are authenticated with the shared
-`X-Worker-Secret` header matching the configured `llm_worker_secret`.
+`llm_execution_mode=local_queue`. When `llm_worker_secret` is configured, they
+are authenticated with the shared `X-Worker-Secret` header. When no worker
+secret is configured, unauthenticated access is limited to **agentic review**
+jobs only; queued local-LLM reviews and assessments still require a secret.
 
 ### `POST /worker/llm/claim`
 Claims the oldest queued local LLM job and marks it `running`.
@@ -271,6 +285,44 @@ to history with source `local_worker` for reviews.
 Marks the job failed.
 ```json
 { "error": "model timed out" }
+```
+
+## Queue viewer
+
+### `GET /api/queue?limit=100&status=&job_type=`
+Lists `local_queue` jobs newest-first with compact request/result summaries for
+the local Queue page.
+
+Example response:
+```json
+{
+  "jobs": [
+    {
+      "id": "123",
+      "job_type": "review",
+      "executor": "local_queue",
+      "status": "queued",
+      "claimed_by": null,
+      "created_at": "2026-06-22T02:28:20.936334+00:00",
+      "updated_at": "2026-06-22T02:28:20.936350+00:00",
+      "request": {
+        "repo": "org/a",
+        "pr_number": 9,
+        "title": "Agentic review",
+        "model": "deepseek/deepseek-v4-flash",
+        "provider": null,
+        "compliance": false,
+        "agentic": true,
+        "agent_sources": ["codex"],
+        "files_changed_count": 2,
+        "diff_lines": 42
+      },
+      "result": null,
+      "error": null
+    }
+  ],
+  "count": 1
+}
 ```
 
 ## Repositories

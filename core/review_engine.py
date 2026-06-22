@@ -43,6 +43,8 @@ class ReviewRequest:
     model: Optional[str] = None
     provider: Optional[str] = None
     compliance: bool = False
+    agentic: bool = False
+    agent_sources: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -61,8 +63,130 @@ class ReviewResult:
 # JSON schema for the structured review. The model is forced to call the
 # submit_review function with arguments matching this, guaranteeing a
 # machine-parseable payload instead of free-form prose.
+_ISSUE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "severity": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low"],
+        },
+        "file": {"type": "string"},
+        "description": {"type": "string"},
+        "suggestion": {"type": "string"},
+        "past_decision_ref": {
+            "type": "string",
+            "description": "Ref of a past decision that informed this, if any.",
+        },
+    },
+    "required": ["severity", "file", "description", "suggestion", "past_decision_ref"],
+}
+
+_SUGGESTION_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "type": {
+            "type": "string",
+            "enum": [
+                "security",
+                "performance",
+                "architecture",
+                "style",
+                "test_coverage",
+            ],
+        },
+        "description": {"type": "string"},
+        "past_decision_ref": {"type": "string"},
+    },
+    "required": ["type", "description", "past_decision_ref"],
+}
+
+_PAST_DECISION_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "ref": {"type": "string"},
+        "summary": {"type": "string"},
+        "how_applied": {
+            "type": "string",
+            "description": "How this past decision was applied to the current PR.",
+        },
+    },
+    "required": ["ref", "summary", "how_applied"],
+}
+
+_COMPLIANCE_FINDING_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "category": {"type": "string"},
+        "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+        "title": {"type": "string"},
+        "evidence": {"type": "string"},
+        "recommendation": {"type": "string"},
+        "file": {"type": "string"},
+        "manual_review": {"type": "boolean"},
+    },
+    "required": ["category", "severity", "title", "evidence", "recommendation", "file", "manual_review"],
+}
+
+_COMPLIANCE_GAP_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "summary": {"type": "string"},
+        "details": {"type": "string"},
+        "file": {"type": "string"},
+    },
+    "required": ["summary", "details", "file"],
+}
+
+_COMPLIANCE_REVIEW_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "description": "HIPAA / HL7-focused findings. Use this only when healthcare compliance review mode is enabled.",
+    "properties": {
+        "hipaa_relevant": {"type": "boolean"},
+        "hl7_relevant": {"type": "boolean"},
+        "requires_manual_compliance_review": {"type": "boolean"},
+        "summary": {"type": "string"},
+        "policy_notes_applied": {"type": "array", "items": {"type": "string"}},
+        "hipaa_findings": {"type": "array", "items": _COMPLIANCE_FINDING_SCHEMA},
+        "hl7_findings": {"type": "array", "items": _COMPLIANCE_FINDING_SCHEMA},
+        "phi_exposure_risk": {"type": "array", "items": _COMPLIANCE_GAP_SCHEMA},
+        "encryption_gaps": {"type": "array", "items": _COMPLIANCE_GAP_SCHEMA},
+        "access_control_gaps": {"type": "array", "items": _COMPLIANCE_GAP_SCHEMA},
+        "audit_trail_gaps": {"type": "array", "items": _COMPLIANCE_GAP_SCHEMA},
+        "minimum_necessary_gaps": {"type": "array", "items": _COMPLIANCE_GAP_SCHEMA},
+        "third_party_baa_risks": {"type": "array", "items": _COMPLIANCE_GAP_SCHEMA},
+        "hl7_interface_gaps": {"type": "array", "items": _COMPLIANCE_GAP_SCHEMA},
+        "hl7_message_integrity_gaps": {"type": "array", "items": _COMPLIANCE_GAP_SCHEMA},
+        "hl7_transport_gaps": {"type": "array", "items": _COMPLIANCE_GAP_SCHEMA},
+    },
+    "required": [
+        "hipaa_relevant",
+        "hl7_relevant",
+        "requires_manual_compliance_review",
+        "summary",
+        "policy_notes_applied",
+        "hipaa_findings",
+        "hl7_findings",
+        "phi_exposure_risk",
+        "encryption_gaps",
+        "access_control_gaps",
+        "audit_trail_gaps",
+        "minimum_necessary_gaps",
+        "third_party_baa_risks",
+        "hl7_interface_gaps",
+        "hl7_message_integrity_gaps",
+        "hl7_transport_gaps",
+    ],
+}
+
 _REVIEW_SCHEMA = {
     "type": "object",
+    "additionalProperties": False,
     "properties": {
         "summary": {
             "type": "string",
@@ -79,116 +203,21 @@ _REVIEW_SCHEMA = {
         "issues": {
             "type": "array",
             "description": "Concrete problems found in the diff.",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "severity": {
-                        "type": "string",
-                        "enum": ["critical", "high", "medium", "low"],
-                    },
-                    "file": {"type": "string"},
-                    "description": {"type": "string"},
-                    "suggestion": {"type": "string"},
-                    "past_decision_ref": {
-                        "type": "string",
-                        "description": "Ref of a past decision that informed this, if any.",
-                    },
-                },
-                "required": ["severity", "file", "description", "suggestion"],
-            },
+            "items": _ISSUE_SCHEMA,
         },
         "suggestions": {
             "type": "array",
             "description": "Non-blocking improvements.",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "type": {
-                        "type": "string",
-                        "enum": [
-                            "security",
-                            "performance",
-                            "architecture",
-                            "style",
-                            "test_coverage",
-                        ],
-                    },
-                    "description": {"type": "string"},
-                    "past_decision_ref": {"type": "string"},
-                },
-                "required": ["type", "description"],
-            },
+            "items": _SUGGESTION_SCHEMA,
         },
         "past_decisions_applied": {
             "type": "array",
             "description": "Past decisions that meaningfully shaped this review.",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "ref": {"type": "string"},
-                    "summary": {"type": "string"},
-                    "how_applied": {
-                        "type": "string",
-                        "description": "How this past decision was applied to the current PR.",
-                    },
-                },
-                "required": ["ref", "summary", "how_applied"],
-            },
+            "items": _PAST_DECISION_SCHEMA,
         },
-        "compliance_review": {
-            "type": "object",
-            "description": "HIPAA / HL7-focused findings. Use this only when healthcare compliance review mode is enabled.",
-            "properties": {
-                "hipaa_relevant": {"type": "boolean"},
-                "hl7_relevant": {"type": "boolean"},
-                "requires_manual_compliance_review": {"type": "boolean"},
-                "summary": {"type": "string"},
-                "policy_notes_applied": {"type": "array", "items": {"type": "string"}},
-                "hipaa_findings": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "category": {"type": "string"},
-                            "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
-                            "title": {"type": "string"},
-                            "evidence": {"type": "string"},
-                            "recommendation": {"type": "string"},
-                            "file": {"type": "string"},
-                            "manual_review": {"type": "boolean"},
-                        },
-                        "required": ["category", "severity", "title", "evidence", "recommendation"],
-                    },
-                },
-                "hl7_findings": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "category": {"type": "string"},
-                            "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
-                            "title": {"type": "string"},
-                            "evidence": {"type": "string"},
-                            "recommendation": {"type": "string"},
-                            "file": {"type": "string"},
-                            "manual_review": {"type": "boolean"},
-                        },
-                        "required": ["category", "severity", "title", "evidence", "recommendation"],
-                    },
-                },
-                "phi_exposure_risk": {"type": "array", "items": {"type": "object"}},
-                "encryption_gaps": {"type": "array", "items": {"type": "object"}},
-                "access_control_gaps": {"type": "array", "items": {"type": "object"}},
-                "audit_trail_gaps": {"type": "array", "items": {"type": "object"}},
-                "minimum_necessary_gaps": {"type": "array", "items": {"type": "object"}},
-                "third_party_baa_risks": {"type": "array", "items": {"type": "object"}},
-                "hl7_interface_gaps": {"type": "array", "items": {"type": "object"}},
-                "hl7_message_integrity_gaps": {"type": "array", "items": {"type": "object"}},
-                "hl7_transport_gaps": {"type": "array", "items": {"type": "object"}},
-            },
-        },
+        "compliance_review": _COMPLIANCE_REVIEW_SCHEMA,
     },
-    "required": ["summary", "approved", "confidence", "issues", "suggestions"],
+    "required": ["summary", "approved", "confidence", "issues", "suggestions", "past_decisions_applied", "compliance_review"],
 }
 
 # OpenAI-compatible function tool wrapping the schema above.

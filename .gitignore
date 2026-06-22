@@ -12,6 +12,9 @@ reviews.json
 review_jobs.json
 access.json
 
+# Local-only scratch files
+.local/
+
 # Vector store
 .chroma/
 

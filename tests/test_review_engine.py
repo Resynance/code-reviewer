@@ -9,7 +9,7 @@ import types
 import pytest
 
 import decision_store as ds
-from review_engine import CodeReviewEngine, ReviewRequest
+from review_engine import CodeReviewEngine, ReviewRequest, _REVIEW_SCHEMA
 
 
 # ----- fakes ----- #
@@ -81,6 +81,22 @@ def test_build_prompt_contains_key_parts(store, monkeypatch):
     assert "a.py" in prompt
     assert "+x" in prompt
     assert "no relevant past decisions" in prompt
+
+
+def test_review_schema_closes_all_object_nodes():
+    def walk(node):
+        if isinstance(node, dict):
+            if node.get("type") == "object":
+                assert node.get("additionalProperties") is False
+                assert isinstance(node.get("properties"), dict)
+                assert isinstance(node.get("required"), list)
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(_REVIEW_SCHEMA)
 
 
 def test_build_prompt_contains_compliance_context(store, cfg, monkeypatch):
