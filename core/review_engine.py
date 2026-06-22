@@ -436,19 +436,46 @@ class CodeReviewEngine:
         return "".join(out)
 
     @classmethod
+    def _is_review_payload(cls, payload) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        required = set(_REVIEW_SCHEMA["required"])
+        if not required.issubset(payload.keys()):
+            return False
+        if not isinstance(payload.get("summary"), str) or not payload.get("summary", "").strip():
+            return False
+        if not isinstance(payload.get("approved"), bool):
+            return False
+        if not isinstance(payload.get("confidence"), (int, float)):
+            return False
+        if not isinstance(payload.get("issues"), list):
+            return False
+        if not isinstance(payload.get("suggestions"), list):
+            return False
+        if not isinstance(payload.get("past_decisions_applied"), list):
+            return False
+        if not isinstance(payload.get("compliance_review"), dict):
+            return False
+        return True
+
+    @classmethod
     def _parse_json_payload(cls, text: str) -> dict:
         candidate = (text or "").strip()
         if not candidate:
             raise RuntimeError("Model returned empty content.")
         try:
-            return json.loads(candidate)
+            payload = json.loads(candidate)
+            if cls._is_review_payload(payload):
+                return payload
         except json.JSONDecodeError:
             pass
 
         escaped = cls._escape_json_string_controls(candidate)
         if escaped != candidate:
             try:
-                return json.loads(escaped)
+                payload = json.loads(escaped)
+                if cls._is_review_payload(payload):
+                    return payload
             except json.JSONDecodeError:
                 pass
 
@@ -461,11 +488,15 @@ class CodeReviewEngine:
                     first, rest = block.split("\n", 1)
                     if first.strip().lower() in {"json", "javascript", "js"}:
                         try:
-                            return json.loads(rest.strip())
+                            payload = json.loads(rest.strip())
+                            if cls._is_review_payload(payload):
+                                return payload
                         except json.JSONDecodeError:
                             pass
                 try:
-                    return json.loads(block)
+                    payload = json.loads(block)
+                    if cls._is_review_payload(payload):
+                        return payload
                 except json.JSONDecodeError:
                     pass
 
@@ -493,7 +524,9 @@ class CodeReviewEngine:
                     if depth == 0:
                         snippet = candidate[start:idx + 1]
                         try:
-                            return json.loads(snippet)
+                            payload = json.loads(snippet)
+                            if cls._is_review_payload(payload):
+                                return payload
                         except json.JSONDecodeError:
                             break
             start = candidate.find("{", start + 1)

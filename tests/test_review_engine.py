@@ -59,6 +59,24 @@ def review_payload(**over):
         "issues": [],
         "suggestions": [],
         "past_decisions_applied": [],
+        "compliance_review": {
+            "hipaa_relevant": False,
+            "hl7_relevant": False,
+            "requires_manual_compliance_review": False,
+            "summary": "",
+            "policy_notes_applied": [],
+            "hipaa_findings": [],
+            "hl7_findings": [],
+            "phi_exposure_risk": [],
+            "encryption_gaps": [],
+            "access_control_gaps": [],
+            "audit_trail_gaps": [],
+            "minimum_necessary_gaps": [],
+            "third_party_baa_risks": [],
+            "hl7_interface_gaps": [],
+            "hl7_message_integrity_gaps": [],
+            "hl7_transport_gaps": [],
+        },
     }
     p.update(over)
     return p
