@@ -11,6 +11,8 @@ import pytest
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 
 ROOT = Path(__file__).parent
+# Make the project root importable for modules like local_worker.py.
+sys.path.insert(0, str(ROOT))
 # Make the core modules importable the same way the backend does.
 sys.path.insert(0, str(ROOT / "core"))
 
