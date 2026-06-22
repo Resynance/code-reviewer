@@ -240,6 +240,8 @@ its ref. Report it in past_decisions_applied so the author sees the connection.
 
 Call the submit_review function exactly once with your structured findings. Set
 approved=false if there is any critical or high-severity issue.
+If tool calling is unavailable, return a raw JSON object matching the
+submit_review schema and nothing else.
 
 If HIPAA / HL7 review mode is enabled, use the compliance_review object for evidence-backed
 healthcare-compliance findings. Do not claim legal certification. Mark
@@ -303,7 +305,7 @@ class CodeReviewEngine:
                 "provider": {"order": [provider], "allow_fallbacks": False}
             }
 
-        response = self._client.chat.completions.create(**kwargs)
+        response = self._create_review_completion(kwargs)
 
         payload = self._extract_tool_input(response)
         result = self._to_result(request, payload, decisions)
@@ -313,6 +315,43 @@ class CodeReviewEngine:
     # ------------------------------------------------------------------ #
     # Internals
     # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _should_retry_without_tools(exc: Exception) -> bool:
+        details = []
+        for value in (
+            str(exc),
+            getattr(exc, "message", None),
+            getattr(exc, "body", None),
+            getattr(getattr(exc, "response", None), "text", None),
+        ):
+            if value:
+                details.append(str(value).lower())
+        haystack = "\n".join(details)
+        unsupported_markers = (
+            "tool_choice",
+            "tools are not supported",
+            "tool use is not supported",
+            "does not support tools",
+            "doesn't support tools",
+            "function calling is not supported",
+            "tool calling is not supported",
+            "unsupported tools",
+            "unsupported parameter: tools",
+            "unsupported parameter: tool_choice",
+        )
+        return any(marker in haystack for marker in unsupported_markers)
+
+    def _create_review_completion(self, kwargs: dict):
+        try:
+            return self._client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            if "tools" not in kwargs or not self._should_retry_without_tools(exc):
+                raise
+            retry_kwargs = dict(kwargs)
+            retry_kwargs.pop("tools", None)
+            retry_kwargs.pop("tool_choice", None)
+            return self._client.chat.completions.create(**retry_kwargs)
 
     def _retrieve_context(self, request: ReviewRequest):
         # Search the decision store using the PR's intent and touched files.
@@ -361,13 +400,125 @@ class CodeReviewEngine:
             f"\n## Diff\n```diff\n{request.diff}\n```\n"
         )
 
+    @staticmethod
+    def _escape_json_string_controls(text: str) -> str:
+        out = []
+        in_string = False
+        escape = False
+        for ch in text:
+            if in_string:
+                if escape:
+                    out.append(ch)
+                    escape = False
+                    continue
+                if ch == "\\":
+                    out.append(ch)
+                    escape = True
+                    continue
+                if ch == '"':
+                    out.append(ch)
+                    in_string = False
+                    continue
+                if ch == "\n":
+                    out.append("\\n")
+                    continue
+                if ch == "\r":
+                    out.append("\\r")
+                    continue
+                if ch == "\t":
+                    out.append("\\t")
+                    continue
+                out.append(ch)
+                continue
+            out.append(ch)
+            if ch == '"':
+                in_string = True
+        return "".join(out)
+
+    @classmethod
+    def _parse_json_payload(cls, text: str) -> dict:
+        candidate = (text or "").strip()
+        if not candidate:
+            raise RuntimeError("Model returned empty content.")
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+
+        escaped = cls._escape_json_string_controls(candidate)
+        if escaped != candidate:
+            try:
+                return json.loads(escaped)
+            except json.JSONDecodeError:
+                pass
+
+        if "```" in candidate:
+            for block in candidate.split("```"):
+                block = block.strip()
+                if not block:
+                    continue
+                if "\n" in block:
+                    first, rest = block.split("\n", 1)
+                    if first.strip().lower() in {"json", "javascript", "js"}:
+                        try:
+                            return json.loads(rest.strip())
+                        except json.JSONDecodeError:
+                            pass
+                try:
+                    return json.loads(block)
+                except json.JSONDecodeError:
+                    pass
+
+        start = candidate.find("{")
+        while start != -1:
+            depth = 0
+            in_string = False
+            escape = False
+            for idx in range(start, len(candidate)):
+                ch = candidate[idx]
+                if in_string:
+                    if escape:
+                        escape = False
+                    elif ch == "\\":
+                        escape = True
+                    elif ch == '"':
+                        in_string = False
+                    continue
+                if ch == '"':
+                    in_string = True
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        snippet = candidate[start:idx + 1]
+                        try:
+                            return json.loads(snippet)
+                        except json.JSONDecodeError:
+                            break
+            start = candidate.find("{", start + 1)
+
+        raise RuntimeError("Model did not return valid JSON content.")
+
     def _extract_tool_input(self, response) -> dict:
         message = response.choices[0].message
         tool_calls = getattr(message, "tool_calls", None) or []
         for call in tool_calls:
             if call.function.name == "submit_review":
                 # Function arguments arrive as a JSON string.
-                return json.loads(call.function.arguments)
+                return self._parse_json_payload(call.function.arguments)
+        content = getattr(message, "content", None)
+        if isinstance(content, str) and content.strip():
+            return self._parse_json_payload(content)
+        if isinstance(content, list):
+            text_parts = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
+                    text_parts.append(item["text"])
+                elif hasattr(item, "type") and getattr(item, "type") == "text" and isinstance(getattr(item, "text", None), str):
+                    text_parts.append(item.text)
+            if text_parts:
+                return self._parse_json_payload("\n".join(text_parts))
         raise RuntimeError("Model did not return a submit_review function call.")
 
     @staticmethod
