@@ -217,6 +217,7 @@ function AssessmentResult({ result }) {
   function buildIssueBody() {
     const vulns = [...selVulns].sort((a, b) => a - b)
       .map(i => result.vulnerabilities[i]).filter(Boolean)
+    const escapeCode = (s) => String(s || '').replace(/`/g, '\\`').trim()
     const lines = ['## 🔍 Assessment Findings', '']
     vulns.forEach(v => {
       lines.push(`### [${(v.severity || '').toUpperCase()}] ${v.title}`)
@@ -224,7 +225,7 @@ function AssessmentResult({ result }) {
       if (v.recommendation) lines.push(`\n> 💡 ${v.recommendation}`)
       lines.push('')
     })
-    lines.push(`—\nFrom assessment of \`${result.repo}\``)
+    lines.push(`—\nFrom assessment of \`${escapeCode(result.repo)}\``)
     return lines.join('\n')
   }
 

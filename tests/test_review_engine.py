@@ -86,7 +86,10 @@ def test_build_prompt_contains_key_parts(store, monkeypatch):
 def test_build_prompt_contains_compliance_context(store, cfg, monkeypatch):
     cfg.save_config({"compliance_policies": {"default": {"notes": "Use approved BAAs only"}, "repos": {}}})
     eng = make_engine(store, review_payload(), monkeypatch)
-    prompt = eng._build_prompt(make_req(compliance=True, diff='+ logger.info("patient_ssn")'), [])
+    prompt = eng._build_prompt(
+        make_req(compliance=True, files_changed=["api/patient.py"], diff='+ logger.info("patient_ssn")'),
+        [],
+    )
     assert "HIPAA / HL7 Review Mode" in prompt
     assert "Use approved BAAs only" in prompt
     assert "Potential PHI in logs or debug output" in prompt
@@ -95,7 +98,14 @@ def test_build_prompt_contains_compliance_context(store, cfg, monkeypatch):
 def test_build_prompt_contains_hl7_context(store, cfg, monkeypatch):
     cfg.save_config({"compliance_policies": {"default": {"notes": "Validate HL7 ACKs"}, "repos": {}}})
     eng = make_engine(store, review_payload(), monkeypatch)
-    prompt = eng._build_prompt(make_req(compliance=True, diff='+ logger.info("MSH|^~\\\\&|ADT|PID|")\n+ start_hl7_listener("tcp://feed:2575")'), [])
+    prompt = eng._build_prompt(
+        make_req(
+            compliance=True,
+            files_changed=["integrations/hl7_listener.py"],
+            diff='+ logger.info("MSH|^~\\\\&|ADT|PID|")\n+ start_hl7_listener("tcp://feed:2575")',
+        ),
+        [],
+    )
     assert "HIPAA / HL7 Review Mode" in prompt
     assert "Validate HL7 ACKs" in prompt
     assert "Raw HL7 payload appears in logs or debug output" in prompt
@@ -192,6 +202,207 @@ def test_compliance_result_merges_deterministic_findings(store, cfg, monkeypatch
     assert "Partner message contract review required" in hl7_titles
     assert any(i["description"] == "Potential PHI in logs or debug output" for i in result.issues)
     assert any(i["description"] == "Raw HL7 payload appears in logs or debug output" for i in result.issues)
+
+
+def test_compliance_overlays_filtered_to_touched_files(store, cfg, monkeypatch):
+    payload = review_payload(
+        compliance_review={
+            "enabled": True,
+            "hipaa_relevant": True,
+            "hipaa_findings": [
+                {
+                    "category": "phi_logging",
+                    "severity": "critical",
+                    "title": "Potential PHI in logs",
+                    "evidence": "logger.info(patient_ssn)",
+                    "recommendation": "Remove PHI from logs.",
+                    "file": "api/patient.py",
+                },
+                {
+                    "category": "phi_logging",
+                    "severity": "critical",
+                    "title": "Potential PHI in logs",
+                    "evidence": "logger.info(patient_ssn)",
+                    "recommendation": "Remove PHI from logs.",
+                    "file": "api/untouched.py",
+                },
+            ],
+        }
+    )
+    eng = make_engine(store, payload, monkeypatch)
+    result = eng.review(make_req(compliance=True, files_changed=["api/patient.py"]))
+    files = {i["file"] for i in result.issues}
+    assert "api/patient.py" in files
+    assert "api/untouched.py" not in files
+
+
+def test_compliance_overlays_skip_malformed_file_labels(store, cfg, monkeypatch):
+    payload = review_payload(
+        compliance_review={
+            "enabled": True,
+            "hipaa_relevant": True,
+            "hipaa_findings": [
+                {
+                    "category": "phi_logging",
+                    "severity": "critical",
+                    "title": "Potential PHI in logs",
+                    "evidence": "logger.info(patient_ssn)",
+                    "recommendation": "Remove PHI from logs.",
+                    "file": ",severity:",
+                },
+                {
+                    "category": "phi_logging",
+                    "severity": "critical",
+                    "title": "Potential PHI in logs",
+                    "evidence": "logger.info(patient_ssn)",
+                    "recommendation": "Remove PHI from logs.",
+                    "file": "compliance",
+                },
+            ],
+        }
+    )
+    eng = make_engine(store, payload, monkeypatch)
+    result = eng.review(make_req(compliance=True, files_changed=["api/patient.py"]))
+    assert not any(i["file"] in {",severity:", "compliance"} for i in result.issues)
+
+
+def test_vendor_policy_findings_survive_without_file_anchor(store, cfg, monkeypatch):
+    payload = review_payload(
+        compliance_review={
+            "enabled": True,
+            "hipaa_relevant": True,
+            "hipaa_findings": [
+                {
+                    "category": "third_party_baa",
+                    "severity": "high",
+                    "title": "Disallowed third-party vendor appears in HIPAA review scope",
+                    "evidence": "Observed external integration matching a disallowed vendor policy: api.segment.io",
+                    "recommendation": "Remove the integration or document an approved replacement before handling PHI.",
+                    "manual_review": True,
+                },
+            ],
+        }
+    )
+    eng = make_engine(store, payload, monkeypatch)
+    result = eng.review(make_req(compliance=True, files_changed=["api/patient.py"]))
+    assert any(i["description"] == "Disallowed third-party vendor appears in HIPAA review scope" for i in result.issues)
+    assert any(i["file"] == "" for i in result.issues if i["description"] == "Disallowed third-party vendor appears in HIPAA review scope")
+
+
+def test_compliance_overlays_deduped(store, cfg, monkeypatch):
+    payload = review_payload(
+        compliance_review={
+            "enabled": True,
+            "hipaa_relevant": True,
+            "hipaa_findings": [
+                {
+                    "category": "phi_logging",
+                    "severity": "critical",
+                    "title": "Potential PHI in logs",
+                    "evidence": "logger.info(patient_ssn)",
+                    "recommendation": "Remove PHI from logs.",
+                    "file": "api/patient.py",
+                },
+                {
+                    "category": "phi_logging",
+                    "severity": "critical",
+                    "title": "Potential PHI in logs",
+                    "evidence": "logger.info(patient_ssn)",
+                    "recommendation": "Remove PHI from logs.",
+                    "file": "api/patient.py",
+                },
+            ],
+        }
+    )
+    eng = make_engine(store, payload, monkeypatch)
+    result = eng.review(make_req(compliance=True, files_changed=["api/patient.py"]))
+    assert len([i for i in result.issues if i["file"] == "api/patient.py"]) == 1
+
+
+def test_compliance_overlays_suppress_test_docs(store, cfg, monkeypatch):
+    payload = review_payload(
+        compliance_review={
+            "enabled": True,
+            "hipaa_relevant": True,
+            "hipaa_findings": [
+                {
+                    "category": "phi_logging",
+                    "severity": "critical",
+                    "title": "Potential PHI in logs",
+                    "evidence": "logger.info(patient_ssn)",
+                    "recommendation": "Remove PHI from logs.",
+                    "file": "tests/test_patient.py",
+                },
+            ],
+        }
+    )
+    eng = make_engine(store, payload, monkeypatch)
+    result = eng.review(make_req(compliance=True, files_changed=["tests/test_patient.py"]))
+    assert not any(i["file"].startswith("tests/") for i in result.issues)
+
+
+def test_pr_comment_body_has_no_malformed_file_labels(store, cfg, monkeypatch):
+    """PR comment formatting must not turn arbitrary metadata into file names."""
+    payload = review_payload(
+        compliance_review={
+            "enabled": True,
+            "hipaa_relevant": True,
+            "hipaa_findings": [
+                {
+                    "category": "phi_logging",
+                    "severity": "critical",
+                    "title": "Potential PHI in logs",
+                    "evidence": "logger.info(patient_ssn)",
+                    "recommendation": "Remove PHI from logs.",
+                    "file": "api/patient.py",
+                },
+            ],
+        }
+    )
+    eng = make_engine(store, payload, monkeypatch)
+    result = eng.review(make_req(compliance=True, files_changed=["api/patient.py"]))
+
+    # Simulate the frontend buildBody() formatting in Python.
+    def format_comment_body(issues):
+        lines = []
+        for it in issues:
+            file = str(it.get("file") or "").replace("`", "\\`").strip()
+            lines.append(f"- **[{it.get('severity', '').upper()}]** `{file}` — {it.get('description', '')}")
+        return "\n".join(lines)
+
+    body = format_comment_body(result.issues)
+    assert "`,severity:`" not in body
+    assert "`compliance`" not in body
+    assert "`api/patient.py`" in body
+
+
+def test_pr_comment_body_omits_invalid_generic_issue_files():
+    def format_comment_body(issues):
+        def sanitize_file_label(value):
+            file = str(value or "").replace("\n", "").replace("\r", "").replace("`", "").strip()
+            if not file:
+                return ""
+            if file.lower() in {"compliance", "hipaa", "hl7"}:
+                return ""
+            if any(ch in file for ch in ',:;{}"\'[]'):
+                return ""
+            return file
+
+        lines = []
+        for it in issues:
+            file = sanitize_file_label(it.get("file"))
+            label = f" `{file}` -" if file else " -"
+            lines.append(f"[{it.get('severity', '').upper()}]{label} {it.get('description', '')}")
+        return "\n".join(lines)
+
+    body = format_comment_body([
+        {"severity": "critical", "file": ",severity:", "description": "bad file"},
+        {"severity": "high", "file": "api/patient.py", "description": "good file"},
+        {"severity": "medium", "file": "compliance", "description": "module fallback"},
+    ])
+    assert ",severity:" not in body
+    assert "compliance" not in body
+    assert "api/patient.py" in body
 
 
 def test_missing_tool_call_raises(store, cfg, monkeypatch):

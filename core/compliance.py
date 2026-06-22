@@ -27,6 +27,7 @@ DEFAULT_POLICY = {
     "approved_hl7_versions": ["2.x", "FHIR R4"],
     "required_hl7_validation_signals": ["schema", "validate", "ack", "nack", "message_control_id"],
     "required_hl7_transport_signals": ["tls", "ssl", "https", "sftp", "vpn", "mllps"],
+    "include_test_docs_findings": False,
 }
 
 _PHI_TERMS = (
@@ -282,8 +283,9 @@ def review_issue_overlays(hipaa_result: dict, *, enabled: bool) -> list:
         if item["severity"] not in {"critical", "high", "medium"}:
             continue
         overlays.append({
+            "category": item.get("category") or "general",
             "severity": item["severity"],
-            "file": item.get("file") or "compliance",
+            "file": item.get("file") or "",
             "description": item["title"],
             "suggestion": item["recommendation"],
         })
@@ -329,7 +331,40 @@ def _normalize_policy(raw) -> dict:
         values = raw.get(key)
         if isinstance(values, list):
             policy[key] = [str(v).strip() for v in values if str(v).strip()]
+    if isinstance(raw.get("include_test_docs_findings"), bool):
+        policy["include_test_docs_findings"] = raw["include_test_docs_findings"]
     return policy
+
+
+def _is_valid_repo_path(path: str) -> bool:
+    """Reject strings that are clearly not repo paths (e.g. JSON fragments)."""
+    if not path or not isinstance(path, str):
+        return False
+    path = path.strip()
+    if not path:
+        return False
+    # Disallow fragments that look like serialized dict keys/values.
+    forbidden = {",", ":", ";", "{", "}", "\"", "'", "[", "]", "\\n", "\\t"}
+    if any(ch in path for ch in forbidden):
+        return False
+    return True
+
+
+def _should_skip_for_review(file: str, file_paths: list, mode: str, policy: dict) -> bool:
+    """PR-comment findings must point at touched files and skip tests/docs by default."""
+    if mode != "review":
+        return False
+    file = (file or "").strip()
+    if not _is_valid_repo_path(file):
+        return True
+    allowed = set(file_paths or [])
+    if file not in allowed:
+        return True
+    if not policy.get("include_test_docs_findings", False):
+        lower = file.lower()
+        if lower.startswith(("tests/", "test/", "docs/", "doc/")):
+            return True
+    return False
 
 
 def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str) -> dict:
@@ -350,7 +385,12 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
     all_phi_terms = list(dict.fromkeys([*_PHI_TERMS, *(t.lower() for t in policy.get("phi_field_patterns") or [])]))
     all_hl7_terms = list(dict.fromkeys([*_HL7_TERMS, *(t.lower() for t in policy.get("approved_hl7_versions") or [])]))
 
-    def add(category, severity, title, evidence, recommendation, *, file="", manual_review=False, bucket=None):
+    def add(category, severity, title, evidence, recommendation, *, file="", manual_review=False, bucket=None, allow_empty_file=False):
+        file = (file or "").strip()
+        if not file and not allow_empty_file:
+            return
+        if file and _should_skip_for_review(file, paths, mode, policy):
+            return
         finding = {
             "category": category,
             "severity": severity,
@@ -490,6 +530,7 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
                 "Remove the integration or document an approved replacement before handling PHI.",
                 manual_review=True,
                 bucket="third_party_baa_risks",
+                allow_empty_file=True,
             )
         elif approved and not any(v in lowered for v in approved):
             add(
@@ -500,6 +541,7 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
                 "Confirm BAA coverage and approved-vendor status before sending PHI to this service.",
                 manual_review=True,
                 bucket="third_party_baa_risks",
+                allow_empty_file=True,
             )
 
     return {
