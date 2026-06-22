@@ -305,7 +305,7 @@ class CodeReviewEngine:
                 "provider": {"order": [provider], "allow_fallbacks": False}
             }
 
-        response = self._client.chat.completions.create(**kwargs)
+        response = self._create_review_completion(kwargs)
 
         payload = self._extract_tool_input(response)
         result = self._to_result(request, payload, decisions)
@@ -315,6 +315,43 @@ class CodeReviewEngine:
     # ------------------------------------------------------------------ #
     # Internals
     # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _should_retry_without_tools(exc: Exception) -> bool:
+        details = []
+        for value in (
+            str(exc),
+            getattr(exc, "message", None),
+            getattr(exc, "body", None),
+            getattr(getattr(exc, "response", None), "text", None),
+        ):
+            if value:
+                details.append(str(value).lower())
+        haystack = "\n".join(details)
+        unsupported_markers = (
+            "tool_choice",
+            "tools are not supported",
+            "tool use is not supported",
+            "does not support tools",
+            "doesn't support tools",
+            "function calling is not supported",
+            "tool calling is not supported",
+            "unsupported tools",
+            "unsupported parameter: tools",
+            "unsupported parameter: tool_choice",
+        )
+        return any(marker in haystack for marker in unsupported_markers)
+
+    def _create_review_completion(self, kwargs: dict):
+        try:
+            return self._client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            if "tools" not in kwargs or not self._should_retry_without_tools(exc):
+                raise
+            retry_kwargs = dict(kwargs)
+            retry_kwargs.pop("tools", None)
+            retry_kwargs.pop("tool_choice", None)
+            return self._client.chat.completions.create(**retry_kwargs)
 
     def _retrieve_context(self, request: ReviewRequest):
         # Search the decision store using the PR's intent and touched files.

@@ -27,19 +27,27 @@ class FakeClient:
     def __init__(self, response):
         self.response = response
         self.captured = None
+        self.calls = []
         self.chat = types.SimpleNamespace(
             completions=types.SimpleNamespace(create=self._create)
         )
 
     def _create(self, **kwargs):
         self.captured = kwargs
-        return self.response
+        self.calls.append(kwargs)
+        if isinstance(self.response, list):
+            current = self.response.pop(0)
+        else:
+            current = self.response
+        if isinstance(current, Exception):
+            raise current
+        return current
 
 
-def make_engine(store, payload, monkeypatch, no_tool=False, model_override=None, content=None, raw_arguments=None):
+def make_engine(store, payload, monkeypatch, no_tool=False, model_override=None, content=None, raw_arguments=None, response=None):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     eng = CodeReviewEngine(store, model=model_override)
-    eng._client = FakeClient(make_response(payload, no_tool=no_tool, content=content, raw_arguments=raw_arguments))
+    eng._client = FakeClient(response if response is not None else make_response(payload, no_tool=no_tool, content=content, raw_arguments=raw_arguments))
     return eng
 
 
@@ -456,6 +464,21 @@ def test_tool_call_arguments_tolerate_raw_newlines_in_strings(store, cfg, monkey
     eng = make_engine(store, payload, monkeypatch, raw_arguments=raw_arguments)
     result = eng.review(make_req())
     assert result.summary == "line one\nline two"
+
+
+def test_unsupported_tool_call_retries_without_tools(store, cfg, monkeypatch):
+    payload = review_payload(summary="retry fallback")
+    responses = [
+        RuntimeError("Provider error: unsupported parameter: tools"),
+        make_response(payload, no_tool=True, content=json.dumps(payload)),
+    ]
+    eng = make_engine(store, payload, monkeypatch, response=responses)
+    result = eng.review(make_req(model="google/gemini-2.5-flash-lite"))
+    assert result.summary == "retry fallback"
+    assert "tools" in eng._client.calls[0]
+    assert "tool_choice" in eng._client.calls[0]
+    assert "tools" not in eng._client.calls[1]
+    assert "tool_choice" not in eng._client.calls[1]
 
 
 # ----- model & provider resolution ----- #
