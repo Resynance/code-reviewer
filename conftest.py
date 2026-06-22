@@ -58,7 +58,13 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setenv("CHROMA_PERSIST_DIR", str(tmp_path / "chroma"))
     from decision_store import create_store
 
-    return create_store()
+    store = create_store()
+    try:
+        yield store
+    finally:
+        close = getattr(store, "close", None)
+        if callable(close):
+            close()
 
 
 @pytest.fixture
@@ -91,4 +97,13 @@ def client(tmp_path, monkeypatch, clean_env):
     monkeypatch.setattr(main, "_store", None)
     monkeypatch.setattr(main, "_engine", None)
 
-    return TestClient(main.app), main
+    with TestClient(main.app) as test_client:
+        try:
+            yield test_client, main
+        finally:
+            store = getattr(main, "_store", None)
+            close = getattr(store, "close", None)
+            if callable(close):
+                close()
+            monkeypatch.setattr(main, "_store", None)
+            monkeypatch.setattr(main, "_engine", None)
