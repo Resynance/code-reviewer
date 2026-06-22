@@ -341,6 +341,58 @@ class CodeReviewEngine:
                 return json.loads(call.function.arguments)
         raise RuntimeError("Model did not return a submit_review function call.")
 
+    @staticmethod
+    def _is_valid_overlay_file(file: str, files_changed: list) -> bool:
+        """Compliance overlays must point at real, touched repo paths."""
+        if not file or not isinstance(file, str):
+            return False
+        file = file.strip()
+        if not file:
+            return False
+        # Reject module-name fallbacks and malformed metadata.
+        if file.lower() in {"compliance", "hipaa", "hl7"}:
+            return False
+        forbidden = {",", ":", ";", "{", "}", "\"", "'", "[", "]"}
+        if any(ch in file for ch in forbidden):
+            return False
+        if file not in (files_changed or []):
+            return False
+        lower = file.lower()
+        if lower.startswith(("tests/", "test/", "docs/", "doc/")):
+            return False
+        return True
+
+    @staticmethod
+    def _allows_fileless_overlay(category: str) -> bool:
+        """Some policy findings are real review items even without a precise file anchor."""
+        return category in {"third_party_baa"}
+
+    def _clean_compliance_overlays(self, overlays: list, files_changed: list) -> list:
+        """Keep only valid, non-duplicate compliance overlays."""
+        cleaned = []
+        seen = set()
+        for overlay in overlays or []:
+            file = overlay.get("file")
+            category = str(overlay.get("category") or "").strip().lower()
+            normalized = dict(overlay)
+            if self._is_valid_overlay_file(file, files_changed):
+                normalized["file"] = file.strip()
+            elif self._allows_fileless_overlay(category):
+                normalized["file"] = ""
+            else:
+                continue
+            key = (
+                normalized.get("severity"),
+                normalized.get("file"),
+                normalized.get("description"),
+                normalized.get("suggestion"),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(normalized)
+        return cleaned
+
     def _to_result(self, request: ReviewRequest, payload: dict, decisions) -> ReviewResult:
         # Enrich applied decisions with the stored summary when the model omitted it.
         by_ref = {d.get("ref"): d for d in decisions if d.get("ref")}
@@ -371,7 +423,8 @@ class CodeReviewEngine:
             enabled=request.compliance,
         )
         issues = payload.get("issues", []) or []
-        issues.extend(compliance.review_issue_overlays(compliance_review, enabled=request.compliance))
+        overlays = compliance.review_issue_overlays(compliance_review, enabled=request.compliance)
+        issues.extend(self._clean_compliance_overlays(overlays, request.files_changed))
         deduped_issues = []
         seen_issues = set()
         for issue in issues:

@@ -297,16 +297,26 @@ function ReviewResult({ result, repo }) {
   }
   const selCount = selIssues.size + selSugg.size
   const hasFindings = (result.issues?.length || 0) + (result.suggestions?.length || 0) > 0
+  const sanitizeFileLabel = (value) => {
+    const file = String(value || '').replace(/[\n\r`]/g, '').trim()
+    if (!file) return ''
+    if (['compliance', 'hipaa', 'hl7'].includes(file.toLowerCase())) return ''
+    if (/[,:;{}"'[\]]/.test(file)) return ''
+    return file
+  }
 
   function buildBody() {
     const issues = [...selIssues].sort((a, b) => a - b).map(i => result.issues[i]).filter(Boolean)
     const suggs = [...selSugg].sort((a, b) => a - b).map(i => result.suggestions[i]).filter(Boolean)
     if (!issues.length && !suggs.length) return ''
+    const escapeCode = (s) => String(s || '').replace(/`/g, '\\`').trim()
     const lines = ['## 🤖 ReviewBot', '']
     if (issues.length) {
       lines.push('**Issues**')
       issues.forEach(it => {
-        lines.push(`- **[${(it.severity || '').toUpperCase()}]** \`${it.file}\` — ${it.description}`)
+        const file = sanitizeFileLabel(it.file)
+        const label = file ? ` \`${escapeCode(file)}\` —` : ' —'
+        lines.push(`- **[${(it.severity || '').toUpperCase()}]**${label} ${it.description}`)
         if (it.suggestion) lines.push(`  - 💡 ${it.suggestion}`)
       })
       lines.push('')
@@ -338,7 +348,8 @@ function ReviewResult({ result, repo }) {
     const issues = [...selIssues].sort((a, b) => a - b).map(i => result.issues[i]).filter(Boolean)
     if (issues.length === 1 && selSugg.size === 0) {
       const it = issues[0]
-      return `[${(it.severity || '').toUpperCase()}] ${it.file ? `${it.file}: ` : ''}${it.description}`.slice(0, 120)
+      const file = sanitizeFileLabel(it.file)
+      return `[${(it.severity || '').toUpperCase()}] ${file ? `${file}: ` : ''}${it.description}`.slice(0, 120)
     }
     return `Code review findings — ${repo}#${result.pr_number} (${selCount})`
   }

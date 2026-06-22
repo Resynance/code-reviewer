@@ -31,6 +31,7 @@ def test_defaults_when_no_file(cfg):
                 "approved_hl7_versions": ["2.x", "FHIR R4"],
                 "required_hl7_validation_signals": ["schema", "validate", "ack", "nack", "message_control_id"],
                 "required_hl7_transport_signals": ["tls", "ssl", "https", "sftp", "vpn", "mllps"],
+                "include_test_docs_findings": False,
             },
             "repos": {},
         },

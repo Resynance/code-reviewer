@@ -39,6 +39,49 @@ def test_review_findings_detect_hl7_logging_transport_and_validation_gaps():
     assert result["requires_manual_compliance_review"] is False
 
 
+def test_review_findings_only_include_touched_files():
+    policy = compliance._normalize_policy({})
+    result = compliance.review_findings(
+        '+ logger.info("patient_ssn")\n+ requests.post("http://api.example.com/patient")',
+        ["api/patient.py"],
+        policy,
+    )
+    for finding in result["hipaa_findings"]:
+        if finding["category"] != "third_party_baa":
+            assert finding["file"] == "api/patient.py"
+
+
+def test_review_findings_suppress_test_and_docs_by_default():
+    policy = compliance._normalize_policy({})
+    result = compliance.review_findings(
+        '+ logger.info("patient_ssn")',
+        ["tests/test_patient.py", "docs/architecture.md"],
+        policy,
+    )
+    assert not result["hipaa_findings"]
+
+
+def test_review_findings_include_test_and_docs_when_configured():
+    policy = compliance._normalize_policy({"include_test_docs_findings": True})
+    result = compliance.review_findings(
+        '+ logger.info("patient_ssn")',
+        ["tests/test_patient.py"],
+        policy,
+    )
+    assert any(f["file"] == "tests/test_patient.py" for f in result["hipaa_findings"])
+
+
+def test_review_findings_reject_malformed_file_paths():
+    policy = compliance._normalize_policy({})
+    result = compliance.review_findings(
+        '+ logger.info("patient_ssn")',
+        [",severity:", ",recommendation:", "api/valid.py"],
+        policy,
+    )
+    files = {f["file"] for f in result["hipaa_findings"] if f["category"] != "third_party_baa"}
+    assert files == {"api/valid.py"}
+
+
 def test_normalize_result_merges_deterministic_and_llm_findings():
     deterministic = {
         "hipaa_relevant": True,
