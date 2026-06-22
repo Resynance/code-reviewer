@@ -1,11 +1,11 @@
 """
-hipaa.py — deterministic HIPAA-focused heuristics and policy helpers.
+compliance.py — deterministic healthcare-compliance heuristics and policy helpers.
 
 This module does not attempt to certify compliance. It provides:
   - repo/default policy normalization
-  - lightweight deterministic scans for obvious PHI/compliance risks
+  - lightweight deterministic scans for obvious HIPAA / HL7 risks
   - prompt context for the LLM
-  - normalization/bucketing for the structured HIPAA response
+  - normalization/bucketing for the structured healthcare-compliance response
 """
 
 from __future__ import annotations
@@ -24,6 +24,9 @@ DEFAULT_POLICY = {
     "required_audit_signals": ["audit", "audit_log", "audit trail", "access_log"],
     "required_encryption": ["at_rest", "in_transit"],
     "phi_field_patterns": [],
+    "approved_hl7_versions": ["2.x", "FHIR R4"],
+    "required_hl7_validation_signals": ["schema", "validate", "ack", "nack", "message_control_id"],
+    "required_hl7_transport_signals": ["tls", "ssl", "https", "sftp", "vpn", "mllps"],
 }
 
 _PHI_TERMS = (
@@ -45,6 +48,24 @@ _PHI_TERMS = (
     "lab_result",
 )
 
+_HL7_TERMS = (
+    "hl7",
+    "fhir",
+    "adt",
+    "orm",
+    "oru",
+    "siu",
+    "dft",
+    "msh|",
+    "pid|",
+    "pv1|",
+    "obr|",
+    "obx|",
+    "message_control_id",
+    "mllp",
+    "mllps",
+)
+
 _EXTERNAL_VENDOR_RE = re.compile(
     r"(?:https?://|['\"])([^'\"\s]+(?:sentry|segment|mixpanel|amplitude|slack|openai|anthropic|"
     r"posthog|datadog|newrelic|mailgun|sendgrid|twilio)[^'\"\s]*)",
@@ -56,6 +77,10 @@ _ENCRYPTION_RE = re.compile(r"\b(ssl|tls|encrypt|encrypted|kms|fernet|aes)\b", r
 _LOG_RE = re.compile(r"\b(log(?:ger)?\.(?:info|debug|warning|error)|print\(|console\.log)\b", re.IGNORECASE)
 _AUTH_RE = re.compile(r"\b(auth|authorize|permission|scope|require_user|Depends\(require_user\)|jwt)\b", re.IGNORECASE)
 _AUDIT_RE = re.compile(r"\b(audit|audit_log|access_log|history|event_log)\b", re.IGNORECASE)
+_HL7_MESSAGE_RE = re.compile(r"\b(?:hl7|fhir|adt|orm|oru|siu|dft)\b|(?:^|[^a-z])(?:MSH|PID|PV1|OBR|OBX)\|", re.IGNORECASE)
+_HL7_SEGMENT_RE = re.compile(r"(?:^|[^a-z])(?:MSH|PID|PV1|OBR|OBX)\|", re.IGNORECASE)
+_HL7_TRANSPORT_RE = re.compile(r"\b(mllp|mllps|tcp|socket|listener|integration engine|channel)\b", re.IGNORECASE)
+_HL7_VALIDATION_RE = re.compile(r"\b(validate|validation|schema|ack|nack|message_control_id|control id|dedup|idempot)\b", re.IGNORECASE)
 
 
 def default_policies() -> dict:
@@ -107,10 +132,15 @@ def prompt_section(policy: dict, deterministic: dict) -> str:
     disallowed = ", ".join(policy.get("disallowed_vendors") or []) or "(none listed)"
     auth = ", ".join(policy.get("required_auth_signals") or []) or "(none listed)"
     audit = ", ".join(policy.get("required_audit_signals") or []) or "(none listed)"
+    hl7_versions = ", ".join(policy.get("approved_hl7_versions") or []) or "(none listed)"
+    hl7_validation = ", ".join(policy.get("required_hl7_validation_signals") or []) or "(none listed)"
+    hl7_transport = ", ".join(policy.get("required_hl7_transport_signals") or []) or "(none listed)"
     findings = deterministic.get("hipaa_findings") or []
-    if findings:
+    hl7_findings = deterministic.get("hl7_findings") or []
+    combined_findings = [*findings, *hl7_findings]
+    if combined_findings:
         finding_lines = []
-        for item in findings:
+        for item in combined_findings:
             finding_lines.append(
                 f"- [{item['severity']}] {item['title']} ({item['category']})"
                 f"\n  evidence: {item['evidence']}"
@@ -118,25 +148,28 @@ def prompt_section(policy: dict, deterministic: dict) -> str:
             )
         findings_block = "\n".join(finding_lines)
     else:
-        findings_block = "(no deterministic HIPAA findings)"
+        findings_block = "(no deterministic HIPAA / HL7 findings)"
     return (
-        "\n## HIPAA Review Mode\n"
-        "This is a HIPAA-focused review, not a certification. Distinguish between:\n"
+        "\n## HIPAA / HL7 Review Mode\n"
+        "This is a HIPAA / HL7-focused review, not a certification. Distinguish between:\n"
         "- evidence-backed code-level violations\n"
-        "- HIPAA-relevant changes that require manual compliance review\n"
+        "- healthcare-integration changes that require manual compliance review\n"
         "- low-confidence possibilities that should be omitted\n\n"
         "Severity guidance:\n"
         "- Use critical/high only for direct evidence of unsafe PHI handling or missing protections.\n"
         "- Use medium for concrete risk gaps needing remediation.\n"
         "- Use low only for minor hygiene issues.\n"
-        "- Mark vendor/BAA uncertainty and policy-process checks as manual-review items unless the code proves a direct violation.\n\n"
-        "Repo HIPAA policy context:\n"
+        "- Mark vendor/BAA uncertainty, interface-partner assumptions, and policy-process checks as manual-review items unless the code proves a direct violation.\n\n"
+        "Repo HIPAA / HL7 policy context:\n"
         f"- Notes: {notes}\n"
         f"- Approved vendors: {approved}\n"
         f"- Disallowed vendors: {disallowed}\n"
         f"- Required auth signals: {auth}\n"
-        f"- Required audit signals: {audit}\n\n"
-        "Deterministic HIPAA findings from static heuristics:\n"
+        f"- Required audit signals: {audit}\n"
+        f"- Approved HL7 versions / profiles: {hl7_versions}\n"
+        f"- Required HL7 validation signals: {hl7_validation}\n"
+        f"- Required HL7 transport signals: {hl7_transport}\n\n"
+        "Deterministic HIPAA / HL7 findings from static heuristics:\n"
         f"{findings_block}\n"
     )
 
@@ -149,12 +182,17 @@ def normalize_result(section: dict | None, deterministic: dict | None, *, enable
         "summary": "",
         "policy_notes_applied": [],
         "hipaa_findings": [],
+        "hl7_relevant": False,
+        "hl7_findings": [],
         "phi_exposure_risk": [],
         "encryption_gaps": [],
         "access_control_gaps": [],
         "audit_trail_gaps": [],
         "minimum_necessary_gaps": [],
         "third_party_baa_risks": [],
+        "hl7_interface_gaps": [],
+        "hl7_message_integrity_gaps": [],
+        "hl7_transport_gaps": [],
     }
     if isinstance(section, dict):
         for key in base:
@@ -177,6 +215,21 @@ def normalize_result(section: dict | None, deterministic: dict | None, *, enable
             deduped.append(item)
 
     base["hipaa_findings"] = deduped
+    merged_hl7_findings = []
+    for source, items in (("deterministic", (deterministic or {}).get("hl7_findings") or []),
+                          ("llm", base.get("hl7_findings") or [])):
+        for item in items:
+            finding = _normalize_finding(item, source=source)
+            if finding:
+                merged_hl7_findings.append(finding)
+    deduped_hl7 = []
+    seen_hl7 = set()
+    for item in merged_hl7_findings:
+        key = (item["category"], item["title"], item.get("file", ""), item["evidence"])
+        if key not in seen_hl7:
+            seen_hl7.add(key)
+            deduped_hl7.append(item)
+    base["hl7_findings"] = deduped_hl7
     for key in (
         "phi_exposure_risk",
         "encryption_gaps",
@@ -184,6 +237,9 @@ def normalize_result(section: dict | None, deterministic: dict | None, *, enable
         "audit_trail_gaps",
         "minimum_necessary_gaps",
         "third_party_baa_risks",
+        "hl7_interface_gaps",
+        "hl7_message_integrity_gaps",
+        "hl7_transport_gaps",
     ):
         base[key] = _normalize_gap_list(base.get(key))
 
@@ -195,6 +251,9 @@ def normalize_result(section: dict | None, deterministic: dict | None, *, enable
             "audit_trail_gaps",
             "minimum_necessary_gaps",
             "third_party_baa_risks",
+            "hl7_interface_gaps",
+            "hl7_message_integrity_gaps",
+            "hl7_transport_gaps",
         ):
             base[key] = _merge_gap_lists(base[key], deterministic.get(key) or [])
         base["hipaa_relevant"] = bool(
@@ -202,10 +261,15 @@ def normalize_result(section: dict | None, deterministic: dict | None, *, enable
             or deterministic.get("hipaa_relevant")
             or base["hipaa_findings"]
         )
+        base["hl7_relevant"] = bool(
+            base["hl7_relevant"]
+            or deterministic.get("hl7_relevant")
+            or base["hl7_findings"]
+        )
         base["requires_manual_compliance_review"] = bool(
             base["requires_manual_compliance_review"]
             or deterministic.get("requires_manual_compliance_review")
-            or any(item.get("manual_review") for item in base["hipaa_findings"])
+            or any(item.get("manual_review") for item in [*base["hipaa_findings"], *base["hl7_findings"]])
         )
     return base
 
@@ -214,7 +278,7 @@ def review_issue_overlays(hipaa_result: dict, *, enabled: bool) -> list:
     if not enabled:
         return []
     overlays = []
-    for item in hipaa_result.get("hipaa_findings", []):
+    for item in [*(hipaa_result.get("hipaa_findings", []) or []), *(hipaa_result.get("hl7_findings", []) or [])]:
         if item["severity"] not in {"critical", "high", "medium"}:
             continue
         overlays.append({
@@ -230,7 +294,7 @@ def assessment_vulnerability_overlays(hipaa_result: dict, *, enabled: bool) -> l
     if not enabled:
         return []
     overlays = []
-    for item in hipaa_result.get("hipaa_findings", []):
+    for item in [*(hipaa_result.get("hipaa_findings", []) or []), *(hipaa_result.get("hl7_findings", []) or [])]:
         if item["severity"] not in {"critical", "high", "medium"}:
             continue
         overlays.append({
@@ -258,6 +322,9 @@ def _normalize_policy(raw) -> dict:
         "required_audit_signals",
         "required_encryption",
         "phi_field_patterns",
+        "approved_hl7_versions",
+        "required_hl7_validation_signals",
+        "required_hl7_transport_signals",
     ):
         values = raw.get(key)
         if isinstance(values, list):
@@ -274,10 +341,14 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
         "audit_trail_gaps": [],
         "minimum_necessary_gaps": [],
         "third_party_baa_risks": [],
+        "hl7_interface_gaps": [],
+        "hl7_message_integrity_gaps": [],
+        "hl7_transport_gaps": [],
     }
     paths = list(file_paths or [])
     lower_text = text.lower()
     all_phi_terms = list(dict.fromkeys([*_PHI_TERMS, *(t.lower() for t in policy.get("phi_field_patterns") or [])]))
+    all_hl7_terms = list(dict.fromkeys([*_HL7_TERMS, *(t.lower() for t in policy.get("approved_hl7_versions") or [])]))
 
     def add(category, severity, title, evidence, recommendation, *, file="", manual_review=False, bucket=None):
         finding = {
@@ -353,6 +424,36 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
                 file=evidence_for(["api", "service", "handler"]),
                 bucket="audit_trail_gaps",
             )
+        if _LOG_RE.search(ll) and (_HL7_MESSAGE_RE.search(line) or any(term in ll for term in all_hl7_terms)):
+            add(
+                "hl7_logging",
+                "high",
+                "Raw HL7 payload appears in logs or debug output",
+                f"Observed logging statement with HL7-like message content: {line.strip()[:180]}",
+                "Avoid logging raw HL7/FHIR payloads; log message metadata with PHI-safe redaction instead.",
+                file=evidence_for(["hl7", "integration", "interface", "listener", "api", "log"]),
+                bucket="hl7_interface_gaps",
+            )
+        if (_HL7_MESSAGE_RE.search(line) or any(term in ll for term in all_hl7_terms)) and _HL7_TRANSPORT_RE.search(ll) and not re.search(r"\b(tls|ssl|https|mllps|vpn|ssh)\b", ll):
+            add(
+                "hl7_transport",
+                "high",
+                "HL7 transport lacks obvious secure channel signal",
+                f"Observed HL7 transport handling without an explicit secure transport marker: {line.strip()[:180]}",
+                "Use MLLP over a secured tunnel or MLLPS/TLS and document the protected transport boundary.",
+                file=evidence_for(["hl7", "integration", "listener", "socket", "client"]),
+                bucket="hl7_transport_gaps",
+            )
+        if (_HL7_MESSAGE_RE.search(line) or _HL7_SEGMENT_RE.search(line)) and not _HL7_VALIDATION_RE.search(lower_text):
+            add(
+                "hl7_validation",
+                "medium",
+                "HL7 message handling lacks obvious validation or ACK controls",
+                f"Detected HL7-specific parsing or message content without visible validation / ACK markers: {line.strip()[:180]}",
+                "Validate message structure, profile/version, required segments, and ACK/NACK handling before processing.",
+                file=evidence_for(["hl7", "integration", "parser", "listener", "transform"]),
+                bucket="hl7_message_integrity_gaps",
+            )
 
     if any(term in lower_text for term in all_phi_terms) and not findings:
         add(
@@ -363,6 +464,16 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
             "Run a manual compliance review for data classification, retention, and operational controls.",
             manual_review=True,
             bucket="minimum_necessary_gaps",
+        )
+    elif any(term in lower_text for term in all_hl7_terms) and not findings:
+        add(
+            "hl7_manual_review",
+            "medium",
+            "HL7-relevant integration appears in scope",
+            "The code references HL7/FHIR integration concepts, but deterministic checks did not prove a direct interface-control violation.",
+            "Run a manual interface review for message mapping, partner contracts, ACK behavior, retry/idempotency, and operational monitoring.",
+            manual_review=True,
+            bucket="hl7_interface_gaps",
         )
 
     for match in _EXTERNAL_VENDOR_RE.finditer(text):
@@ -392,9 +503,11 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
             )
 
     return {
-        "hipaa_relevant": bool(findings),
+        "hipaa_relevant": any(not item["category"].startswith("hl7_") and item["category"] not in {"hl7_logging", "hl7_transport", "hl7_validation"} for item in findings),
+        "hl7_relevant": any(item["category"].startswith("hl7_") or item["category"] in {"hl7_logging", "hl7_transport", "hl7_validation"} for item in findings),
         "requires_manual_compliance_review": any(item.get("manual_review") for item in findings),
-        "hipaa_findings": findings,
+        "hipaa_findings": [item for item in findings if not item["category"].startswith("hl7_") and item["category"] not in {"hl7_logging", "hl7_transport", "hl7_validation"}],
+        "hl7_findings": [item for item in findings if item["category"].startswith("hl7_") or item["category"] in {"hl7_logging", "hl7_transport", "hl7_validation"}],
         **buckets,
     }
 

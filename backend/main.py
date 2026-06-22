@@ -172,7 +172,7 @@ class ReviewRequestBody(BaseModel):
     # Optional per-review model override (frontend sends the slug of the chosen slot).
     model: Optional[str] = None
     provider: Optional[str] = None
-    hipaa: bool = False
+    compliance: bool = False
 
 
 class DecisionUpsertBody(BaseModel):
@@ -210,7 +210,7 @@ class SettingsBody(BaseModel):
     embedding_model: Optional[str] = None
     llm_execution_mode: Optional[str] = None
     llm_worker_secret: Optional[str] = None
-    hipaa_policies: Optional[dict] = None
+    compliance_policies: Optional[dict] = None
 
 
 class RepoBody(BaseModel):
@@ -246,7 +246,7 @@ class AssessmentRequestBody(BaseModel):
     repo: str
     model: Optional[str] = None
     provider: Optional[str] = None
-    hipaa: bool = False
+    compliance: bool = False
 
 
 class WorkerClaimBody(BaseModel):
@@ -282,16 +282,16 @@ def _llm_execution_mode() -> str:
     return config_store.get_llm_execution_mode()
 
 
-def _repo_hipaa_enabled(repo: str) -> bool:
-    return config_store.repo_requires_hipaa(repo)
+def _repo_compliance_enabled(repo: str) -> bool:
+    return config_store.repo_requires_compliance_review(repo)
 
 
 def _review_body_with_repo_defaults(body: ReviewRequestBody) -> ReviewRequestBody:
-    return ReviewRequestBody(**{**body.model_dump(), "hipaa": _repo_hipaa_enabled(body.repo)})
+    return ReviewRequestBody(**{**body.model_dump(), "compliance": _repo_compliance_enabled(body.repo)})
 
 
 def _assessment_body_with_repo_defaults(body: AssessmentRequestBody) -> AssessmentRequestBody:
-    return AssessmentRequestBody(**{**body.model_dump(), "hipaa": _repo_hipaa_enabled(body.repo)})
+    return AssessmentRequestBody(**{**body.model_dump(), "compliance": _repo_compliance_enabled(body.repo)})
 
 
 def _require_worker_secret(provided: Optional[str]):
@@ -302,9 +302,16 @@ def _require_worker_secret(provided: Optional[str]):
         raise HTTPException(status_code=401, detail="Invalid worker secret")
 
 
+def _normalize_result_payload(result_payload: dict) -> dict:
+    payload = dict(result_payload or {})
+    payload["compliance_review"] = payload.get("compliance_review") or {}
+    return payload
+
+
 def _save_review_payload(request_payload: dict, result_payload: dict, source: str):
     """Persist a review payload without requiring a live ReviewResult object."""
     try:
+        result_payload = _normalize_result_payload(result_payload)
         review_store.save_review({
             "repo": request_payload.get("repo"),
             "pr_number": result_payload.get("pr_number", request_payload.get("pr_number")),
@@ -316,7 +323,7 @@ def _save_review_payload(request_payload: dict, result_payload: dict, source: st
             "issues": result_payload.get("issues") or [],
             "suggestions": result_payload.get("suggestions") or [],
             "past_decisions": result_payload.get("past_decisions_applied") or [],
-            "hipaa_review": result_payload.get("hipaa_review") or {},
+            "compliance_review": result_payload.get("compliance_review") or {},
             "source": source,
             "model": result_payload.get("model"),
         })
@@ -326,6 +333,7 @@ def _save_review_payload(request_payload: dict, result_payload: dict, source: st
 
 def _save_assessment_payload(result_payload: dict):
     try:
+        result_payload = _normalize_result_payload(result_payload)
         assessment_store.save_assessment({
             "repo": result_payload.get("repo"),
             "summary": result_payload.get("summary"),
@@ -333,7 +341,7 @@ def _save_assessment_payload(result_payload: dict):
             "tech_stack": result_payload.get("tech_stack") or [],
             "key_components": result_payload.get("key_components") or [],
             "vulnerabilities": result_payload.get("vulnerabilities") or [],
-            "hipaa_review": result_payload.get("hipaa_review") or {},
+            "compliance_review": result_payload.get("compliance_review") or {},
             "model": result_payload.get("model"),
         })
     except Exception:
@@ -374,7 +382,7 @@ def _execute_review(body: ReviewRequestBody, source: str) -> dict:
         files_changed=body.files_changed,
         model=body.model or None,
         provider=body.provider or None,
-        hipaa=body.hipaa,
+        compliance=body.compliance,
     )
     result = engine.review(request)
     _save_review(request, result, source=source)
@@ -386,7 +394,7 @@ def _execute_review(body: ReviewRequestBody, source: str) -> dict:
         "issues": result.issues,
         "suggestions": result.suggestions,
         "past_decisions_applied": result.past_decisions_applied,
-        "hipaa_review": result.hipaa_review,
+        "compliance_review": result.compliance_review,
         "model": result.model,
     }
 
@@ -438,6 +446,9 @@ def get_review_job(job_id: str):
     job = review_jobs.get_job(job_id)
     if not job or job.get("job_type") != "review":
         raise HTTPException(status_code=404, detail="Review job not found")
+    if job.get("result"):
+        job = dict(job)
+        job["result"] = _normalize_result_payload(job["result"])
     return job
 
 
@@ -455,7 +466,7 @@ def _save_review(request, result, source):
             "issues": result.issues,
             "suggestions": result.suggestions,
             "past_decisions": result.past_decisions_applied,
-            "hipaa_review": result.hipaa_review,
+            "compliance_review": result.compliance_review,
             "source": source,
             "model": result.model,
         })
@@ -467,7 +478,7 @@ def _save_review(request, result, source):
 def list_review_history(repo: Optional[str] = None, pr_number: Optional[int] = None, limit: int = Query(default=50, ge=1, le=500)):
     """Return saved review runs (full history), newest first."""
     reviews = review_store.list_reviews(repo=repo, pr_number=pr_number, limit=limit)
-    return {"reviews": reviews, "count": len(reviews)}
+    return {"reviews": [_normalize_result_payload(review) for review in reviews], "count": len(reviews)}
 
 
 @app.post("/api/assessments", dependencies=[Depends(require_assessment_quota)])
@@ -502,7 +513,7 @@ def run_assessment_job(job_id: str):
             repo=req["repo"],
             model=req.get("model"),
             provider=req.get("provider"),
-            hipaa=req.get("hipaa", False),
+            compliance=req.get("compliance", False),
         ))
         return review_jobs.update_job(job_id, status="done", result=result)
     except Exception as e:
@@ -515,6 +526,9 @@ def get_assessment_job(job_id: str):
     job = review_jobs.get_job(job_id)
     if not job or job.get("job_type") != "assessment":
         raise HTTPException(status_code=404, detail="Assessment job not found")
+    if job.get("result"):
+        job = dict(job)
+        job["result"] = _normalize_result_payload(job["result"])
     return job
 
 
@@ -522,7 +536,7 @@ def get_assessment_job(job_id: str):
 def list_assessments_history(repo: Optional[str] = None, limit: int = Query(default=20, ge=1, le=100)):
     """Return saved assessments, newest first."""
     items = assessment_store.list_assessments(repo=repo, limit=limit)
-    return {"assessments": items, "count": len(items)}
+    return {"assessments": [_normalize_result_payload(item) for item in items], "count": len(items)}
 
 
 def _execute_assessment(body: AssessmentRequestBody) -> dict:
@@ -531,7 +545,7 @@ def _execute_assessment(body: AssessmentRequestBody) -> dict:
         repo=body.repo,
         model=body.model or None,
         provider=body.provider or None,
-        hipaa=body.hipaa,
+        compliance=body.compliance,
     )
     result = engine.assess(request)
     try:
@@ -542,7 +556,7 @@ def _execute_assessment(body: AssessmentRequestBody) -> dict:
             "tech_stack": result.tech_stack,
             "key_components": result.key_components,
             "vulnerabilities": result.vulnerabilities,
-            "hipaa_review": result.hipaa_review,
+            "compliance_review": result.compliance_review,
             "model": result.model,
         })
     except Exception:
@@ -554,7 +568,7 @@ def _execute_assessment(body: AssessmentRequestBody) -> dict:
         "tech_stack": result.tech_stack,
         "key_components": result.key_components,
         "vulnerabilities": result.vulnerabilities,
-        "hipaa_review": result.hipaa_review,
+        "compliance_review": result.compliance_review,
         "model": result.model,
     }
 
@@ -673,7 +687,7 @@ def get_settings():
         "openrouter_model_2": config_store.get_model_2(),
         "openrouter_provider_2": config_store.get_provider_2(),
         "embedding_model": config_store.get_embedding_model(),
-        "hipaa_policies": config_store.get_hipaa_policies(),
+        "compliance_policies": config_store.get_compliance_policies(),
     }
 
 
@@ -710,8 +724,8 @@ def update_settings(body: SettingsBody):
         update["llm_execution_mode"] = mode
     if body.llm_worker_secret is not None:
         update["llm_worker_secret"] = body.llm_worker_secret.strip()
-    if body.hipaa_policies is not None:
-        update["hipaa_policies"] = body.hipaa_policies
+    if body.compliance_policies is not None:
+        update["compliance_policies"] = body.compliance_policies
     if update:
         config_store.save_config(update)
     return get_settings()
@@ -741,8 +755,9 @@ def complete_llm_job(
         raise HTTPException(status_code=404, detail="LLM job not found")
     if job.get("executor") != "local_queue":
         raise HTTPException(status_code=400, detail="Job is not configured for local queue execution")
-    _persist_local_job_result(job, body.result)
-    return review_jobs.update_job(job_id, status="done", result=body.result)
+    normalized = _normalize_result_payload(body.result)
+    _persist_local_job_result(job, normalized)
+    return review_jobs.update_job(job_id, status="done", result=normalized)
 
 
 @app.post("/worker/llm/{job_id}/error")
@@ -1032,7 +1047,7 @@ async def github_webhook(request: Request):
         author=(pr.get("user") or {}).get("login", "unknown"),
         base_branch=(pr.get("base") or {}).get("ref", "main"),
         files_changed=[],
-        hipaa=_repo_hipaa_enabled(repo),
+        compliance=_repo_compliance_enabled(repo),
     )
     result = engine.review(request_obj)
     _save_review(request_obj, result, source="webhook")

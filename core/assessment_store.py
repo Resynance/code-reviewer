@@ -16,12 +16,12 @@ _LOCK = threading.Lock()
 
 _FIELDS = (
     "repo", "summary", "purpose",
-    "tech_stack", "key_components", "vulnerabilities", "hipaa_review", "model",
+    "tech_stack", "key_components", "vulnerabilities", "compliance_review", "model",
 )
 
 _PG_COLS = [
     "id", "repo", "summary", "purpose",
-    "tech_stack", "key_components", "vulnerabilities", "hipaa_review", "model", "created_at",
+    "tech_stack", "key_components", "vulnerabilities", "compliance_review", "model", "created_at",
 ]
 
 
@@ -37,7 +37,7 @@ def _normalize(record: dict) -> dict:
     rec = {k: record.get(k) for k in _FIELDS}
     for k in ("tech_stack", "key_components", "vulnerabilities"):
         rec[k] = rec.get(k) or []
-    rec["hipaa_review"] = rec.get("hipaa_review") or {}
+    rec["compliance_review"] = rec.get("compliance_review") or {}
     return rec
 
 
@@ -61,9 +61,15 @@ def _file_read():
         return []
     try:
         with open(_FILE_PATH) as f:
-            return json.load(f)
+            data = json.load(f)
     except (ValueError, OSError):
         return []
+    out = []
+    for row in data:
+        rec = dict(row)
+        rec["compliance_review"] = rec.get("compliance_review") or {}
+        out.append(rec)
+    return out
 
 
 def _file_save(rec):
@@ -96,12 +102,12 @@ def _pg_save(rec):
     with db.connect() as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO assessments "
-            "(repo, summary, purpose, tech_stack, key_components, vulnerabilities, hipaa_review, model) "
+            "(repo, summary, purpose, tech_stack, key_components, vulnerabilities, compliance_review, model) "
             "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id, created_at",
             (
                 rec["repo"], rec.get("summary"), rec.get("purpose"),
                 Jsonb(rec["tech_stack"]), Jsonb(rec["key_components"]),
-                Jsonb(rec["vulnerabilities"]), Jsonb(rec["hipaa_review"]), rec.get("model"),
+                Jsonb(rec["vulnerabilities"]), Jsonb(rec["compliance_review"]), rec.get("model"),
             ),
         )
         assessment_id, created_at = cur.fetchone()
@@ -132,6 +138,7 @@ def _pg_list(repo, limit):
     out = []
     for row in rows:
         d = dict(zip(_PG_COLS, row))
+        d["compliance_review"] = d.get("compliance_review") or {}
         if hasattr(d.get("created_at"), "isoformat"):
             d["created_at"] = d["created_at"].isoformat()
         out.append(d)

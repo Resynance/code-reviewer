@@ -15,7 +15,7 @@ export default function AssessmentPage() {
   const [error, setError] = useState(null)
   const [result, setResult] = useState(null)
   const [history, setHistory] = useState([])
-  const [hipaaPolicies, setHipaaPolicies] = useState({ default: {}, repos: {} })
+  const [compliancePolicies, setCompliancePolicies] = useState({ default: {}, repos: {} })
   const jobRef = useRef(null)
   useEffect(() => () => { jobRef.current = null }, [])
 
@@ -31,11 +31,11 @@ export default function AssessmentPage() {
       setModels(slots)
       setSelectedModel(slots[0] || null)
       setExecutionMode(s.llm_execution_mode || 'inline')
-      setHipaaPolicies(s.hipaa_policies || { default: {}, repos: {} })
+      setCompliancePolicies(s.compliance_policies || { default: {}, repos: {} })
     }).catch(() => {})
   }, [])
 
-  const hipaaEnabled = !!hipaaPolicies?.repos?.[repo]?.enabled
+  const complianceEnabled = !!compliancePolicies?.repos?.[repo]?.enabled
 
   // Reload history whenever the selected repo changes.
   useEffect(() => {
@@ -114,10 +114,10 @@ export default function AssessmentPage() {
           )}
         </div>
 
-        <span style={{ fontSize: 13, color: hipaaEnabled ? 'var(--text)' : 'var(--text-2)', whiteSpace: 'nowrap' }}>
-          {hipaaEnabled
-            ? 'HIPAA-focused assessment is enabled for this repository.'
-            : 'HIPAA-focused assessment is not enabled for this repository.'}
+        <span style={{ fontSize: 13, color: complianceEnabled ? 'var(--text)' : 'var(--text-2)', whiteSpace: 'nowrap' }}>
+          {complianceEnabled
+            ? 'HIPAA / HL7-focused assessment is enabled for this repository.'
+            : 'HIPAA / HL7-focused assessment is not enabled for this repository.'}
         </span>
 
         <button onClick={submit} disabled={loading || !repo} style={btnStyle(loading || !repo)}>
@@ -283,17 +283,18 @@ function AssessmentResult({ result }) {
         )}
       </div>
 
-      {result.hipaa_review?.enabled && (
-        <Section title="HIPAA Review">
+      {result.compliance_review?.enabled && (
+        <Section title="HIPAA / HL7 Review">
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, marginBottom: 12 }}>
-            <InfoPill label="Relevant" value={result.hipaa_review.hipaa_relevant ? 'Yes' : 'No'} />
-            <InfoPill label="Manual Review" value={result.hipaa_review.requires_manual_compliance_review ? 'Required' : 'Not flagged'} />
-            <InfoPill label="Findings" value={String(result.hipaa_review.hipaa_findings?.length || 0)} />
+            <InfoPill label="Relevant" value={result.compliance_review.hipaa_relevant ? 'Yes' : 'No'} />
+            <InfoPill label="HL7" value={result.compliance_review.hl7_relevant ? 'Yes' : 'No'} />
+            <InfoPill label="Manual Review" value={result.compliance_review.requires_manual_compliance_review ? 'Required' : 'Not flagged'} />
+            <InfoPill label="Findings" value={String((result.compliance_review.hipaa_findings?.length || 0) + (result.compliance_review.hl7_findings?.length || 0))} />
           </div>
-          {result.hipaa_review.summary && (
-            <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--text)', lineHeight: 1.5 }}>{result.hipaa_review.summary}</p>
+          {result.compliance_review.summary && (
+            <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--text)', lineHeight: 1.5 }}>{result.compliance_review.summary}</p>
           )}
-          {(result.hipaa_review.hipaa_findings || []).map((item, i) => (
+          {[...(result.compliance_review.hipaa_findings || []), ...(result.compliance_review.hl7_findings || [])].map((item, i) => (
             <div key={i} style={{
               borderLeft: `3px solid ${SEV_COLORS[item.severity] || 'var(--border2)'}`,
               background: 'var(--surface2)', borderRadius: '0 8px 8px 0', padding: '10px 12px', marginBottom: 8,
@@ -310,7 +311,7 @@ function AssessmentResult({ result }) {
               <div style={{ fontSize: 12, color: 'var(--text-2)' }}>💡 {item.recommendation}</div>
             </div>
           ))}
-          <HipaaBuckets review={result.hipaa_review} />
+          <ComplianceBuckets review={result.compliance_review} />
         </Section>
       )}
 
@@ -456,7 +457,7 @@ function Section({ title, children, onSelectAll, allSelected }) {
   )
 }
 
-function HipaaBuckets({ review }) {
+function ComplianceBuckets({ review }) {
   const groups = [
     ['PHI Exposure', review.phi_exposure_risk],
     ['Encryption', review.encryption_gaps],
@@ -464,6 +465,9 @@ function HipaaBuckets({ review }) {
     ['Audit Trail', review.audit_trail_gaps],
     ['Minimum Necessary', review.minimum_necessary_gaps],
     ['Third-Party / BAA', review.third_party_baa_risks],
+    ['HL7 Interface', review.hl7_interface_gaps],
+    ['HL7 Message Integrity', review.hl7_message_integrity_gaps],
+    ['HL7 Transport', review.hl7_transport_gaps],
   ].filter(([, items]) => (items || []).length > 0)
   if (!groups.length) return null
   return (

@@ -200,7 +200,7 @@ Secrets are reported as booleans, never echoed.
   "webhook_secret_set": false,
   "llm_execution_mode": "inline",
   "llm_worker_secret_set": false,
-  "hipaa_policies": {
+  "compliance_policies": {
     "default": { "enabled": false, "notes": "" },
     "repos": { "org/a": { "enabled": true } }
   },
@@ -225,7 +225,7 @@ value (falls back to env/default), omit/null to leave unchanged.
   "webhook_secret": "…",
   "llm_execution_mode": "local_queue",
   "llm_worker_secret": "shared-secret",
-  "hipaa_policies": {
+  "compliance_policies": {
     "default": { "enabled": false },
     "repos": { "org/a": { "enabled": true } }
   },
@@ -237,8 +237,8 @@ value (falls back to env/default), omit/null to leave unchanged.
 }
 ```
 Each model slot requires `model`; `label` and `provider` are optional. Slots with
-a blank `model` are silently dropped. `hipaa_policies.repos.<repo>.enabled=true`
-marks that repository as always requiring HIPAA-focused reviews and assessments.
+a blank `model` are silently dropped. `compliance_policies.repos.<repo>.enabled=true`
+marks that repository as always requiring HIPAA / HL7-focused reviews and assessments.
 Returns the same shape as `GET /api/settings`.
 
 ## Local worker
