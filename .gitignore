@@ -12,8 +12,7 @@ reviews.json
 review_jobs.json
 access.json
 
-# Local-only worker script (private per-machine)
-local_worker.py
+# Local-only scratch files
 .local/
 
 # Vector store
