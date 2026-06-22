@@ -83,13 +83,22 @@ def test_build_prompt_contains_key_parts(store, monkeypatch):
     assert "no relevant past decisions" in prompt
 
 
-def test_build_prompt_contains_hipaa_context(store, cfg, monkeypatch):
-    cfg.save_config({"hipaa_policies": {"default": {"notes": "Use approved BAAs only"}, "repos": {}}})
+def test_build_prompt_contains_compliance_context(store, cfg, monkeypatch):
+    cfg.save_config({"compliance_policies": {"default": {"notes": "Use approved BAAs only"}, "repos": {}}})
     eng = make_engine(store, review_payload(), monkeypatch)
-    prompt = eng._build_prompt(make_req(hipaa=True, diff='+ logger.info("patient_ssn")'), [])
-    assert "HIPAA Review Mode" in prompt
+    prompt = eng._build_prompt(make_req(compliance=True, diff='+ logger.info("patient_ssn")'), [])
+    assert "HIPAA / HL7 Review Mode" in prompt
     assert "Use approved BAAs only" in prompt
     assert "Potential PHI in logs or debug output" in prompt
+
+
+def test_build_prompt_contains_hl7_context(store, cfg, monkeypatch):
+    cfg.save_config({"compliance_policies": {"default": {"notes": "Validate HL7 ACKs"}, "repos": {}}})
+    eng = make_engine(store, review_payload(), monkeypatch)
+    prompt = eng._build_prompt(make_req(compliance=True, diff='+ logger.info("MSH|^~\\\\&|ADT|PID|")\n+ start_hl7_listener("tcp://feed:2575")'), [])
+    assert "HIPAA / HL7 Review Mode" in prompt
+    assert "Validate HL7 ACKs" in prompt
+    assert "Raw HL7 payload appears in logs or debug output" in prompt
 
 
 def test_retrieve_context_scopes_to_repo_plus_global(store, monkeypatch):
@@ -135,12 +144,13 @@ def test_past_decisions_enriched_from_store(store, cfg, monkeypatch):
     assert applied["how_applied"] == "followed jwt precedent"
 
 
-def test_hipaa_result_merges_deterministic_findings(store, cfg, monkeypatch):
+def test_compliance_result_merges_deterministic_findings(store, cfg, monkeypatch):
     payload = review_payload(
-        hipaa_review={
+        compliance_review={
             "hipaa_relevant": True,
+            "hl7_relevant": True,
             "requires_manual_compliance_review": True,
-            "summary": "Needs HIPAA review",
+            "summary": "Needs healthcare compliance review",
             "hipaa_findings": [
                 {
                     "category": "manual_review",
@@ -151,22 +161,37 @@ def test_hipaa_result_merges_deterministic_findings(store, cfg, monkeypatch):
                     "manual_review": True,
                 }
             ],
+            "hl7_findings": [
+                {
+                    "category": "hl7_manual_review",
+                    "severity": "medium",
+                    "title": "Partner message contract review required",
+                    "evidence": "ACK expectations are not fully visible in code.",
+                    "recommendation": "Confirm the interface profile and ACK flow with the trading partner.",
+                    "manual_review": True,
+                }
+            ],
         }
     )
     eng = make_engine(store, payload, monkeypatch)
     req = make_req(
-        hipaa=True,
-        files_changed=["api/patient.py"],
-        diff='+ logger.info("patient_ssn")\n+ requests.post("http://vendor", json={"patient_id": 1})',
+        compliance=True,
+        files_changed=["api/patient.py", "integrations/hl7_listener.py"],
+        diff='+ logger.info("patient_ssn")\n+ requests.post("http://vendor", json={"patient_id": 1})\n+ logger.info("MSH|^~\\\\&|ADT|PID|")',
     )
     result = eng.review(req)
-    assert result.hipaa_review["enabled"] is True
-    assert result.hipaa_review["hipaa_relevant"] is True
-    assert result.hipaa_review["requires_manual_compliance_review"] is True
-    titles = {f["title"] for f in result.hipaa_review["hipaa_findings"]}
+    assert result.compliance_review["enabled"] is True
+    assert result.compliance_review["hipaa_relevant"] is True
+    assert result.compliance_review["hl7_relevant"] is True
+    assert result.compliance_review["requires_manual_compliance_review"] is True
+    titles = {f["title"] for f in result.compliance_review["hipaa_findings"]}
+    hl7_titles = {f["title"] for f in result.compliance_review["hl7_findings"]}
     assert "Potential PHI in logs or debug output" in titles
     assert "Vendor review required" in titles
+    assert "Raw HL7 payload appears in logs or debug output" in hl7_titles
+    assert "Partner message contract review required" in hl7_titles
     assert any(i["description"] == "Potential PHI in logs or debug output" for i in result.issues)
+    assert any(i["description"] == "Raw HL7 payload appears in logs or debug output" for i in result.issues)
 
 
 def test_missing_tool_call_raises(store, cfg, monkeypatch):

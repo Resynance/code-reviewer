@@ -10,7 +10,7 @@ export default function SettingsPage() {
   // Model list + embedding form
   const [modelsList, setModelsList] = useState([]) // [{label, model, provider}]
   const [embeddingInput, setEmbeddingInput] = useState('')
-  const [hipaaPoliciesInput, setHipaaPoliciesInput] = useState('')
+  const [compliancePoliciesInput, setCompliancePoliciesInput] = useState('')
   const [savingModel, setSavingModel] = useState(false)
   const [modelMsg, setModelMsg] = useState(null)
   const [llmExecutionMode, setLlmExecutionMode] = useState('inline')
@@ -60,7 +60,7 @@ export default function SettingsPage() {
       setModelsList(s.openrouter_models || [])
       setEmbeddingInput(s.embedding_model || '')
       setLlmExecutionMode(s.llm_execution_mode || 'inline')
-      setHipaaPoliciesInput(JSON.stringify(s.hipaa_policies || { default: {}, repos: {} }, null, 2))
+      setCompliancePoliciesInput(JSON.stringify(s.compliance_policies || { default: {}, repos: {} }, null, 2))
     }).catch(() => {})
     api.listAccess().then(r => setAccessEmails(r.emails || [])).catch(() => {})
     api.githubOwners().then(r => setOwners(r.owners || [])).catch(() => {})
@@ -132,21 +132,21 @@ export default function SettingsPage() {
     try {
       let parsedPolicies
       try {
-        parsedPolicies = JSON.parse(hipaaPoliciesInput || '{}')
+        parsedPolicies = JSON.parse(compliancePoliciesInput || '{}')
       } catch {
-        setModelMsg('HIPAA policies must be valid JSON')
+        setModelMsg('HIPAA / HL7 policies must be valid JSON')
         setSavingModel(false)
         return
       }
       const s = await api.saveSettings({
         openrouter_models: modelsList,
         embedding_model: embeddingInput.trim(),
-        hipaa_policies: parsedPolicies,
+        compliance_policies: parsedPolicies,
       })
       setSettings(s)
       setModelsList(s.openrouter_models || [])
       setEmbeddingInput(s.embedding_model || '')
-      setHipaaPoliciesInput(JSON.stringify(s.hipaa_policies || { default: {}, repos: {} }, null, 2))
+      setCompliancePoliciesInput(JSON.stringify(s.compliance_policies || { default: {}, repos: {} }, null, 2))
       setModelMsg('Saved ✓')
       refreshStats()
     } catch (e) {
@@ -245,9 +245,9 @@ export default function SettingsPage() {
     }
   }
 
-  async function setRepoHipaaEnabled(repo, enabled) {
+  async function setRepoComplianceEnabled(repo, enabled) {
     setRepoErr(null)
-    const current = settings?.hipaa_policies || { default: {}, repos: {} }
+    const current = settings?.compliance_policies || { default: {}, repos: {} }
     const next = {
       ...current,
       repos: {
@@ -259,9 +259,9 @@ export default function SettingsPage() {
       },
     }
     try {
-      const saved = await api.saveSettings({ hipaa_policies: next })
+      const saved = await api.saveSettings({ compliance_policies: next })
       setSettings(saved)
-      setHipaaPoliciesInput(JSON.stringify(saved.hipaa_policies || { default: {}, repos: {} }, null, 2))
+      setCompliancePoliciesInput(JSON.stringify(saved.compliance_policies || { default: {}, repos: {} }, null, 2))
     } catch (e) {
       setRepoErr(e.message)
     }
@@ -418,10 +418,10 @@ export default function SettingsPage() {
         </div>
 
         <div style={{ marginTop: 16 }}>
-          <label style={labelStyle}>HIPAA policy JSON — default policy plus per-repo overrides</label>
+          <label style={labelStyle}>HIPAA / HL7 policy JSON — default policy plus per-repo overrides</label>
           <textarea
-            value={hipaaPoliciesInput}
-            onChange={e => setHipaaPoliciesInput(e.target.value)}
+            value={compliancePoliciesInput}
+            onChange={e => setCompliancePoliciesInput(e.target.value)}
             rows={14}
             style={{ ...inputStyle, fontFamily: 'var(--font-mono)', fontSize: 12, resize: 'vertical' }}
           />
@@ -611,7 +611,7 @@ export default function SettingsPage() {
             {repos.map(r => {
               const bf = backfillState[r] || {}
               const op = openPrs[r] || {}
-              const hipaaEnabled = !!settings?.hipaa_policies?.repos?.[r]?.enabled
+              const complianceEnabled = !!settings?.compliance_policies?.repos?.[r]?.enabled
               return (
                 <div key={r} style={{ background: 'var(--surface2)', borderRadius: 8, padding: '10px 14px' }}>
                   <div style={{ display: 'flex', alignItems: isMobile ? 'stretch' : 'center', flexDirection: isMobile ? 'column' : 'row', gap: 10 }}>
@@ -619,11 +619,11 @@ export default function SettingsPage() {
                     <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>
                       <input
                         type="checkbox"
-                        checked={hipaaEnabled}
-                        onChange={e => setRepoHipaaEnabled(r, e.target.checked)}
+                        checked={complianceEnabled}
+                        onChange={e => setRepoComplianceEnabled(r, e.target.checked)}
                         style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
                       />
-                      HIPAA required
+                      HIPAA / HL7 required
                     </label>
                     <button onClick={() => toggleOpenPrs(r)} style={smallBtn}>
                       {op.open ? '▾ Open PRs' : '▸ Open PRs'}

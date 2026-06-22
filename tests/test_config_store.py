@@ -18,7 +18,7 @@ def test_defaults_when_no_file(cfg):
         "openrouter_model_2": "",
         "openrouter_provider_2": "",
         "embedding_model": "",
-        "hipaa_policies": {
+        "compliance_policies": {
             "default": {
                 "enabled": False,
                 "notes": "",
@@ -28,6 +28,9 @@ def test_defaults_when_no_file(cfg):
                 "required_audit_signals": ["audit", "audit_log", "audit trail", "access_log"],
                 "required_encryption": ["at_rest", "in_transit"],
                 "phi_field_patterns": [],
+                "approved_hl7_versions": ["2.x", "FHIR R4"],
+                "required_hl7_validation_signals": ["schema", "validate", "ack", "nack", "message_control_id"],
+                "required_hl7_transport_signals": ["tls", "ssl", "https", "sftp", "vpn", "mllps"],
             },
             "repos": {},
         },
@@ -248,35 +251,36 @@ def test_get_models_backward_compat_with_model2(cfg):
     assert models[1]["provider"] == "Azure"
 
 
-def test_get_hipaa_policy_merges_repo_override(cfg):
+def test_get_compliance_policy_merges_repo_override(cfg):
     cfg.save_config({
-        "hipaa_policies": {
-            "default": {"enabled": False, "approved_vendors": ["aws"], "notes": "default note"},
-            "repos": {"org/a": {"enabled": True, "approved_vendors": ["aws", "sentry"], "notes": "repo note"}},
+        "compliance_policies": {
+            "default": {"enabled": False, "approved_vendors": ["aws"], "approved_hl7_versions": ["2.5"], "notes": "default note"},
+            "repos": {"org/a": {"enabled": True, "approved_vendors": ["aws", "sentry"], "approved_hl7_versions": ["2.5.1"], "notes": "repo note"}},
         }
     })
-    policy = cfg.get_hipaa_policy("org/a")
+    policy = cfg.get_compliance_policy("org/a")
     assert policy["enabled"] is True
     assert policy["approved_vendors"] == ["aws", "sentry"]
+    assert policy["approved_hl7_versions"] == ["2.5.1"]
     assert policy["notes"] == "repo note"
 
 
-def test_get_hipaa_policy_uses_default_when_repo_missing(cfg):
-    cfg.save_config({"hipaa_policies": {"default": {"enabled": True, "disallowed_vendors": ["segment"]}, "repos": {}}})
-    policy = cfg.get_hipaa_policy("org/missing")
+def test_get_compliance_policy_uses_default_when_repo_missing(cfg):
+    cfg.save_config({"compliance_policies": {"default": {"enabled": True, "disallowed_vendors": ["segment"]}, "repos": {}}})
+    policy = cfg.get_compliance_policy("org/missing")
     assert policy["enabled"] is True
     assert policy["disallowed_vendors"] == ["segment"]
 
 
-def test_repo_requires_hipaa_reads_repo_setting(cfg):
+def test_repo_requires_compliance_review_reads_repo_setting(cfg):
     cfg.save_config({
-        "hipaa_policies": {
+        "compliance_policies": {
             "default": {"enabled": False},
             "repos": {"org/a": {"enabled": True}},
         }
     })
-    assert cfg.repo_requires_hipaa("org/a") is True
-    assert cfg.repo_requires_hipaa("org/b") is False
+    assert cfg.repo_requires_compliance_review("org/a") is True
+    assert cfg.repo_requires_compliance_review("org/b") is False
 
 
 def test_get_model_and_provider_derive_from_models_list(cfg):

@@ -18,7 +18,7 @@ import threading
 import copy
 from pathlib import Path
 
-import hipaa
+import compliance
 
 _CONFIG_PATH = Path(__file__).parent.parent / "config.json"
 _LOCK = threading.Lock()
@@ -39,7 +39,7 @@ _DEFAULTS = {
     "openrouter_model_2": "",
     "openrouter_provider_2": "",
     "embedding_model": "",
-    "hipaa_policies": hipaa.default_policies(),
+    "compliance_policies": compliance.default_policies(),
 }
 
 DEFAULT_MODEL = "anthropic/claude-sonnet-4.5"
@@ -53,9 +53,10 @@ def _is_postgres() -> bool:
 def _merge(data: dict) -> dict:
     """Merge a raw config dict onto the defaults and normalize."""
     merged = copy.deepcopy(_DEFAULTS)
+    raw_policies = data.get("compliance_policies")
     for key in _DEFAULTS:
-        if key == "hipaa_policies":
-            merged[key] = hipaa.normalize_policies(data.get(key))
+        if key == "compliance_policies":
+            merged[key] = compliance.normalize_policies(raw_policies)
         else:
             merged[key] = data.get(key, merged[key])
     merged["repos"] = [r for r in (merged.get("repos") or []) if isinstance(r, str)]
@@ -115,18 +116,19 @@ def load_config():
 
 def save_config(update: dict):
     """Merge `update` into the stored config and persist. Returns the new config."""
+    update = dict(update or {})
     if _is_postgres():
         current = _pg_read()
         current.update(update)
         current["repos"] = [r for r in (current.get("repos") or []) if isinstance(r, str)]
-        current["hipaa_policies"] = hipaa.normalize_policies(current.get("hipaa_policies"))
+        current["compliance_policies"] = compliance.normalize_policies(current.get("compliance_policies"))
         _pg_write(current)
         return current
     with _LOCK:
         current = _read()
         current.update(update)
         current["repos"] = [r for r in (current.get("repos") or []) if isinstance(r, str)]
-        current["hipaa_policies"] = hipaa.normalize_policies(current.get("hipaa_policies"))
+        current["compliance_policies"] = compliance.normalize_policies(current.get("compliance_policies"))
         _write(current)
         return current
 
@@ -241,16 +243,17 @@ def get_embedding_model() -> str:
     return load_config().get("embedding_model") or os.getenv("EMBEDDING_MODEL") or DEFAULT_EMBEDDING_MODEL
 
 
-def get_hipaa_policies() -> dict:
-    return hipaa.normalize_policies(load_config().get("hipaa_policies"))
+def get_compliance_policies() -> dict:
+    cfg = load_config()
+    return compliance.normalize_policies(cfg.get("compliance_policies"))
 
 
-def get_hipaa_policy(repo: str) -> dict:
-    return hipaa.policy_for_repo(get_hipaa_policies(), repo)
+def get_compliance_policy(repo: str) -> dict:
+    return compliance.policy_for_repo(get_compliance_policies(), repo)
 
 
-def repo_requires_hipaa(repo: str) -> bool:
-    return bool(get_hipaa_policy(repo).get("enabled"))
+def repo_requires_compliance_review(repo: str) -> bool:
+    return bool(get_compliance_policy(repo).get("enabled"))
 
 
 def add_repo(repo: str) -> list:

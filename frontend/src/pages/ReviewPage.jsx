@@ -13,7 +13,7 @@ function historyToResult(r) {
     issues: r.issues || [],
     suggestions: r.suggestions || [],
     past_decisions_applied: r.past_decisions || [],
-    hipaa_review: r.hipaa_review || {},
+    compliance_review: r.compliance_review || {},
     model: r.model || '',
   }
 }
@@ -44,7 +44,7 @@ export default function ReviewPage() {
   // Which model slot the user picked; null = model 1 (default).
   const [selectedModel, setSelectedModel] = useState(null)
   const [executionMode, setExecutionMode] = useState('inline')
-  const [hipaaPolicies, setHipaaPolicies] = useState({ default: {}, repos: {} })
+  const [compliancePolicies, setCompliancePolicies] = useState({ default: {}, repos: {} })
   // Tracks the in-flight review job so a superseded/unmounted poll stops.
   const jobRef = useRef(null)
   useEffect(() => () => { jobRef.current = null }, [])
@@ -69,11 +69,11 @@ export default function ReviewPage() {
       setModels(slots)
       setSelectedModel(slots[0] || null)
       setExecutionMode(s.llm_execution_mode || 'inline')
-      setHipaaPolicies(s.hipaa_policies || { default: {}, repos: {} })
+      setCompliancePolicies(s.compliance_policies || { default: {}, repos: {} })
     }).catch(() => {})
   }, [])
 
-  const hipaaEnabled = !!hipaaPolicies?.repos?.[form.repo]?.enabled
+  const complianceEnabled = !!compliancePolicies?.repos?.[form.repo]?.enabled
 
   // Whenever the selected repo changes, load its PRs (open first) for the picker.
   useEffect(() => {
@@ -254,10 +254,10 @@ export default function ReviewPage() {
         </div>
       )}
 
-      <div style={{ marginBottom: 14, fontSize: 13, color: hipaaEnabled ? 'var(--text)' : 'var(--text-2)' }}>
-        {hipaaEnabled
-          ? 'HIPAA-focused review is enabled for this repository in Settings.'
-          : 'HIPAA-focused review is not enabled for this repository.'}
+      <div style={{ marginBottom: 14, fontSize: 13, color: complianceEnabled ? 'var(--text)' : 'var(--text-2)' }}>
+        {complianceEnabled
+          ? 'HIPAA / HL7-focused review is enabled for this repository in Settings.'
+          : 'HIPAA / HL7-focused review is not enabled for this repository.'}
       </div>
 
       <div style={{ display: 'flex', gap: 12, alignItems: isMobile ? 'stretch' : 'center', flexDirection: isMobile ? 'column' : 'row', marginBottom: 28 }}>
@@ -432,21 +432,22 @@ function ReviewResult({ result, repo }) {
         </Section>
       )}
 
-      {result.hipaa_review?.enabled && (
-        <Section title="🏥 HIPAA Review">
+      {result.compliance_review?.enabled && (
+        <Section title="HIPAA / HL7 Review">
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, marginBottom: 14 }}>
-            <InfoPill label="Relevant" value={result.hipaa_review.hipaa_relevant ? 'Yes' : 'No'} />
-            <InfoPill label="Manual Review" value={result.hipaa_review.requires_manual_compliance_review ? 'Required' : 'Not flagged'} />
-            <InfoPill label="Findings" value={String(result.hipaa_review.hipaa_findings?.length || 0)} />
+            <InfoPill label="Relevant" value={result.compliance_review.hipaa_relevant ? 'Yes' : 'No'} />
+            <InfoPill label="HL7" value={result.compliance_review.hl7_relevant ? 'Yes' : 'No'} />
+            <InfoPill label="Manual Review" value={result.compliance_review.requires_manual_compliance_review ? 'Required' : 'Not flagged'} />
+            <InfoPill label="Findings" value={String((result.compliance_review.hipaa_findings?.length || 0) + (result.compliance_review.hl7_findings?.length || 0))} />
           </div>
-          {result.hipaa_review.summary && (
-            <div style={{ fontSize: 13, color: 'var(--text)', marginBottom: 12 }}>{result.hipaa_review.summary}</div>
+          {result.compliance_review.summary && (
+            <div style={{ fontSize: 13, color: 'var(--text)', marginBottom: 12 }}>{result.compliance_review.summary}</div>
           )}
-          {result.hipaa_review.hipaa_findings?.length > 0 && (
+          {((result.compliance_review.hipaa_findings?.length || 0) > 0 || (result.compliance_review.hl7_findings?.length || 0) > 0) && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
-              {result.hipaa_review.hipaa_findings.map((item, i) => (
+              {[...(result.compliance_review.hipaa_findings || []), ...(result.compliance_review.hl7_findings || [])].map((item, i) => (
                 <IssueCard
-                  key={`hipaa-${i}`}
+                  key={`compliance-${i}`}
                   issue={{
                     severity: item.severity,
                     file: item.file || item.category,
@@ -462,7 +463,7 @@ function ReviewResult({ result, repo }) {
               ))}
             </div>
           )}
-          <HipaaGapGrid review={result.hipaa_review} />
+          <ComplianceGapGrid review={result.compliance_review} />
         </Section>
       )}
 
@@ -550,7 +551,7 @@ function IssueCard({ issue, selected, onToggle, readOnly = false, extra = '' }) 
   )
 }
 
-function HipaaGapGrid({ review }) {
+function ComplianceGapGrid({ review }) {
   const groups = [
     ['PHI Exposure', review.phi_exposure_risk],
     ['Encryption', review.encryption_gaps],
@@ -558,6 +559,9 @@ function HipaaGapGrid({ review }) {
     ['Audit Trail', review.audit_trail_gaps],
     ['Minimum Necessary', review.minimum_necessary_gaps],
     ['Third-Party / BAA', review.third_party_baa_risks],
+    ['HL7 Interface', review.hl7_interface_gaps],
+    ['HL7 Message Integrity', review.hl7_message_integrity_gaps],
+    ['HL7 Transport', review.hl7_transport_gaps],
   ].filter(([, items]) => (items || []).length > 0)
 
   if (!groups.length) return null

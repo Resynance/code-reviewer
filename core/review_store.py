@@ -21,7 +21,7 @@ _LOCK = threading.Lock()
 # Fields accepted on a review record (besides id/created_at, which are assigned).
 _FIELDS = (
     "repo", "pr_number", "title", "author", "approved", "confidence",
-    "summary", "issues", "suggestions", "past_decisions", "hipaa_review", "source", "model",
+    "summary", "issues", "suggestions", "past_decisions", "compliance_review", "source", "model",
 )
 
 
@@ -37,7 +37,7 @@ def _normalize(record: dict) -> dict:
     rec = {k: record.get(k) for k in _FIELDS}
     for k in ("issues", "suggestions", "past_decisions"):
         rec[k] = rec.get(k) or []
-    rec["hipaa_review"] = rec.get("hipaa_review") or {}
+    rec["compliance_review"] = rec.get("compliance_review") or {}
     return rec
 
 
@@ -61,9 +61,15 @@ def _file_read():
         return []
     try:
         with open(_FILE_PATH) as f:
-            return json.load(f)
+            data = json.load(f)
     except (ValueError, OSError):
         return []
+    out = []
+    for row in data:
+        rec = dict(row)
+        rec["compliance_review"] = rec.get("compliance_review") or {}
+        out.append(rec)
+    return out
 
 
 def _file_save(rec):
@@ -93,7 +99,7 @@ def _file_list(repo, pr_number, limit):
 
 _PG_COLS = [
     "id", "repo", "pr_number", "title", "author", "approved", "confidence",
-    "summary", "issues", "suggestions", "past_decisions", "hipaa_review", "source", "model", "created_at",
+    "summary", "issues", "suggestions", "past_decisions", "compliance_review", "source", "model", "created_at",
 ]
 
 
@@ -104,13 +110,13 @@ def _pg_save(rec):
         cur.execute(
             "INSERT INTO reviews "
             "(repo, pr_number, title, author, approved, confidence, summary, "
-            " issues, suggestions, past_decisions, hipaa_review, source, model) "
+            " issues, suggestions, past_decisions, compliance_review, source, model) "
             "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id, created_at",
             (
                 rec["repo"], rec["pr_number"], rec.get("title"), rec.get("author"),
                 rec.get("approved"), rec.get("confidence"), rec.get("summary"),
                 json.dumps(rec["issues"]), json.dumps(rec["suggestions"]),
-                json.dumps(rec["past_decisions"]), json.dumps(rec["hipaa_review"]),
+                json.dumps(rec["past_decisions"]), json.dumps(rec["compliance_review"]),
                 rec.get("source"), rec.get("model"),
             ),
         )
@@ -143,6 +149,7 @@ def _pg_list(repo, pr_number, limit):
     out = []
     for row in rows:
         d = dict(zip(_PG_COLS, row))
+        d["compliance_review"] = d.get("compliance_review") or {}
         if hasattr(d.get("created_at"), "isoformat"):
             d["created_at"] = d["created_at"].isoformat()
         out.append(d)

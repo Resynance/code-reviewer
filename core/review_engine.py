@@ -18,10 +18,10 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import config_store
-import hipaa
+import compliance
 
 
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 
 # How many past decisions to pull in as context for each review.
 DEFAULT_CONTEXT_K = 6
@@ -42,7 +42,7 @@ class ReviewRequest:
     # which configured model slot to run against.
     model: Optional[str] = None
     provider: Optional[str] = None
-    hipaa: bool = False
+    compliance: bool = False
 
 
 @dataclass
@@ -54,7 +54,7 @@ class ReviewResult:
     issues: list = field(default_factory=list)
     suggestions: list = field(default_factory=list)
     past_decisions_applied: list = field(default_factory=list)
-    hipaa_review: dict = field(default_factory=dict)
+    compliance_review: dict = field(default_factory=dict)
     model: str = ""
 
 
@@ -135,15 +135,32 @@ _REVIEW_SCHEMA = {
                 "required": ["ref", "summary", "how_applied"],
             },
         },
-        "hipaa_review": {
+        "compliance_review": {
             "type": "object",
-            "description": "HIPAA-focused findings. Use this only when HIPAA review mode is enabled.",
+            "description": "HIPAA / HL7-focused findings. Use this only when healthcare compliance review mode is enabled.",
             "properties": {
                 "hipaa_relevant": {"type": "boolean"},
+                "hl7_relevant": {"type": "boolean"},
                 "requires_manual_compliance_review": {"type": "boolean"},
                 "summary": {"type": "string"},
                 "policy_notes_applied": {"type": "array", "items": {"type": "string"}},
                 "hipaa_findings": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "category": {"type": "string"},
+                            "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+                            "title": {"type": "string"},
+                            "evidence": {"type": "string"},
+                            "recommendation": {"type": "string"},
+                            "file": {"type": "string"},
+                            "manual_review": {"type": "boolean"},
+                        },
+                        "required": ["category", "severity", "title", "evidence", "recommendation"],
+                    },
+                },
+                "hl7_findings": {
                     "type": "array",
                     "items": {
                         "type": "object",
@@ -165,6 +182,9 @@ _REVIEW_SCHEMA = {
                 "audit_trail_gaps": {"type": "array", "items": {"type": "object"}},
                 "minimum_necessary_gaps": {"type": "array", "items": {"type": "object"}},
                 "third_party_baa_risks": {"type": "array", "items": {"type": "object"}},
+                "hl7_interface_gaps": {"type": "array", "items": {"type": "object"}},
+                "hl7_message_integrity_gaps": {"type": "array", "items": {"type": "object"}},
+                "hl7_transport_gaps": {"type": "array", "items": {"type": "object"}},
             },
         },
     },
@@ -192,11 +212,13 @@ its ref. Report it in past_decisions_applied so the author sees the connection.
 Call the submit_review function exactly once with your structured findings. Set
 approved=false if there is any critical or high-severity issue.
 
-If HIPAA review mode is enabled, use the hipaa_review object for evidence-backed
-HIPAA findings. Do not claim legal certification. Mark
+If HIPAA / HL7 review mode is enabled, use the compliance_review object for evidence-backed
+healthcare-compliance findings. Do not claim legal certification. Mark
 requires_manual_compliance_review=true when the change is HIPAA-relevant but the
 remaining decision depends on organizational process, BAA status, or deployment
-controls that are not provable from code alone."""
+controls that are not provable from code alone. For HL7, also mark
+requires_manual_compliance_review=true when interface-partner requirements,
+message contracts, or transport assumptions are not provable from code alone."""
 
 
 class CodeReviewEngine:
@@ -293,11 +315,11 @@ class CodeReviewEngine:
             decisions_block = "(no relevant past decisions found)"
 
         files = ", ".join(request.files_changed) or "(not specified)"
-        hipaa_section = ""
-        if request.hipaa:
-            policy = config_store.get_hipaa_policy(request.repo)
-            deterministic = hipaa.review_findings(request.diff, request.files_changed, policy)
-            hipaa_section = hipaa.prompt_section(policy, deterministic)
+        compliance_section = ""
+        if request.compliance:
+            policy = config_store.get_compliance_policy(request.repo)
+            deterministic = compliance.review_findings(request.diff, request.files_changed, policy)
+            compliance_section = compliance.prompt_section(policy, deterministic)
         return (
             f"# Pull Request #{request.pr_number} — {request.repo}\n"
             f"Title: {request.title}\n"
@@ -306,7 +328,7 @@ class CodeReviewEngine:
             f"Files changed: {files}\n\n"
             f"## Description\n{request.description or '(none)'}\n\n"
             f"## Relevant past decisions\n{decisions_block}\n"
-            f"{hipaa_section}"
+            f"{compliance_section}"
             f"\n## Diff\n```diff\n{request.diff}\n```\n"
         )
 
@@ -336,20 +358,20 @@ class CodeReviewEngine:
         confidence = float(payload.get("confidence", 0.0) or 0.0)
         confidence = max(0.0, min(1.0, confidence))
 
-        deterministic_hipaa = None
-        if request.hipaa:
-            deterministic_hipaa = hipaa.review_findings(
+        deterministic_compliance = None
+        if request.compliance:
+            deterministic_compliance = compliance.review_findings(
                 request.diff,
                 request.files_changed,
-                config_store.get_hipaa_policy(request.repo),
+                config_store.get_compliance_policy(request.repo),
             )
-        hipaa_review = hipaa.normalize_result(
-            payload.get("hipaa_review"),
-            deterministic_hipaa,
-            enabled=request.hipaa,
+        compliance_review = compliance.normalize_result(
+            payload.get("compliance_review"),
+            deterministic_compliance,
+            enabled=request.compliance,
         )
         issues = payload.get("issues", []) or []
-        issues.extend(hipaa.review_issue_overlays(hipaa_review, enabled=request.hipaa))
+        issues.extend(compliance.review_issue_overlays(compliance_review, enabled=request.compliance))
         deduped_issues = []
         seen_issues = set()
         for issue in issues:
@@ -368,5 +390,5 @@ class CodeReviewEngine:
             issues=deduped_issues,
             suggestions=payload.get("suggestions", []) or [],
             past_decisions_applied=applied,
-            hipaa_review=hipaa_review,
+            compliance_review=compliance_review,
         )

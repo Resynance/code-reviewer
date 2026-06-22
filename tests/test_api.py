@@ -169,13 +169,13 @@ def test_review_requires_api_key(client):
 def test_review_enqueues_and_runs(client, monkeypatch):
     tc, main = client
     monkeypatch.setenv("OPENROUTER_API_KEY", "key")
-    tc.put("/api/settings", json={"hipaa_policies": {"default": {"enabled": False}, "repos": {"org/a": {"enabled": True}}}})
+    tc.put("/api/settings", json={"compliance_policies": {"default": {"enabled": False}, "repos": {"org/a": {"enabled": True}}}})
 
     class FakeEngine:
         def review(self, req):
             return ReviewResult(pr_number=req.pr_number, summary="ok", approved=True,
                                 confidence=0.8, issues=[], suggestions=[], past_decisions_applied=[],
-                                hipaa_review={"enabled": req.hipaa, "hipaa_relevant": req.hipaa})
+                                compliance_review={"enabled": req.compliance, "hipaa_relevant": req.compliance})
 
     monkeypatch.setattr(main, "get_engine", lambda: FakeEngine())
 
@@ -188,7 +188,7 @@ def test_review_enqueues_and_runs(client, monkeypatch):
     assert run["status"] == "done"
     body = run["result"]
     assert body["pr_number"] == 7 and body["approved"] is True and body["confidence"] == 0.8
-    assert body["hipaa_review"]["enabled"] is True
+    assert body["compliance_review"]["enabled"] is True
 
     # Poll → the same finished job.
     polled = tc.get(f"/api/review/{job['id']}").json()
@@ -227,7 +227,7 @@ def test_review_local_queue_skips_inline_run_and_can_complete_via_worker(client,
             "issues": [],
             "suggestions": [],
             "past_decisions_applied": [],
-            "hipaa_review": {"enabled": False},
+            "compliance_review": {"enabled": False},
             "model": "local/model",
         }},
     ).json()
@@ -314,13 +314,13 @@ def test_issue_created(client, monkeypatch):
 def test_review_is_saved_to_history(client, monkeypatch):
     tc, main = client
     monkeypatch.setenv("OPENROUTER_API_KEY", "key")
-    tc.put("/api/settings", json={"hipaa_policies": {"default": {"enabled": False}, "repos": {"org/a": {"enabled": True}}}})
+    tc.put("/api/settings", json={"compliance_policies": {"default": {"enabled": False}, "repos": {"org/a": {"enabled": True}}}})
 
     class FakeEngine:
         def review(self, req):
             return ReviewResult(pr_number=req.pr_number, summary="ok", approved=True,
                                 confidence=0.9, issues=[], suggestions=[], past_decisions_applied=[],
-                                hipaa_review={"enabled": req.hipaa})
+                                compliance_review={"enabled": req.compliance})
 
     monkeypatch.setattr(main, "get_engine", lambda: FakeEngine())
     assert tc.get("/api/reviews").json()["count"] == 0
@@ -330,7 +330,7 @@ def test_review_is_saved_to_history(client, monkeypatch):
     assert hist["count"] == 1
     r = hist["reviews"][0]
     assert r["pr_number"] == 7 and r["repo"] == "org/a" and r["source"] == "api"
-    assert r["hipaa_review"] == {"enabled": True}
+    assert r["compliance_review"] == {"enabled": True}
 
 
 # ----- backfill ----- #
@@ -480,7 +480,7 @@ def _fake_assessment_engine():
             return AssessmentResult(
                 repo=req.repo, summary="A fine app", purpose="Does things",
                 tech_stack=["Python"], key_components=[], vulnerabilities=[], model="m/x",
-                hipaa_review={"enabled": req.hipaa, "hipaa_relevant": req.hipaa},
+                compliance_review={"enabled": req.compliance, "hipaa_relevant": req.compliance},
             )
     return _Fake
 
@@ -494,7 +494,7 @@ def test_assessment_requires_api_key(client):
 def test_assessment_enqueues_and_runs(client, monkeypatch):
     tc, main = client
     monkeypatch.setenv("OPENROUTER_API_KEY", "key")
-    tc.put("/api/settings", json={"hipaa_policies": {"default": {"enabled": False}, "repos": {"org/a": {"enabled": True}}}})
+    tc.put("/api/settings", json={"compliance_policies": {"default": {"enabled": False}, "repos": {"org/a": {"enabled": True}}}})
     monkeypatch.setattr(main, "AssessmentEngine", _fake_assessment_engine())
 
     job = tc.post("/api/assessments", json={"repo": "org/a"}).json()
@@ -504,7 +504,7 @@ def test_assessment_enqueues_and_runs(client, monkeypatch):
     assert run["status"] == "done"
     assert run["result"]["repo"] == "org/a"
     assert run["result"]["summary"] == "A fine app"
-    assert run["result"]["hipaa_review"]["enabled"] is True
+    assert run["result"]["compliance_review"]["enabled"] is True
 
     polled = tc.get(f"/api/assessments/{job['id']}").json()
     assert polled["status"] == "done" and polled["result"]["repo"] == "org/a"
@@ -533,7 +533,7 @@ def test_assessment_local_queue_can_be_claimed_by_type_and_saved(client):
             "tech_stack": ["Python"],
             "key_components": [],
             "vulnerabilities": [],
-            "hipaa_review": {"enabled": False, "hipaa_relevant": False},
+            "compliance_review": {"enabled": False, "hipaa_relevant": False},
             "model": "local/model",
         }},
     ).json()
@@ -543,15 +543,15 @@ def test_assessment_local_queue_can_be_claimed_by_type_and_saved(client):
     assert hist["assessments"][0]["summary"] == "assessed"
 
 
-def test_assessment_uses_repo_hipaa_setting(client, monkeypatch):
+def test_assessment_uses_repo_compliance_setting(client, monkeypatch):
     tc, main = client
     monkeypatch.setenv("OPENROUTER_API_KEY", "key")
-    tc.put("/api/settings", json={"hipaa_policies": {"default": {"enabled": False}, "repos": {"org/a": {"enabled": True}}}})
+    tc.put("/api/settings", json={"compliance_policies": {"default": {"enabled": False}, "repos": {"org/a": {"enabled": True}}}})
     monkeypatch.setattr(main, "AssessmentEngine", _fake_assessment_engine())
 
-    job = tc.post("/api/assessments", json={"repo": "org/a", "hipaa": False}).json()
+    job = tc.post("/api/assessments", json={"repo": "org/a", "compliance": False}).json()
     run = tc.post(f"/api/assessments/{job['id']}/run").json()
-    assert run["result"]["hipaa_review"]["enabled"] is True
+    assert run["result"]["compliance_review"]["enabled"] is True
 
 
 def test_assessment_job_not_found(client):
@@ -572,18 +572,18 @@ def test_assessment_is_saved_to_history(client, monkeypatch):
     assert hist["count"] == 1
     assert hist["assessments"][0]["repo"] == "org/b"
     assert hist["assessments"][0]["summary"] == "A fine app"
-    assert hist["assessments"][0]["hipaa_review"] == {"enabled": False, "hipaa_relevant": False}
+    assert hist["assessments"][0]["compliance_review"] == {"enabled": False, "hipaa_relevant": False}
 
 
-def test_assessment_ignores_manual_hipaa_flag_when_repo_is_not_enabled(client, monkeypatch):
+def test_assessment_ignores_manual_compliance_flag_when_repo_is_not_enabled(client, monkeypatch):
     tc, main = client
     monkeypatch.setenv("OPENROUTER_API_KEY", "key")
-    tc.put("/api/settings", json={"hipaa_policies": {"default": {"enabled": False}, "repos": {"org/a": {"enabled": False}}}})
+    tc.put("/api/settings", json={"compliance_policies": {"default": {"enabled": False}, "repos": {"org/a": {"enabled": False}}}})
     monkeypatch.setattr(main, "AssessmentEngine", _fake_assessment_engine())
 
-    job = tc.post("/api/assessments", json={"repo": "org/a", "hipaa": True}).json()
+    job = tc.post("/api/assessments", json={"repo": "org/a", "compliance": True}).json()
     run = tc.post(f"/api/assessments/{job['id']}/run").json()
-    assert run["result"]["hipaa_review"]["enabled"] is False
+    assert run["result"]["compliance_review"]["enabled"] is False
 
 
 def test_list_assessments(client, monkeypatch):
@@ -678,14 +678,16 @@ def test_rate_limit_review_independent_from_assessment(client, monkeypatch):
     assert tc.post("/api/assessments", json={"repo": "org/a"}).status_code == 429
 
 
-def test_settings_roundtrip_hipaa_policies(client):
+def test_settings_roundtrip_compliance_policies(client):
     tc, _ = client
     body = tc.put("/api/settings", json={
-        "hipaa_policies": {
-            "default": {"enabled": False, "approved_vendors": ["aws"], "notes": "default"},
-            "repos": {"org/a": {"enabled": True, "disallowed_vendors": ["segment"]}},
+        "compliance_policies": {
+            "default": {"enabled": False, "approved_vendors": ["aws"], "approved_hl7_versions": ["2.5.1"], "notes": "default"},
+            "repos": {"org/a": {"enabled": True, "disallowed_vendors": ["segment"], "required_hl7_transport_signals": ["mllps"]}},
         }
     }).json()
-    assert body["hipaa_policies"]["default"]["approved_vendors"] == ["aws"]
-    assert body["hipaa_policies"]["repos"]["org/a"]["enabled"] is True
-    assert body["hipaa_policies"]["repos"]["org/a"]["disallowed_vendors"] == ["segment"]
+    assert body["compliance_policies"]["default"]["approved_vendors"] == ["aws"]
+    assert body["compliance_policies"]["default"]["approved_hl7_versions"] == ["2.5.1"]
+    assert body["compliance_policies"]["repos"]["org/a"]["enabled"] is True
+    assert body["compliance_policies"]["repos"]["org/a"]["disallowed_vendors"] == ["segment"]
+    assert body["compliance_policies"]["repos"]["org/a"]["required_hl7_transport_signals"] == ["mllps"]
