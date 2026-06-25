@@ -517,7 +517,10 @@ def test_model_override_wins(store, cfg, monkeypatch):
 
 
 def test_provider_sets_extra_body(store, cfg, monkeypatch):
-    cfg.save_config({"openrouter_provider": "Anthropic"})
+    cfg.save_config({
+        "llm_base_url": "https://openrouter.ai/api/v1",
+        "openrouter_provider": "Anthropic",
+    })
     eng = make_engine(store, review_payload(), monkeypatch)
     eng.review(make_req())
     provider = eng._test_client.captured["extra_body"]["provider"]
