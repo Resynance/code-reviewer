@@ -63,6 +63,8 @@ export const api = {
 
   saveSettings: (body) => request('/api/settings', { method: 'PUT', body }),
 
+  testLlmEndpoint: (body) => request('/api/llm/test', { method: 'POST', body }),
+
   listRepos: () => request('/api/repos'),
 
   addRepo: (repo) => request('/api/repos', { method: 'POST', body: { repo } }),

@@ -7,12 +7,10 @@ Given a PR diff, the engine:
   3. Asks the model to return a structured review (issues, suggestions, verdict)
      via a forced function/tool call, so the output is always machine-parseable.
 
-The model is served through OpenRouter (https://openrouter.ai), an
-OpenAI-compatible gateway, so any model OpenRouter offers can be used by setting
-OPENROUTER_MODEL. Authentication uses OPENROUTER_API_KEY.
+The model is served through an OpenAI-compatible endpoint. OpenRouter is the
+default, but the base URL can also target a local server.
 """
 
-import os
 import json
 from dataclasses import dataclass, field
 from typing import Optional
@@ -20,8 +18,6 @@ from typing import Optional
 import config_store
 import compliance
 
-
-OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 
 # How many past decisions to pull in as context for each review.
 DEFAULT_CONTEXT_K = 6
@@ -254,35 +250,39 @@ message contracts, or transport assumptions are not provable from code alone."""
 
 class CodeReviewEngine:
     def __init__(self, store, model: Optional[str] = None, context_k: int = DEFAULT_CONTEXT_K):
-        from openai import OpenAI
-
         self._store = store
         # Explicit override (mainly for tests). When None, the model and provider
         # are resolved from config_store per review, so UI changes take effect
         # without restarting the server.
         self._model_override = model
         self._context_k = context_k
-        # OpenRouter is OpenAI-compatible; point the OpenAI SDK at its base URL.
-        # The optional headers populate OpenRouter's app-attribution rankings.
-        self._client = OpenAI(
-            base_url=OPENROUTER_BASE_URL,
-            api_key=os.getenv("OPENROUTER_API_KEY"),
-            default_headers={
-                "HTTP-Referer": os.getenv("OPENROUTER_APP_URL", "http://localhost:1500"),
-                "X-Title": "ReviewBot",
-            },
+
+    def _make_client(self):
+        from openai import OpenAI
+
+        base_url = config_store.get_llm_base_url()
+        kwargs = {
+            "base_url": base_url,
+            "api_key": config_store.get_llm_api_key(),
             # Fail with a clear error inside the serverless function limit
             # (vercel.json maxDuration=300) rather than letting the platform kill
             # a slow model call with an opaque 504. max_retries=0 is essential:
             # the SDK's default retries would re-fire a timed-out call and push
             # total time past the limit anyway.
-            timeout=240,
-            max_retries=0,
-        )
+            "timeout": 240,
+            "max_retries": 0,
+        }
+        if config_store.is_openrouter_target(base_url):
+            kwargs["default_headers"] = {
+                "HTTP-Referer": "http://localhost:1500",
+                "X-Title": "ReviewBot",
+            }
+        return OpenAI(**kwargs)
 
     def review(self, request: ReviewRequest) -> ReviewResult:
         decisions = self._retrieve_context(request)
         prompt = self._build_prompt(request, decisions)
+        client = self._make_client()
 
         model = request.model or self._model_override or config_store.get_model()
         kwargs = dict(
@@ -300,12 +300,12 @@ class CodeReviewEngine:
 
         # Optionally pin OpenRouter to a specific upstream provider.
         provider = request.provider if request.provider is not None else config_store.get_provider()
-        if provider:
+        if provider and config_store.is_openrouter_target():
             kwargs["extra_body"] = {
                 "provider": {"order": [provider], "allow_fallbacks": False}
             }
 
-        response = self._create_review_completion(kwargs)
+        response = self._create_review_completion(client, kwargs)
 
         payload = self._extract_tool_input(response)
         result = self._to_result(request, payload, decisions)
@@ -342,16 +342,16 @@ class CodeReviewEngine:
         )
         return any(marker in haystack for marker in unsupported_markers)
 
-    def _create_review_completion(self, kwargs: dict):
+    def _create_review_completion(self, client, kwargs: dict):
         try:
-            return self._client.chat.completions.create(**kwargs)
+            return client.chat.completions.create(**kwargs)
         except Exception as exc:
             if "tools" not in kwargs or not self._should_retry_without_tools(exc):
                 raise
             retry_kwargs = dict(kwargs)
             retry_kwargs.pop("tools", None)
             retry_kwargs.pop("tool_choice", None)
-            return self._client.chat.completions.create(**retry_kwargs)
+            return client.chat.completions.create(**retry_kwargs)
 
     def _retrieve_context(self, request: ReviewRequest):
         # Search the decision store using the PR's intent and touched files.

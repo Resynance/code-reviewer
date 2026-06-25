@@ -14,6 +14,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends, Query, Header, Response
@@ -212,8 +214,15 @@ class SettingsBody(BaseModel):
     embedding_model: Optional[str] = None
     llm_execution_mode: Optional[str] = None
     llm_worker_secret: Optional[str] = None
+    llm_base_url: Optional[str] = None
+    llm_api_key: Optional[str] = None
     compliance_policies: Optional[dict] = None
     local_review_agents: Optional[list[dict]] = None
+
+
+class LlmTestBody(BaseModel):
+    llm_base_url: Optional[str] = None
+    llm_api_key: Optional[str] = None
 
 
 class RepoBody(BaseModel):
@@ -734,7 +743,8 @@ def get_stats():
         "embedding_model": config_store.get_embedding_model(),
         "llm_execution_mode": config_store.get_llm_execution_mode(),
         "llm_worker_secret_set": bool(config_store.get_llm_worker_secret()),
-        "api_key_configured": bool(os.getenv("OPENROUTER_API_KEY")),
+        "llm_base_url": config_store.get_llm_base_url(),
+        "api_key_configured": bool(config_store.get_llm_api_key()),
         "github_token_configured": bool(config_store.get_github_token()),
     }
 
@@ -755,6 +765,8 @@ def get_settings():
         "webhook_secret_set": bool(config_store.get_webhook_secret()),
         "llm_execution_mode": config_store.get_llm_execution_mode(),
         "llm_worker_secret_set": bool(config_store.get_llm_worker_secret()),
+        "llm_base_url": config_store.get_llm_base_url(),
+        "llm_api_key_set": bool(config_store.get_llm_api_key()),
         # Model list — not secret, return the effective resolved values.
         "openrouter_models": config_store.get_models(),
         # Legacy fields for backward compat with older frontend versions.
@@ -801,6 +813,10 @@ def update_settings(body: SettingsBody):
         update["llm_execution_mode"] = mode
     if body.llm_worker_secret is not None:
         update["llm_worker_secret"] = body.llm_worker_secret.strip()
+    if body.llm_base_url is not None:
+        update["llm_base_url"] = body.llm_base_url.strip()
+    if body.llm_api_key is not None:
+        update["llm_api_key"] = body.llm_api_key.strip()
     if body.compliance_policies is not None:
         update["compliance_policies"] = body.compliance_policies
     if body.local_review_agents is not None:
@@ -1048,8 +1064,6 @@ async def get_balance():
     if not key:
         return {"configured": False}
 
-    import httpx
-
     headers = {"Authorization": f"Bearer {key}"}
     try:
         async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
@@ -1072,6 +1086,114 @@ async def get_balance():
         "total_credits": total,
         "total_usage": used,
         "currency": "USD",
+    }
+
+
+def _normalize_url(value: str) -> str:
+    return (value or "").strip().rstrip("/")
+
+
+def _llm_base_candidates(base_url: str) -> list[str]:
+    candidates = [_normalize_url(base_url)]
+    if candidates[0].endswith("/v1"):
+        candidates.append(candidates[0][:-3])
+    else:
+        candidates.append(f"{candidates[0]}/v1")
+
+    out = []
+    for value in candidates:
+        if value and value not in out:
+            out.append(value)
+    return out
+
+
+async def _probe_llm_models_endpoint(client: httpx.AsyncClient, base_url: str) -> dict:
+    url = f"{base_url}/models"
+    try:
+        resp = await client.get(url)
+    except httpx.HTTPError as e:
+        return {"base_url": base_url, "url": url, "ok": False, "error": str(e)}
+
+    payload = None
+    try:
+        payload = resp.json()
+    except ValueError:
+        payload = None
+
+    model_count = None
+    if isinstance(payload, dict) and isinstance(payload.get("data"), list):
+        model_count = len(payload["data"])
+
+    return {
+        "base_url": base_url,
+        "url": url,
+        "ok": resp.status_code == 200 and isinstance(payload, dict),
+        "status_code": resp.status_code,
+        "body_preview": resp.text[:200],
+        "model_count": model_count,
+    }
+
+
+@app.post("/api/llm/test")
+async def test_llm_endpoint(body: LlmTestBody):
+    base_url = _normalize_url(body.llm_base_url or config_store.get_llm_base_url())
+    if not base_url:
+        raise HTTPException(status_code=400, detail="LLM base URL is required")
+    api_key = body.llm_api_key if body.llm_api_key is not None else config_store.get_llm_api_key()
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    candidates = _llm_base_candidates(base_url)
+
+    async with httpx.AsyncClient(timeout=5.0, headers=headers) as client:
+        results = [await _probe_llm_models_endpoint(client, candidate) for candidate in candidates]
+
+    exact = results[0]
+    alternate = next((item for item in results[1:] if item.get("ok")), None)
+
+    if exact.get("ok"):
+        return {
+            "ok": True,
+            "message": "LLM endpoint reachable.",
+            "base_url": exact["base_url"],
+            "models_url": exact["url"],
+            "model_count": exact.get("model_count"),
+        }
+
+    if exact.get("status_code") in {401, 403}:
+        return {
+            "ok": False,
+            "message": "LLM endpoint reachable, but the API key was rejected.",
+            "base_url": exact["base_url"],
+            "models_url": exact["url"],
+            "suggested_base_url": exact["base_url"],
+        }
+
+    if alternate:
+        if base_url.endswith("/v1"):
+            message = "Configured URL did not work, but the root-style endpoint did. Remove /v1."
+        else:
+            message = "Configured URL did not work, but the /v1 endpoint did. Try adding /v1."
+        return {
+            "ok": False,
+            "message": message,
+            "base_url": exact["base_url"],
+            "models_url": exact["url"],
+            "suggested_base_url": alternate["base_url"],
+            "suggested_models_url": alternate["url"],
+            "model_count": alternate.get("model_count"),
+        }
+
+    if exact.get("status_code") == 404:
+        detail = "Endpoint returned 404. This usually means the OpenAI-compatible path prefix is wrong."
+    elif exact.get("error"):
+        detail = f"Could not reach endpoint: {exact['error']}"
+    else:
+        detail = f"Endpoint returned {exact.get('status_code', 'an unknown error')}."
+
+    return {
+        "ok": False,
+        "message": detail,
+        "base_url": exact["base_url"],
+        "models_url": exact["url"],
     }
 
 

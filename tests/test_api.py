@@ -2,6 +2,7 @@
 
 import hmac
 import hashlib
+import json
 
 import config_store
 import rate_limit
@@ -24,6 +25,8 @@ def test_settings_default(client):
     assert body["webhook_secret_set"] is False
     assert body["llm_execution_mode"] == "inline"
     assert body["llm_worker_secret_set"] is False
+    assert body["llm_base_url"] == config_store.DEFAULT_LLM_BASE_URL
+    assert body["llm_api_key_set"] is False
     assert body["openrouter_model"] == config_store.DEFAULT_MODEL
     assert isinstance(body["openrouter_models"], list)
     assert isinstance(body["local_review_agents"], list)
@@ -48,6 +51,8 @@ def test_settings_put_updates_and_hides_secrets(client):
     resp = tc.put("/api/settings", json={
         "github_token": "ghp_secret", "webhook_secret": "whs",
         "llm_worker_secret": "worker-secret", "llm_execution_mode": "local_queue",
+        "llm_base_url": "http://192.168.0.197:8080/",
+        "llm_api_key": "local-llm",
         "repos": ["org/a"], "openrouter_model": "openai/gpt-4o",
         "openrouter_provider": "Azure",
     })
@@ -55,11 +60,13 @@ def test_settings_put_updates_and_hides_secrets(client):
     assert body["github_token_set"] is True
     assert body["llm_execution_mode"] == "local_queue"
     assert body["llm_worker_secret_set"] is True
+    assert body["llm_base_url"] == "http://192.168.0.197:8080"
+    assert body["llm_api_key_set"] is True
     assert body["openrouter_model"] == "openai/gpt-4o"
     assert body["openrouter_provider"] == "Azure"
     # secrets must never be echoed back, in any field
     raw = tc.get("/api/settings").text
-    assert "ghp_secret" not in raw and "whs" not in raw and "worker-secret" not in raw
+    assert "ghp_secret" not in raw and "whs" not in raw and "worker-secret" not in raw and "local-llm" not in raw
 
 
 def test_settings_put_partial_keeps_other_fields(client):
@@ -151,12 +158,119 @@ def test_stats_shape(client):
     s = tc.get("/api/stats").json()
     assert set(s) >= {"decisions_sampled", "backend", "model", "provider",
                       "api_key_configured", "github_token_configured",
-                      "llm_execution_mode", "llm_worker_secret_set"}
+                      "llm_execution_mode", "llm_worker_secret_set", "llm_base_url"}
 
 
 def test_balance_unconfigured(client):
     tc, _ = client  # clean_env clears OPENROUTER_API_KEY
     assert tc.get("/api/balance").json() == {"configured": False}
+
+
+def test_llm_test_endpoint_success(client, monkeypatch):
+    tc, main = client
+
+    class FakeResp:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = json.dumps(payload)
+
+        def json(self):
+            return self._payload
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url):
+            return FakeResp(200, {"data": [{"id": "llama-3"}]})
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", FakeClient)
+
+    body = tc.post("/api/llm/test", json={"llm_base_url": "http://192.168.0.197:8080/v1"}).json()
+    assert body["ok"] is True
+    assert body["base_url"] == "http://192.168.0.197:8080/v1"
+    assert body["model_count"] == 1
+
+
+def test_llm_test_endpoint_suggests_v1_when_missing(client, monkeypatch):
+    tc, main = client
+
+    class FakeResp:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = json.dumps(payload)
+
+        def json(self):
+            return self._payload
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url):
+            if url == "http://192.168.0.197:8080/models":
+                return FakeResp(404, {"error": "not found"})
+            if url == "http://192.168.0.197:8080/v1/models":
+                return FakeResp(200, {"data": [{"id": "llama-3"}]})
+            raise AssertionError(url)
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", FakeClient)
+
+    body = tc.post("/api/llm/test", json={"llm_base_url": "http://192.168.0.197:8080"}).json()
+    assert body["ok"] is False
+    assert body["suggested_base_url"] == "http://192.168.0.197:8080/v1"
+    assert "adding /v1" in body["message"]
+
+
+def test_llm_test_endpoint_suggests_removing_v1_when_extra(client, monkeypatch):
+    tc, main = client
+
+    class FakeResp:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = json.dumps(payload)
+
+        def json(self):
+            return self._payload
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url):
+            if url == "http://192.168.0.197:8080/v1/models":
+                return FakeResp(404, {"error": "not found"})
+            if url == "http://192.168.0.197:8080/models":
+                return FakeResp(200, {"data": [{"id": "llama-3"}]})
+            raise AssertionError(url)
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", FakeClient)
+
+    body = tc.post("/api/llm/test", json={"llm_base_url": "http://192.168.0.197:8080/v1"}).json()
+    assert body["ok"] is False
+    assert body["suggested_base_url"] == "http://192.168.0.197:8080"
+    assert "Remove /v1" in body["message"]
 
 
 # ----- review ----- #

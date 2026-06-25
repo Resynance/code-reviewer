@@ -17,6 +17,7 @@ import json
 import threading
 import copy
 from pathlib import Path
+from typing import Optional
 
 import compliance
 
@@ -30,6 +31,8 @@ _DEFAULTS = {
     "repos": [],
     "llm_execution_mode": "",
     "llm_worker_secret": "",
+    "llm_base_url": "",
+    "llm_api_key": "",
     # New: ordered list of model slots [{label, model, provider}].
     # When set, this supersedes the legacy openrouter_model / openrouter_model_2 fields.
     "openrouter_models": [],
@@ -67,6 +70,7 @@ _DEFAULTS = {
 
 DEFAULT_MODEL = "anthropic/claude-sonnet-4.5"
 DEFAULT_EMBEDDING_MODEL = "openai/text-embedding-3-small"
+DEFAULT_LLM_BASE_URL = "https://openrouter.ai/api/v1"
 _LEGACY_LOCAL_AGENT_COMMANDS = {
     "kimi": [
         ["kimi"],
@@ -258,6 +262,20 @@ def get_llm_execution_mode() -> str:
 
 def get_llm_worker_secret() -> str:
     return load_config().get("llm_worker_secret") or os.getenv("LLM_WORKER_SECRET", "")
+
+
+def get_llm_base_url() -> str:
+    value = load_config().get("llm_base_url") or os.getenv("OPENROUTER_BASE_URL") or DEFAULT_LLM_BASE_URL
+    return value.strip().rstrip("/")
+
+
+def get_llm_api_key() -> str:
+    return load_config().get("llm_api_key") or os.getenv("OPENROUTER_API_KEY", "")
+
+
+def is_openrouter_target(base_url: Optional[str] = None) -> bool:
+    base = (base_url or get_llm_base_url()).strip().lower()
+    return "openrouter.ai" in base
 
 
 def get_models() -> list:
