@@ -1220,8 +1220,6 @@ def _verify_github_signature(body: bytes, signature: Optional[str]) -> bool:
 
 async def _fetch_pr_diff(repo: str, pr_number: int) -> str:
     """Fetch a PR's unified diff from GitHub."""
-    import httpx
-
     token = config_store.get_token_for(repo.split("/")[0]) or ""
     headers = {
         "Accept": "application/vnd.github.v3.diff",
