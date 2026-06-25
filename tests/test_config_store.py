@@ -52,6 +52,14 @@ def test_defaults_when_no_file(cfg):
                 "command": ["kimi", "-p", "{prompt}", "--output-format", "stream-json"],
             },
         ],
+        "local_agentic_targets": [
+            {
+                "id": "codex",
+                "label": "Codex",
+                "enabled": True,
+                "command": ["codex", "exec", "--skip-git-repo-check", "--output-last-message", "{output_path}", "-"],
+            },
+        ],
     }
 
 
