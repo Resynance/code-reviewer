@@ -339,11 +339,6 @@ def _require_local_queue_configured():
         raise HTTPException(status_code=400, detail="LLM worker secret not configured for local_queue mode")
 
 
-def _is_agentic_review_job(job: Optional[dict]) -> bool:
-    req = (job or {}).get("request") or {}
-    return bool(job and job.get("job_type") == "review" and req.get("agentic"))
-
-
 def _is_secretless_local_job(job: Optional[dict]) -> bool:
     req = (job or {}).get("request") or {}
     return bool(job and job.get("executor") == "local_queue" and req.get("agentic"))
