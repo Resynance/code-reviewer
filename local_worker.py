@@ -97,7 +97,7 @@ def claim_job(client: httpx.Client) -> dict | None:
         resp = client.post(
             f"{API_URL}/worker/llm/claim",
             headers=_worker_headers(),
-            json={"worker_id": WORKER_ID, "job_types": ["review", "assessment"]},
+            json={"worker_id": WORKER_ID, "job_types": ["review", "assessment", "compliance_followup"]},
             timeout=10.0,
         )
     except httpx.RequestError as e:
@@ -181,6 +181,64 @@ def _normalize_agent(agent: dict) -> dict | None:
     }
 
 
+def _parse_json_payload(candidate: str) -> dict:
+    candidate = (candidate or "").strip()
+    if not candidate:
+        raise RuntimeError("agent returned invalid JSON")
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        pass
+
+    if "```" in candidate:
+        for block in candidate.split("```"):
+            block = block.strip()
+            if not block:
+                continue
+            if "\n" in block:
+                first, rest = block.split("\n", 1)
+                if first.strip().lower() in {"json", "javascript", "js"}:
+                    try:
+                        return json.loads(rest.strip())
+                    except json.JSONDecodeError:
+                        pass
+            try:
+                return json.loads(block)
+            except json.JSONDecodeError:
+                pass
+
+    start = candidate.find("{")
+    while start != -1:
+        depth = 0
+        in_string = False
+        escape = False
+        for idx in range(start, len(candidate)):
+            ch = candidate[idx]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    snippet = candidate[start:idx + 1]
+                    try:
+                        return json.loads(snippet)
+                    except json.JSONDecodeError:
+                        break
+        start = candidate.find("{", start + 1)
+
+    raise RuntimeError("agent returned invalid JSON")
+
+
 class AgenticReviewRunner:
     def __init__(self, engine: CodeReviewEngine):
         self.engine = engine
@@ -201,61 +259,7 @@ class AgenticReviewRunner:
         return [agent for agent in configured if agent["id"] in wanted]
 
     def _parse_json_payload(self, text: str) -> dict:
-        candidate = (text or "").strip()
-        if not candidate:
-            raise RuntimeError("agent returned invalid JSON")
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            pass
-
-        if "```" in candidate:
-            for block in candidate.split("```"):
-                block = block.strip()
-                if not block:
-                    continue
-                if "\n" in block:
-                    first, rest = block.split("\n", 1)
-                    if first.strip().lower() in {"json", "javascript", "js"}:
-                        try:
-                            return json.loads(rest.strip())
-                        except json.JSONDecodeError:
-                            pass
-                try:
-                    return json.loads(block)
-                except json.JSONDecodeError:
-                    pass
-
-        start = candidate.find("{")
-        while start != -1:
-            depth = 0
-            in_string = False
-            escape = False
-            for idx in range(start, len(candidate)):
-                ch = candidate[idx]
-                if in_string:
-                    if escape:
-                        escape = False
-                    elif ch == "\\":
-                        escape = True
-                    elif ch == '"':
-                        in_string = False
-                    continue
-                if ch == '"':
-                    in_string = True
-                elif ch == "{":
-                    depth += 1
-                elif ch == "}":
-                    depth -= 1
-                    if depth == 0:
-                        snippet = candidate[start:idx + 1]
-                        try:
-                            return json.loads(snippet)
-                        except json.JSONDecodeError:
-                            break
-            start = candidate.find("{", start + 1)
-
-        raise RuntimeError("agent returned invalid JSON")
+        return _parse_json_payload(text)
 
     def _decode_agent_output(self, content: str) -> dict:
         text = (content or "").strip()
@@ -465,11 +469,111 @@ class AgenticReviewRunner:
         return merged
 
 
+class ComplianceFollowupRunner:
+    def _configured_targets(self) -> list[dict]:
+        out = []
+        for item in config_store.get_local_agentic_targets():
+            normalized = _normalize_agent(item)
+            if normalized:
+                out.append(normalized)
+        return out
+
+    def _selected_target(self, requested: str) -> dict:
+        wanted = (requested or "").strip().lower()
+        for target in self._configured_targets():
+            if target.get("enabled") and target["id"] == wanted:
+                return target
+        raise RuntimeError(f"No enabled local agentic target is configured for '{requested}'")
+
+    def _build_prompt(self, req: dict) -> str:
+        analysis = req.get("analysis") or {}
+        repo = req.get("repo") or ""
+        issue_url = req.get("issue_url") or ""
+        issue_title = req.get("issue_title") or "Compliance follow-up"
+        issue_body = req.get("issue_body") or ""
+        return (
+            f"You are acting as a local remediation agent for the repository '{repo}'.\n"
+            f"A GitHub issue has already been created for this work: {issue_url}\n\n"
+            "Goals:\n"
+            "1. Review the compliance analysis and the created issue.\n"
+            "2. Decide whether safe code or documentation changes can be made automatically.\n"
+            "3. If yes, implement the changes in this local checkout, create a branch, commit, push, and open a PR linked to the issue.\n"
+            "4. If no safe automated fix is possible, explain what manual follow-up is needed.\n\n"
+            "When finished, return JSON with these fields:\n"
+            f'{{"status":"completed|manual_followup|no_changes","summary":"short summary","branch":"optional branch name","pr_url":"optional PR URL","issue_url":"{issue_url}"}}\n\n'
+            f"Issue title: {issue_title}\n\n"
+            "Issue body:\n"
+            f"{issue_body}\n\n"
+            "Compliance analysis payload:\n"
+            f"{json.dumps(analysis, indent=2)}\n"
+        )
+
+    def _run_target(self, target: dict, prompt: str) -> str:
+        command = list(target.get("command") or [])
+        if not command:
+            raise RuntimeError(f"{target['label']} has no command configured")
+        exe = command[0]
+        if shutil.which(exe) is None:
+            raise RuntimeError(f"{target['label']} command not found: {exe}")
+
+        with tempfile.TemporaryDirectory(prefix=f"reviewbot-followup-{target['id']}-") as tmpdir:
+            prompt_path = Path(tmpdir) / "prompt.txt"
+            output_path = Path(tmpdir) / "output.txt"
+            prompt_path.write_text(prompt, encoding="utf-8")
+            rendered = [
+                part.format(
+                    output_path=str(output_path),
+                    prompt_path=str(prompt_path),
+                    prompt=prompt,
+                    schema_path="",
+                )
+                for part in command
+            ]
+            use_stdin = not any("{prompt}" in str(part) or "{prompt_path}" in str(part) for part in command)
+            try:
+                proc = subprocess.run(
+                    rendered,
+                    input=prompt if use_stdin else None,
+                    text=True,
+                    capture_output=True,
+                    cwd=str(ROOT),
+                    timeout=AGENT_TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired as e:
+                raise RuntimeError(f"{target['label']} timed out after {AGENT_TIMEOUT_SECONDS}s") from e
+            if proc.returncode != 0:
+                detail = (proc.stderr or proc.stdout or "").strip()
+                raise RuntimeError(detail or f"{target['label']} exited with code {proc.returncode}")
+            if output_path.exists():
+                return output_path.read_text(encoding="utf-8").strip()
+            return (proc.stdout or "").strip()
+
+    def run(self, req: dict) -> dict:
+        target = self._selected_target(req.get("target_id", ""))
+        prompt = self._build_prompt(req)
+        output = self._run_target(target, prompt)
+        if not output:
+            raise RuntimeError(f"{target['label']} returned no output")
+        try:
+            payload = _parse_json_payload(output)
+            payload.setdefault("target", target["label"])
+            payload.setdefault("issue_url", req.get("issue_url"))
+            return payload
+        except RuntimeError:
+            return {
+                "status": "manual_followup",
+                "summary": output,
+                "target": target["label"],
+                "issue_url": req.get("issue_url"),
+            }
+
+
 class Worker:
     def __init__(self):
         self.review_engine = CodeReviewEngine(create_store())
         self.assessment_engine = AssessmentEngine()
         self.agentic_runner = AgenticReviewRunner(self.review_engine)
+        self.compliance_followup_runner = ComplianceFollowupRunner()
 
     def run_review(self, job: dict) -> dict:
         req = job["request"]
@@ -504,6 +608,9 @@ class Worker:
         result = self.assessment_engine.assess(request)
         return dataclasses.asdict(result)
 
+    def run_compliance_followup(self, job: dict) -> dict:
+        return self.compliance_followup_runner.run(job.get("request") or {})
+
     def process(self, client: httpx.Client, job: dict) -> None:
         job_id = job["id"]
         job_type = job.get("job_type", "review")
@@ -514,6 +621,8 @@ class Worker:
                 result = self.run_review(job)
             elif job_type == "assessment":
                 result = self.run_assessment(job)
+            elif job_type == "compliance_followup":
+                result = self.run_compliance_followup(job)
             else:
                 raise ValueError(f"Unknown job_type: {job_type}")
             complete_job(client, job_id, result)

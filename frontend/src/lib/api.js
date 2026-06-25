@@ -43,6 +43,9 @@ export const api = {
   createIssue: ({ repo, title, body }) =>
     request('/api/issue', { method: 'POST', body: { repo, title, body } }),
 
+  createComplianceIssue: (analysisId, body = {}) =>
+    request(`/api/compliance/analyses/${encodeURIComponent(analysisId)}/issue`, { method: 'POST', body }),
+
   listDecisions: (k = 20, repo = '') =>
     request(`/api/decisions?k=${encodeURIComponent(k)}${repo ? `&repo=${encodeURIComponent(repo)}` : ''}`),
 

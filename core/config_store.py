@@ -67,6 +67,21 @@ _DEFAULTS = {
             "command": ["kimi", "-p", "{prompt}", "--output-format", "stream-json"],
         },
     ],
+    "local_agentic_targets": [
+        {
+            "id": "codex",
+            "label": "Codex",
+            "enabled": True,
+            "command": [
+                "codex",
+                "exec",
+                "--skip-git-repo-check",
+                "--output-last-message",
+                "{output_path}",
+                "-",
+            ],
+        },
+    ],
 }
 
 DEFAULT_MODEL = "anthropic/claude-sonnet-4.5"
@@ -92,11 +107,14 @@ def _merge(data: dict) -> dict:
     merged = copy.deepcopy(_DEFAULTS)
     raw_policies = data.get("compliance_policies")
     raw_agents = data.get("local_review_agents")
+    raw_targets = data.get("local_agentic_targets")
     for key in _DEFAULTS:
         if key == "compliance_policies":
             merged[key] = compliance.normalize_policies(raw_policies)
         elif key == "local_review_agents":
             merged[key] = _normalize_local_review_agents(raw_agents)
+        elif key == "local_agentic_targets":
+            merged[key] = _normalize_local_agentic_targets(raw_targets)
         else:
             merged[key] = data.get(key, merged[key])
     merged["repos"] = [r for r in (merged.get("repos") or []) if isinstance(r, str)]
@@ -163,6 +181,7 @@ def save_config(update: dict):
         current["repos"] = [r for r in (current.get("repos") or []) if isinstance(r, str)]
         current["compliance_policies"] = compliance.normalize_policies(current.get("compliance_policies"))
         current["local_review_agents"] = _normalize_local_review_agents(current.get("local_review_agents"))
+        current["local_agentic_targets"] = _normalize_local_agentic_targets(current.get("local_agentic_targets"))
         _pg_write(current)
         return current
     with _LOCK:
@@ -171,6 +190,7 @@ def save_config(update: dict):
         current["repos"] = [r for r in (current.get("repos") or []) if isinstance(r, str)]
         current["compliance_policies"] = compliance.normalize_policies(current.get("compliance_policies"))
         current["local_review_agents"] = _normalize_local_review_agents(current.get("local_review_agents"))
+        current["local_agentic_targets"] = _normalize_local_agentic_targets(current.get("local_agentic_targets"))
         _write(current)
         return current
 
@@ -203,6 +223,33 @@ def _normalize_local_review_agents(raw) -> list:
         if default["id"] not in seen:
             agents.append(copy.deepcopy(default))
     return agents
+
+
+def _normalize_local_agentic_targets(raw) -> list:
+    targets = []
+    defaults_by_id = {item["id"]: copy.deepcopy(item) for item in _DEFAULTS["local_agentic_targets"]}
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            target_id = str(item.get("id") or "").strip().lower()
+            if not target_id:
+                continue
+            base = defaults_by_id.get(target_id, {"id": target_id, "label": target_id, "enabled": True, "command": []})
+            command = item.get("command")
+            if isinstance(command, list):
+                base["command"] = [str(v).strip() for v in command if str(v).strip()]
+            label = item.get("label")
+            if isinstance(label, str) and label.strip():
+                base["label"] = label.strip()
+            if isinstance(item.get("enabled"), bool):
+                base["enabled"] = item["enabled"]
+            targets.append(base)
+    seen = {item["id"] for item in targets}
+    for default in _DEFAULTS["local_agentic_targets"]:
+        if default["id"] not in seen:
+            targets.append(copy.deepcopy(default))
+    return targets
 
 
 def get_github_tokens() -> list:
@@ -256,6 +303,10 @@ def get_webhook_secret() -> str:
 
 def get_repos() -> list:
     return load_config().get("repos", [])
+
+
+def get_local_agentic_targets() -> list:
+    return load_config().get("local_agentic_targets", [])
 
 
 def get_llm_execution_mode() -> str:

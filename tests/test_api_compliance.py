@@ -181,3 +181,64 @@ def test_reanalyze_compliance(configured_repo):
     data = resp.json()
     assert data["id"] == 2
     assert data["health"]["score"] == 95
+
+
+def test_create_compliance_issue(configured_repo):
+    test_client, main, monkeypatch = configured_repo
+    monkeypatch.setattr(
+        main.compliance_analysis_store, "get_analysis",
+        lambda analysis_id: {
+            "id": analysis_id,
+            "repo": "acme/app",
+            "health": {"score": 85, "findings": [{"severity": "high", "title": "Missing encryption", "recommendation": "Add TLS"}]},
+            "coverage": {"coverage_score": 70, "blind_spots": [{"severity": "medium", "category": "audit_trail", "suggestion": "Add audit logging"}]},
+            "suggestions": [{"severity": "low", "reason": "Add vendor to approved list"}],
+            "created_at": "2024-01-01T00:00:00Z",
+        },
+    )
+    seen = {}
+
+    def fake_create_issue(repo, title, body, token):
+        seen["repo"] = repo
+        seen["title"] = title
+        seen["body"] = body
+        return "https://github.com/acme/app/issues/12"
+
+    monkeypatch.setattr(main, "create_issue", fake_create_issue)
+
+    resp = test_client.post("/api/compliance/analyses/12/issue", json={})
+    assert resp.status_code == 200
+    assert resp.json()["html_url"].endswith("/issues/12")
+    assert seen["repo"] == "acme/app"
+    assert "Compliance follow-up for acme/app" in seen["title"]
+    assert "Policy Health Findings" in seen["body"]
+
+
+def test_create_compliance_issue_enqueues_local_followup(configured_repo):
+    test_client, main, monkeypatch = configured_repo
+    test_client.put("/api/settings", json={
+        "llm_execution_mode": "local_queue",
+        "local_agentic_targets": [{"id": "codex", "label": "Codex", "enabled": True, "command": ["codex", "exec", "-"]}],
+    })
+    monkeypatch.setattr(
+        main.compliance_analysis_store, "get_analysis",
+        lambda analysis_id: {
+            "id": analysis_id,
+            "repo": "acme/app",
+            "health": {"score": 85},
+            "coverage": {"coverage_score": 70},
+            "suggestions": [],
+            "created_at": "2024-01-01T00:00:00Z",
+        },
+    )
+    monkeypatch.setattr(main, "create_issue", lambda repo, title, body, token: "https://github.com/acme/app/issues/12")
+    monkeypatch.setattr(
+        main.review_jobs, "create_job",
+        lambda request, job_type="review", executor="inline": {"id": "job-1", "status": "queued", "job_type": job_type, "request": request, "executor": executor},
+    )
+
+    resp = test_client.post("/api/compliance/analyses/12/issue", json={"agentic_target": "codex"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["job_id"] == "job-1"
+    assert body["job_status"] == "queued"

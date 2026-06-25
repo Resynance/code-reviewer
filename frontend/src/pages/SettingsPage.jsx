@@ -19,6 +19,7 @@ export default function SettingsPage() {
   const [llmApiKey, setLlmApiKey] = useState('')
   const [llmTimeoutSeconds, setLlmTimeoutSeconds] = useState('')
   const [localReviewAgentsInput, setLocalReviewAgentsInput] = useState('')
+  const [localAgenticTargetsInput, setLocalAgenticTargetsInput] = useState('')
   const [savingLlm, setSavingLlm] = useState(false)
   const [llmMsg, setLlmMsg] = useState(null)
   const [testingLlm, setTestingLlm] = useState(false)
@@ -69,6 +70,7 @@ export default function SettingsPage() {
       setLlmBaseUrl(s.llm_base_url || '')
       setLlmTimeoutSeconds(s.llm_timeout_seconds || '')
       setLocalReviewAgentsInput(JSON.stringify(s.local_review_agents || [], null, 2))
+      setLocalAgenticTargetsInput(JSON.stringify(s.local_agentic_targets || [], null, 2))
       setCompliancePoliciesInput(JSON.stringify(s.compliance_policies || { default: {}, repos: {} }, null, 2))
     }).catch(() => {})
     api.listAccess().then(r => setAccessEmails(r.emails || [])).catch(() => {})
@@ -170,10 +172,18 @@ export default function SettingsPage() {
     setLlmMsg(null)
     try {
       let parsedAgents
+      let parsedTargets
       try {
         parsedAgents = JSON.parse(localReviewAgentsInput || '[]')
       } catch {
         setLlmMsg('Local review agents must be valid JSON')
+        setSavingLlm(false)
+        return
+      }
+      try {
+        parsedTargets = JSON.parse(localAgenticTargetsInput || '[]')
+      } catch {
+        setLlmMsg('Local agentic targets must be valid JSON')
         setSavingLlm(false)
         return
       }
@@ -184,12 +194,14 @@ export default function SettingsPage() {
         llm_api_key: llmApiKey,
         llm_timeout_seconds: llmTimeoutSeconds,
         local_review_agents: parsedAgents,
+        local_agentic_targets: parsedTargets,
       })
       setSettings(s)
       setLlmExecutionMode(s.llm_execution_mode || 'inline')
       setLlmBaseUrl(s.llm_base_url || '')
       setLlmTimeoutSeconds(s.llm_timeout_seconds || '')
       setLocalReviewAgentsInput(JSON.stringify(s.local_review_agents || [], null, 2))
+      setLocalAgenticTargetsInput(JSON.stringify(s.local_agentic_targets || [], null, 2))
       setWorkerSecret('')
       setLlmApiKey('')
       setLlmMsg('Saved ✓')
@@ -457,6 +469,21 @@ export default function SettingsPage() {
             Each entry should include <code>id</code>, <code>label</code>, <code>enabled</code>, and a <code>command</code> array.
             Supported placeholders in commands: <code>{'{schema_path}'}</code>, <code>{'{output_path}'}</code>, and <code>{'{prompt}'}</code>.
             The default Codex entry works with <code>codex exec</code>; adjust the Kimi command to match the CLI installed on your machine.
+          </div>
+        </div>
+
+        <div style={{ marginTop: 14 }}>
+          <label style={labelStyle}>Local agentic targets JSON</label>
+          <textarea
+            value={localAgenticTargetsInput}
+            onChange={e => setLocalAgenticTargetsInput(e.target.value)}
+            rows={8}
+            style={{ ...inputStyle, fontFamily: 'var(--font-mono)', fontSize: 12, resize: 'vertical' }}
+          />
+          <div style={{ color: 'var(--text-3)', fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
+            These targets are used for compliance follow-up jobs that may build changes and open PRs after an issue is created.
+            Supported placeholders in commands: <code>{'{output_path}'}</code>, <code>{'{prompt_path}'}</code>, and <code>{'{prompt}'}</code>.
+            The default Codex entry works with <code>codex exec --output-last-message</code>.
           </div>
         </div>
 

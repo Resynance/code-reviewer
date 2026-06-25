@@ -179,3 +179,40 @@ def test_run_command_agent_reports_timeout_without_prompt_dump(monkeypatch):
             {"id": "kimi", "label": "Kimi", "enabled": True, "command": ["kimi", "-p", "{prompt}", "--output-format", "stream-json"]},
             "very long prompt",
         )
+
+
+def test_compliance_followup_runner_returns_structured_result(monkeypatch):
+    runner = local_worker.ComplianceFollowupRunner()
+    monkeypatch.setattr(local_worker.config_store, "get_local_agentic_targets", lambda: [
+        {"id": "codex", "label": "Codex", "enabled": True, "command": ["codex"]},
+    ])
+    monkeypatch.setattr(runner, "_run_target", lambda target, prompt: '{"status":"completed","summary":"Opened PR","pr_url":"https://github.com/org/a/pull/9"}')
+
+    result = runner.run({
+        "repo": "org/a",
+        "issue_url": "https://github.com/org/a/issues/7",
+        "target_id": "codex",
+        "analysis": {"health": {"score": 90}},
+    })
+
+    assert result["status"] == "completed"
+    assert result["pr_url"].endswith("/pull/9")
+    assert result["target"] == "Codex"
+
+
+def test_compliance_followup_runner_falls_back_to_manual_summary(monkeypatch):
+    runner = local_worker.ComplianceFollowupRunner()
+    monkeypatch.setattr(local_worker.config_store, "get_local_agentic_targets", lambda: [
+        {"id": "codex", "label": "Codex", "enabled": True, "command": ["codex"]},
+    ])
+    monkeypatch.setattr(runner, "_run_target", lambda target, prompt: "Manual follow-up needed")
+
+    result = runner.run({
+        "repo": "org/a",
+        "issue_url": "https://github.com/org/a/issues/7",
+        "target_id": "codex",
+        "analysis": {"health": {"score": 90}},
+    })
+
+    assert result["status"] == "manual_followup"
+    assert result["summary"] == "Manual follow-up needed"
