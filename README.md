@@ -85,6 +85,9 @@ server-side to `config.json` (gitignored):
   no restart needed.
 - **LLM execution mode** — run inside this app (`inline`) or queue jobs for a
   local worker (`local_queue`) using a shared worker secret.
+- **Inline prompt safety** — prompts sent to non-local inline model endpoints
+  are redacted for common credentials, emails, JWTs, and PHI-like field values
+  before they leave the app.
 - **Local review agents** — when using `local_queue`, configure one or more
   local agent commands (for example Codex and Kimi) that agentic reviews
   can fan out to from the local worker.
@@ -113,7 +116,7 @@ a dropdown of configured repos.
 | `OPENROUTER_BASE_URL` | No | Base URL for inline review/assessment model calls. Default: `https://openrouter.ai/api/v1`. Can point to any OpenAI-compatible server, for example `http://192.168.0.197:8080/`. |
 | `OPENROUTER_MODEL` | No | Model slug from openrouter.ai/models (default: `anthropic/claude-sonnet-4.5`) |
 | `LLM_EXECUTION_MODE` | No | `inline` (default) or `local_queue` |
-| `LLM_WORKER_SECRET` | No | Shared secret for the local worker endpoints |
+| `LLM_WORKER_SECRET` | No | Shared secret for the local worker endpoints. Use at least 12 characters. |
 | `LOCAL_LLM_BASE_URL` | No | Base URL for an OpenAI-compatible local LLM server used by `local_worker.py` for queued local-LLM reviews/assessments. Examples: `http://localhost:8080/` or `http://localhost:11434/v1` |
 | `GITHUB_TOKEN` | Fallback | PAT with `repo` read scope (prefer setting it in the UI) |
 | `GITHUB_WEBHOOK_SECRET` | Fallback | Any random string (prefer setting it in the UI) |
@@ -154,6 +157,10 @@ from the environment or the Settings page. This can also point at a LAN-hosted
 OpenAI-compatible server such as `http://192.168.0.197:8080/`.
 The Settings page includes a `Test endpoint` button that probes the configured
 URL and suggests adding or removing `/v1` for common llama.cpp-style setups.
+When inline mode points at a non-local endpoint, ReviewBot redacts common
+credentials, emails, JWTs, and PHI-like literal values before sending prompts.
+For highly sensitive repos, prefer `local_queue` so prompts stay on trusted
+local infrastructure.
 
 The default local agent list includes:
 - `codex` using `codex exec`

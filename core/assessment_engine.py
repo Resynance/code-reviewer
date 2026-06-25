@@ -14,6 +14,7 @@ from typing import Optional
 
 import config_store
 import compliance
+import prompt_safety
 
 GITHUB_API_BASE = "https://api.github.com"
 
@@ -201,6 +202,17 @@ class AssessmentEngine:
         tree_lines, file_contents = self._fetch_repo_content(request.repo, token)
         prompt = self._build_prompt(request.repo, tree_lines, file_contents, request.compliance)
         client = self._make_client()
+        base_url = config_store.get_llm_base_url()
+        if config_store.should_redact_remote_prompts(base_url):
+            sanitized = prompt_safety.sanitize_for_external_llm(prompt)
+            if sanitized != prompt:
+                prompt = (
+                    "## Safety note\n"
+                    "Sensitive literals were redacted before this prompt was sent to an external model.\n\n"
+                    f"{sanitized}"
+                )
+            else:
+                prompt = sanitized
 
         model = request.model or self._model_override or config_store.get_model()
         provider = request.provider if request.provider is not None else config_store.get_provider()

@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -22,7 +23,7 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends, Q
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # Add parent dir so we can import the core modules
 sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
@@ -201,6 +202,29 @@ class ModelSlot(BaseModel):
     provider: str = ""
 
 
+class LocalCommandConfig(BaseModel):
+    id: str
+    label: str = ""
+    enabled: bool = True
+    command: list[str]
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        cleaned = (value or "").strip().lower()
+        if not cleaned:
+            raise ValueError("id is required")
+        return cleaned
+
+    @field_validator("command")
+    @classmethod
+    def validate_command(cls, value: list[str]) -> list[str]:
+        parts = [str(item).strip() for item in (value or []) if str(item).strip()]
+        if not parts:
+            raise ValueError("command must contain at least one argument")
+        return parts
+
+
 class SettingsBody(BaseModel):
     # All optional: only provided (non-null) fields are updated. Send "" to clear
     # a value (falls back to env/default); omit/null to leave it unchanged.
@@ -220,8 +244,49 @@ class SettingsBody(BaseModel):
     llm_api_key: Optional[str] = None
     llm_timeout_seconds: Optional[str] = None
     compliance_policies: Optional[dict] = None
-    local_review_agents: Optional[list[dict]] = None
-    local_agentic_targets: Optional[list[dict]] = None
+    local_review_agents: Optional[list[LocalCommandConfig]] = None
+    local_agentic_targets: Optional[list[LocalCommandConfig]] = None
+
+    @field_validator("webhook_secret", "llm_worker_secret")
+    @classmethod
+    def validate_secret_strength(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        if cleaned and len(cleaned) < 12:
+            raise ValueError("secret must be at least 12 characters")
+        return cleaned
+
+    @field_validator("llm_base_url")
+    @classmethod
+    def validate_llm_base_url(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            return ""
+        parsed = urlparse(cleaned)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("llm_base_url must be a valid http(s) URL")
+        if parsed.username or parsed.password:
+            raise ValueError("llm_base_url must not contain embedded credentials")
+        return cleaned
+
+    @field_validator("llm_timeout_seconds")
+    @classmethod
+    def validate_timeout(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            return ""
+        try:
+            seconds = int(cleaned)
+        except ValueError as exc:
+            raise ValueError("llm_timeout_seconds must be a positive integer") from exc
+        if seconds <= 0:
+            raise ValueError("llm_timeout_seconds must be a positive integer")
+        return str(seconds)
 
 
 class LlmTestBody(BaseModel):
@@ -1089,19 +1154,19 @@ def update_settings(body: SettingsBody):
             raise HTTPException(status_code=400, detail="llm_execution_mode must be inline or local_queue")
         update["llm_execution_mode"] = mode
     if body.llm_worker_secret is not None:
-        update["llm_worker_secret"] = body.llm_worker_secret.strip()
+        update["llm_worker_secret"] = body.llm_worker_secret
     if body.llm_base_url is not None:
-        update["llm_base_url"] = body.llm_base_url.strip()
+        update["llm_base_url"] = body.llm_base_url
     if body.llm_api_key is not None:
         update["llm_api_key"] = body.llm_api_key.strip()
     if body.llm_timeout_seconds is not None:
-        update["llm_timeout_seconds"] = body.llm_timeout_seconds.strip()
+        update["llm_timeout_seconds"] = body.llm_timeout_seconds
     if body.compliance_policies is not None:
         update["compliance_policies"] = body.compliance_policies
     if body.local_review_agents is not None:
-        update["local_review_agents"] = body.local_review_agents
+        update["local_review_agents"] = [item.model_dump() for item in body.local_review_agents]
     if body.local_agentic_targets is not None:
-        update["local_agentic_targets"] = body.local_agentic_targets
+        update["local_agentic_targets"] = [item.model_dump() for item in body.local_agentic_targets]
     if update:
         config_store.save_config(update)
     return get_settings()

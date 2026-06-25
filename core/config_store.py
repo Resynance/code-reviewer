@@ -16,8 +16,10 @@ import os
 import json
 import threading
 import copy
+import ipaddress
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 import compliance
 
@@ -89,6 +91,7 @@ DEFAULT_EMBEDDING_MODEL = "openai/text-embedding-3-small"
 DEFAULT_LLM_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_LLM_TIMEOUT_SECONDS = 240
 DEFAULT_LOCAL_LLM_TIMEOUT_SECONDS = 600
+MAX_REMOTE_LLM_TIMEOUT_SECONDS = 295
 _LEGACY_LOCAL_AGENT_COMMANDS = {
     "kimi": [
         ["kimi"],
@@ -333,6 +336,8 @@ def get_llm_timeout_seconds(base_url: Optional[str] = None) -> int:
         try:
             value = int(str(raw).strip())
             if value > 0:
+                if should_redact_remote_prompts(base_url):
+                    return min(value, MAX_REMOTE_LLM_TIMEOUT_SECONDS)
                 return value
         except ValueError:
             pass
@@ -344,6 +349,24 @@ def get_llm_timeout_seconds(base_url: Optional[str] = None) -> int:
 def is_openrouter_target(base_url: Optional[str] = None) -> bool:
     base = (base_url or get_llm_base_url()).strip().lower()
     return "openrouter.ai" in base
+
+
+def is_local_llm_target(base_url: Optional[str] = None) -> bool:
+    parsed = urlparse((base_url or get_llm_base_url()).strip())
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        return False
+    if host in {"localhost", "::1", "host.docker.internal"} or host.endswith(".local"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+        return ip.is_loopback or ip.is_private
+    except ValueError:
+        return False
+
+
+def should_redact_remote_prompts(base_url: Optional[str] = None) -> bool:
+    return not is_local_llm_target(base_url)
 
 
 def get_models() -> list:

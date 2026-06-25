@@ -178,6 +178,20 @@ def test_review_maps_structured_result(store, cfg, monkeypatch):
     assert result.suggestions[0]["type"] == "security"
 
 
+def test_review_redacts_sensitive_literals_for_remote_models(store, cfg, monkeypatch):
+    eng = make_engine(store, review_payload(), monkeypatch)
+    req = make_req(
+        diff='+ patient_id = "12345"\n+ email = "alice@example.com"\n+ auth = "Bearer eyJabc.def.ghi"\n+ token = "ghp_abcdefghijklmnopqrstuvwxyz123456"\n'
+    )
+    eng.review(req)
+    prompt = eng._test_client.captured["messages"][1]["content"]
+    assert "alice@example.com" not in prompt
+    assert "ghp_abcdefghijklmnopqrstuvwxyz123456" not in prompt
+    assert "<REDACTED:SENSITIVE_VALUE>" in prompt
+    assert "<REDACTED:GITHUB_TOKEN>" in prompt
+    assert "<REDACTED:JWT>" in prompt or "<REDACTED:BEARER_TOKEN>" in prompt
+
+
 @pytest.mark.parametrize("raw,expected", [(1.5, 1.0), (-0.2, 0.0), (0.42, 0.42)])
 def test_confidence_clamped(store, cfg, monkeypatch, raw, expected):
     eng = make_engine(store, review_payload(confidence=raw), monkeypatch)

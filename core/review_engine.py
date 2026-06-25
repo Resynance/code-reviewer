@@ -17,6 +17,7 @@ from typing import Optional
 
 import config_store
 import compliance
+import prompt_safety
 
 
 # How many past decisions to pull in as context for each review.
@@ -283,6 +284,17 @@ class CodeReviewEngine:
         decisions = self._retrieve_context(request)
         prompt = self._build_prompt(request, decisions)
         client = self._make_client()
+        base_url = config_store.get_llm_base_url()
+        if config_store.should_redact_remote_prompts(base_url):
+            sanitized = prompt_safety.sanitize_for_external_llm(prompt)
+            if sanitized != prompt:
+                prompt = (
+                    "## Safety note\n"
+                    "Sensitive literals were redacted before this prompt was sent to an external model.\n\n"
+                    f"{sanitized}"
+                )
+            else:
+                prompt = sanitized
 
         model = request.model or self._model_override or config_store.get_model()
         kwargs = dict(

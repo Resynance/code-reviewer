@@ -172,9 +172,21 @@ def test_llm_timeout_config_overrides_default(cfg):
     assert cfg.get_llm_timeout_seconds("http://192.168.0.197:8080/v1") == 900
 
 
+def test_llm_timeout_remote_target_is_capped(cfg):
+    cfg.save_config({"llm_timeout_seconds": "900"})
+    assert cfg.get_llm_timeout_seconds("https://openrouter.ai/api/v1") == cfg.MAX_REMOTE_LLM_TIMEOUT_SECONDS
+
+
 def test_openrouter_target_detection(cfg):
     assert cfg.is_openrouter_target("https://openrouter.ai/api/v1") is True
     assert cfg.is_openrouter_target("http://192.168.0.197:8080/") is False
+
+
+def test_local_target_detection_and_redaction_policy(cfg):
+    assert cfg.is_local_llm_target("http://localhost:11434/v1") is True
+    assert cfg.is_local_llm_target("http://192.168.0.197:8080/") is True
+    assert cfg.should_redact_remote_prompts("http://localhost:11434/v1") is False
+    assert cfg.should_redact_remote_prompts("https://openrouter.ai/api/v1") is True
 
 
 def test_local_review_agents_normalized(cfg):
