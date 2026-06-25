@@ -121,6 +121,45 @@ export const api = {
     return request(`/api/queue?${q.toString()}`)
   },
 
+  complianceDashboard: (repo, limit = 50) => {
+    const q = new URLSearchParams()
+    q.set('repo', repo)
+    q.set('limit', String(limit))
+    return request(`/api/compliance/dashboard?${q.toString()}`)
+  },
+
+  complianceHealth: (repo) =>
+    request(`/api/compliance/health?repo=${encodeURIComponent(repo)}`),
+
+  complianceCoverage: (repo, limit = 50) => {
+    const q = new URLSearchParams()
+    q.set('repo', repo)
+    q.set('limit', String(limit))
+    return request(`/api/compliance/coverage?${q.toString()}`)
+  },
+
+  complianceSuggestions: (repo) =>
+    request(`/api/compliance/suggestions?repo=${encodeURIComponent(repo)}`),
+
+  applyComplianceSuggestion: (repo, suggestion) =>
+    request('/api/compliance/suggestions/apply', { method: 'POST', body: { repo, suggestion } }),
+
+  analyzeCompliance: (repo, limit = 50) =>
+    request('/api/compliance/analyze', { method: 'POST', body: { repo, limit } }),
+
+  listComplianceAnalyses: ({ repo = '', limit = 20 } = {}) => {
+    const q = new URLSearchParams()
+    if (repo) q.set('repo', repo)
+    q.set('limit', String(limit))
+    return request(`/api/compliance/analyses?${q.toString()}`)
+  },
+
+  getComplianceAnalysis: (id) =>
+    request(`/api/compliance/analyses/${encodeURIComponent(id)}`),
+
+  reanalyzeCompliance: (id) =>
+    request(`/api/compliance/analyses/${encodeURIComponent(id)}/reanalyze`, { method: 'POST' }),
+
   listAccess: () => request('/api/access'),
 
   addAccess: (email) => request('/api/access', { method: 'POST', body: { email } }),

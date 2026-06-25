@@ -5,6 +5,7 @@ import ReviewsPage from './pages/ReviewsPage.jsx'
 import DecisionsPage from './pages/DecisionsPage.jsx'
 import SettingsPage from './pages/SettingsPage.jsx'
 import AssessmentPage from './pages/AssessmentPage.jsx'
+import CompliancePage from './pages/CompliancePage.jsx'
 import QueuePage from './pages/QueuePage.jsx'
 import LoginPage from './pages/LoginPage.jsx'
 import { authEnabled, supabase } from './lib/auth.js'
@@ -35,8 +36,8 @@ export default function App() {
     return <LoginPage />
   }
 
-  const pages = { review: ReviewPage, assess: AssessmentPage, queue: QueuePage, history: ReviewsPage, decisions: DecisionsPage, settings: SettingsPage }
-  const labels = { review: 'Review', assess: 'Assess', queue: 'Queue', history: 'History', decisions: 'Decisions', settings: 'Settings' }
+  const pages = { review: ReviewPage, assess: AssessmentPage, compliance: CompliancePage, queue: QueuePage, history: ReviewsPage, decisions: DecisionsPage, settings: SettingsPage }
+  const labels = { review: 'Review', assess: 'Assess', compliance: 'Compliance', queue: 'Queue', history: 'History', decisions: 'Decisions', settings: 'Settings' }
   const Page = pages[page] || ReviewPage
 
   return (

@@ -34,10 +34,12 @@ import config_store
 import review_store
 import review_jobs
 import assessment_store
+import compliance_analysis_store
 import access_store
 from decision_store import create_store, ChromaDecisionStore
 from review_engine import CodeReviewEngine, ReviewRequest
 from assessment_engine import AssessmentEngine, AssessmentRequest
+import compliance_analysis
 from github_backfill import (
     backfill as run_backfill,
     list_open_prs,
@@ -260,6 +262,16 @@ class AssessmentRequestBody(BaseModel):
     model: Optional[str] = None
     provider: Optional[str] = None
     compliance: bool = False
+
+
+class ComplianceSuggestionApplyBody(BaseModel):
+    repo: str
+    suggestion: dict
+
+
+class ComplianceAnalyzeBody(BaseModel):
+    repo: str
+    limit: int = Field(default=50, ge=1, le=500)
 
 
 class WorkerClaimBody(BaseModel):
@@ -612,6 +624,119 @@ def list_assessments_history(repo: Optional[str] = None, limit: int = Query(defa
     """Return saved assessments, newest first."""
     items = assessment_store.list_assessments(repo=repo, limit=limit)
     return {"assessments": [_normalize_result_payload(item) for item in items], "count": len(items)}
+
+
+# ------------------------------------------------------------------ #
+# Compliance analysis
+# ------------------------------------------------------------------ #
+
+@app.get("/api/compliance/dashboard")
+def compliance_dashboard(repo: str, limit: int = Query(default=50, ge=1, le=500)):
+    """Return a unified compliance dashboard: policy health, coverage, and suggestions."""
+    _token_for(repo)
+    try:
+        return compliance_analysis.get_dashboard(repo, history_limit=limit)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/api/compliance/health")
+def compliance_health(repo: str):
+    """Audit the configured HIPAA/HL7 policy against the repo's actual code/dependencies."""
+    _token_for(repo)
+    try:
+        return compliance_analysis.get_health(repo)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/api/compliance/coverage")
+def compliance_coverage_endpoint(repo: str, limit: int = Query(default=50, ge=1, le=500)):
+    """Compare deterministic vs LLM compliance findings over time."""
+    try:
+        return compliance_analysis.get_coverage(repo, limit=limit)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/api/compliance/suggestions")
+def compliance_suggestions(repo: str):
+    """Return policy-update suggestions based on dependency/signal drift."""
+    _token_for(repo)
+    try:
+        return {"suggestions": compliance_analysis.get_suggestions(repo)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.post("/api/compliance/suggestions/apply")
+def apply_compliance_suggestion(body: ComplianceSuggestionApplyBody):
+    """Apply a single policy-update suggestion to the repo's compliance policy."""
+    if "/" not in body.repo:
+        raise HTTPException(status_code=400, detail="repo must be in 'owner/repo' form")
+    try:
+        updated = compliance_analysis.apply_suggestion(body.repo, body.suggestion)
+        return {"compliance_policies": updated}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.post("/api/compliance/analyze")
+def analyze_compliance(body: ComplianceAnalyzeBody):
+    """Run compliance analysis for a repo and persist the result."""
+    _token_for(body.repo)
+    try:
+        dashboard = compliance_analysis.get_dashboard(body.repo, history_limit=body.limit)
+        record = compliance_analysis_store.save_analysis(dashboard)
+        return record
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/api/compliance/analyses")
+def list_compliance_analyses(repo: Optional[str] = None, limit: int = Query(default=20, ge=1, le=100)):
+    """Return persisted compliance analyses, newest first."""
+    items = compliance_analysis_store.list_analyses(repo=repo, limit=limit)
+    return {"analyses": items, "count": len(items)}
+
+
+@app.get("/api/compliance/analyses/{analysis_id}")
+def get_compliance_analysis(analysis_id: int):
+    """Return one persisted compliance analysis by id."""
+    item = compliance_analysis_store.get_analysis(analysis_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Compliance analysis not found")
+    return item
+
+
+@app.post("/api/compliance/analyses/{analysis_id}/reanalyze")
+def reanalyze_compliance(analysis_id: int):
+    """Re-run compliance analysis for the repo of a saved analysis and persist the new result."""
+    original = compliance_analysis_store.get_analysis(analysis_id)
+    if not original:
+        raise HTTPException(status_code=404, detail="Compliance analysis not found")
+    repo = original.get("repo")
+    if not repo:
+        raise HTTPException(status_code=400, detail="Saved analysis has no repo")
+    _token_for(repo)
+    try:
+        dashboard = compliance_analysis.get_dashboard(repo)
+        record = compliance_analysis_store.save_analysis(dashboard)
+        return record
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @app.get("/api/queue")
