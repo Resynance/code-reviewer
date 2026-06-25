@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 
 _FILE_PATH = Path(__file__).parent.parent / "reviews.json"
 _LOCK = threading.Lock()
+_PG_SCHEMA_LOCK = threading.Lock()
+_PG_SCHEMA_READY = False
 
 # Fields accepted on a review record (besides id/created_at, which are assigned).
 _FIELDS = (
@@ -103,9 +105,78 @@ _PG_COLS = [
 ]
 
 
+def _pg_ensure_schema():
+    """Create/upgrade the reviews table in-place for older deployments."""
+    global _PG_SCHEMA_READY
+    if _PG_SCHEMA_READY:
+        return
+    import db
+
+    with _PG_SCHEMA_LOCK:
+        if _PG_SCHEMA_READY:
+            return
+        with db.connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS public.reviews ("
+                "  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,"
+                "  repo text NOT NULL,"
+                "  pr_number integer NOT NULL,"
+                "  title text,"
+                "  author text,"
+                "  approved boolean,"
+                "  confidence double precision,"
+                "  summary text,"
+                "  issues jsonb NOT NULL DEFAULT '[]'::jsonb,"
+                "  suggestions jsonb NOT NULL DEFAULT '[]'::jsonb,"
+                "  past_decisions jsonb NOT NULL DEFAULT '[]'::jsonb,"
+                "  compliance_review jsonb NOT NULL DEFAULT '{}'::jsonb,"
+                "  source text,"
+                "  model text,"
+                "  created_at timestamptz NOT NULL DEFAULT now()"
+                ")"
+            )
+            cur.execute(
+                "DO $$ "
+                "BEGIN "
+                "  IF EXISTS ("
+                "    SELECT 1 FROM information_schema.columns "
+                "    WHERE table_schema = 'public' "
+                "      AND table_name = 'reviews' "
+                "      AND column_name = 'hipaa_review'"
+                "  ) AND NOT EXISTS ("
+                "    SELECT 1 FROM information_schema.columns "
+                "    WHERE table_schema = 'public' "
+                "      AND table_name = 'reviews' "
+                "      AND column_name = 'compliance_review'"
+                "  ) THEN "
+                "    ALTER TABLE public.reviews RENAME COLUMN hipaa_review TO compliance_review; "
+                "  END IF; "
+                "END $$;"
+            )
+            cur.execute(
+                "ALTER TABLE public.reviews "
+                "ADD COLUMN IF NOT EXISTS issues jsonb NOT NULL DEFAULT '[]'::jsonb, "
+                "ADD COLUMN IF NOT EXISTS suggestions jsonb NOT NULL DEFAULT '[]'::jsonb, "
+                "ADD COLUMN IF NOT EXISTS past_decisions jsonb NOT NULL DEFAULT '[]'::jsonb, "
+                "ADD COLUMN IF NOT EXISTS compliance_review jsonb NOT NULL DEFAULT '{}'::jsonb, "
+                "ADD COLUMN IF NOT EXISTS source text, "
+                "ADD COLUMN IF NOT EXISTS model text"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS reviews_repo_pr_idx "
+                "ON public.reviews (repo, pr_number, created_at DESC)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS reviews_created_idx "
+                "ON public.reviews (created_at DESC)"
+            )
+        _PG_SCHEMA_READY = True
+
+
 def _pg_save(rec):
     import db
 
+    _pg_ensure_schema()
     with db.connect() as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO reviews "
@@ -130,6 +201,7 @@ def _pg_save(rec):
 def _pg_list(repo, pr_number, limit):
     import db
 
+    _pg_ensure_schema()
     where, params = [], []
     if repo:
         where.append("repo = %s")

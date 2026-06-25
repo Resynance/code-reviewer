@@ -1,5 +1,9 @@
 """Tests for core/review_store.py — file backend + postgres dispatch."""
 
+from datetime import datetime, timezone
+import sys
+import types
+
 import pytest
 
 import review_store
@@ -8,6 +12,7 @@ import review_store
 @pytest.fixture
 def rs(tmp_path, monkeypatch):
     monkeypatch.setattr(review_store, "_FILE_PATH", tmp_path / "reviews.json")
+    monkeypatch.setattr(review_store, "_PG_SCHEMA_READY", False)
     monkeypatch.delenv("REVIEW_STORE_BACKEND", raising=False)
     monkeypatch.delenv("CONFIG_STORE_BACKEND", raising=False)
     return review_store
@@ -62,3 +67,50 @@ def test_postgres_backend_dispatch(rs, monkeypatch):
     monkeypatch.setattr(review_store, "_pg_list", lambda repo, pr, limit: [{"id": 1, "repo": repo}])
     assert rs.save_review(_rec())["id"] == 1
     assert rs.list_reviews(repo="org/a")[0]["repo"] == "org/a"
+
+
+def test_postgres_backend_auto_ensures_schema(rs, monkeypatch):
+    monkeypatch.setenv("REVIEW_STORE_BACKEND", "postgres")
+
+    now = datetime.now(timezone.utc)
+    calls = []
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql, params=None):
+            calls.append((sql, params))
+
+        def fetchone(self):
+            return (321, now)
+
+    class FakeConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    class FakeDb:
+        @staticmethod
+        def connect():
+            return FakeConn()
+
+    monkeypatch.setitem(sys.modules, "db", FakeDb)
+    monkeypatch.setitem(sys.modules, "psycopg", types.ModuleType("psycopg"))
+
+    saved = rs.save_review(_rec())
+
+    assert saved["id"] == 321
+    assert "create table if not exists public.reviews" in calls[0][0].lower()
+    assert "rename column hipaa_review to compliance_review" in calls[1][0].lower()
+    assert "alter table public.reviews" in calls[2][0].lower()
+    assert "create index if not exists reviews_repo_pr_idx" in calls[3][0].lower()
+    assert "insert into reviews" in calls[5][0].lower()
