@@ -48,6 +48,13 @@ def _jwks_url():
     return None
 
 
+def _expected_issuer():
+    base = os.getenv("SUPABASE_URL", "").strip()
+    if not base:
+        return None
+    return base.rstrip("/") + "/auth/v1"
+
+
 @functools.lru_cache(maxsize=4)
 def _jwk_client(url: str):
     import jwt
@@ -112,17 +119,23 @@ def _decode(token: str) -> dict:
     import jwt
 
     alg = jwt.get_unverified_header(token).get("alg", "")
+    if alg in {"", "none", "None"}:
+        raise RuntimeError("JWT is missing a supported signing algorithm")
+    kwargs = {"audience": "authenticated"}
+    issuer = _expected_issuer()
+    if issuer:
+        kwargs["issuer"] = issuer
     if alg.startswith(("ES", "RS", "PS", "Ed")):  # asymmetric → verify via JWKS
         url = _jwks_url()
         if not url:
             raise RuntimeError("SUPABASE_URL or SUPABASE_JWKS_URL is required for asymmetric tokens")
         signing_key = _jwk_client(url).get_signing_key_from_jwt(token).key
-        return jwt.decode(token, signing_key, algorithms=[alg], audience="authenticated")
+        return jwt.decode(token, signing_key, algorithms=[alg], **kwargs)
 
     secret = os.getenv("SUPABASE_JWT_SECRET")  # legacy HS256
     if not secret:
         raise RuntimeError("SUPABASE_JWT_SECRET is required for HS256 tokens")
-    return jwt.decode(token, secret, algorithms=["HS256"], audience="authenticated")
+    return jwt.decode(token, secret, algorithms=["HS256"], **kwargs)
 
 
 def _get_admin_email() -> "str | None":

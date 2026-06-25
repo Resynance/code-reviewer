@@ -13,6 +13,8 @@ from assessment_engine import AssessmentResult
 
 
 AUTH_SECRET = "test-secret"
+WORKER_SECRET = "worker-secret-123"
+WEBHOOK_SECRET = "webhook-secret-123"
 
 
 def _auth_headers(email: str) -> dict:
@@ -64,8 +66,8 @@ def test_settings_put_model_list(client):
 def test_settings_put_updates_and_hides_secrets(client):
     tc, _ = client
     resp = tc.put("/api/settings", json={
-        "github_token": "ghp_secret", "webhook_secret": "whs",
-        "llm_worker_secret": "worker-secret", "llm_execution_mode": "local_queue",
+        "github_token": "ghp_secret", "webhook_secret": WEBHOOK_SECRET,
+        "llm_worker_secret": WORKER_SECRET, "llm_execution_mode": "local_queue",
         "llm_base_url": "http://192.168.0.197:8080/",
         "llm_api_key": "local-llm",
         "llm_timeout_seconds": "900",
@@ -83,12 +85,12 @@ def test_settings_put_updates_and_hides_secrets(client):
     assert body["openrouter_provider"] == "Azure"
     # secrets must never be echoed back, in any field
     raw = tc.get("/api/settings").text
-    assert "ghp_secret" not in raw and "whs" not in raw and "worker-secret" not in raw and "local-llm" not in raw
+    assert "ghp_secret" not in raw and WEBHOOK_SECRET not in raw and WORKER_SECRET not in raw and "local-llm" not in raw
 
 
 def test_settings_put_partial_keeps_other_fields(client):
     tc, _ = client
-    tc.put("/api/settings", json={"github_token": "t", "webhook_secret": "s"})
+    tc.put("/api/settings", json={"github_token": "t", "webhook_secret": WEBHOOK_SECRET})
     tc.put("/api/settings", json={"openrouter_model": "m/x"})
     body = tc.get("/api/settings").json()
     assert body["github_token_set"] is True
@@ -99,6 +101,14 @@ def test_settings_put_partial_keeps_other_fields(client):
 def test_settings_put_rejects_bad_llm_mode(client):
     tc, _ = client
     assert tc.put("/api/settings", json={"llm_execution_mode": "sidecar"}).status_code == 400
+
+
+def test_settings_put_rejects_weak_or_invalid_security_config(client):
+    tc, _ = client
+    assert tc.put("/api/settings", json={"llm_worker_secret": "short"}).status_code == 422
+    assert tc.put("/api/settings", json={"webhook_secret": "tiny"}).status_code == 422
+    assert tc.put("/api/settings", json={"llm_base_url": "ftp://example.com"}).status_code == 422
+    assert tc.put("/api/settings", json={"local_review_agents": [{"id": "codex", "label": "Codex", "enabled": True, "command": []}]}).status_code == 422
 
 
 def test_settings_put_requires_admin_when_auth_enabled(client, monkeypatch):
@@ -408,7 +418,7 @@ def test_review_enqueues_and_runs(client, monkeypatch):
 
 def test_review_local_queue_skips_inline_run_and_can_complete_via_worker(client, monkeypatch):
     tc, main = client
-    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": WORKER_SECRET})
 
     class ExplodingEngine:
         def review(self, req):
@@ -420,7 +430,7 @@ def test_review_local_queue_skips_inline_run_and_can_complete_via_worker(client,
     run = tc.post(f"/api/review/{job['id']}/run").json()
     assert run["status"] == "queued"
 
-    claimed = tc.post("/worker/llm/claim", headers={"X-Worker-Secret": "secret"}, json={"worker_id": "mac-mini"}).json()
+    claimed = tc.post("/worker/llm/claim", headers={"X-Worker-Secret": WORKER_SECRET}, json={"worker_id": "mac-mini"}).json()
     assert claimed["id"] == job["id"]
     assert claimed["status"] == "running"
     assert claimed["executor"] == "local_queue"
@@ -429,7 +439,7 @@ def test_review_local_queue_skips_inline_run_and_can_complete_via_worker(client,
 
     done = tc.post(
         f"/worker/llm/{job['id']}/complete",
-        headers={"X-Worker-Secret": "secret"},
+        headers={"X-Worker-Secret": WORKER_SECRET},
         json={"result": {
             "pr_number": 7,
             "summary": "queued ok",
@@ -495,7 +505,7 @@ def test_agentic_review_local_queue_requires_worker_secret(client):
 
 def test_review_local_queue_preserves_agentic_request_fields(client):
     tc, _ = client
-    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": WORKER_SECRET})
     job = tc.post("/api/review", json={
         "pr_number": 7,
         "repo": "org/a",
@@ -504,7 +514,7 @@ def test_review_local_queue_preserves_agentic_request_fields(client):
         "agentic": True,
         "agent_sources": ["codex", "kimi"],
     }).json()
-    claimed = tc.post("/worker/llm/claim", headers={"X-Worker-Secret": "secret"}, json={"worker_id": "mac-mini"}).json()
+    claimed = tc.post("/worker/llm/claim", headers={"X-Worker-Secret": WORKER_SECRET}, json={"worker_id": "mac-mini"}).json()
     assert claimed["id"] == job["id"]
     assert claimed["request"]["agentic"] is True
     assert claimed["request"]["agent_sources"] == ["codex", "kimi"]
@@ -512,21 +522,21 @@ def test_review_local_queue_preserves_agentic_request_fields(client):
 
 def test_worker_claim_returns_204_when_no_local_jobs(client):
     tc, _ = client
-    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
-    resp = tc.post("/worker/llm/claim", headers={"X-Worker-Secret": "secret"}, json={"worker_id": "mac"})
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": WORKER_SECRET})
+    resp = tc.post("/worker/llm/claim", headers={"X-Worker-Secret": WORKER_SECRET}, json={"worker_id": "mac"})
     assert resp.status_code == 204
 
 
 def test_worker_endpoints_require_secret(client):
     tc, _ = client
-    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": WORKER_SECRET})
     assert tc.post("/worker/llm/claim", json={"worker_id": "mac"}).status_code == 401
     assert tc.post("/worker/llm/claim", headers={"X-Worker-Secret": "wrong"}, json={"worker_id": "mac"}).status_code == 401
 
 
 def test_queue_lists_local_jobs_with_compact_summary(client):
     tc, _ = client
-    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": WORKER_SECRET})
     tc.post("/api/review", json={
         "pr_number": 9,
         "repo": "org/a",
@@ -549,13 +559,13 @@ def test_queue_lists_local_jobs_with_compact_summary(client):
 
 def test_queue_filters_by_status_and_job_type(client):
     tc, _ = client
-    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": WORKER_SECRET})
     review = tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+x"}).json()
     assessment = tc.post("/api/assessments", json={"repo": "org/a"}).json()
-    tc.post("/worker/llm/claim", headers={"X-Worker-Secret": "secret"}, json={"worker_id": "mac-mini", "job_types": ["review"]})
+    tc.post("/worker/llm/claim", headers={"X-Worker-Secret": WORKER_SECRET}, json={"worker_id": "mac-mini", "job_types": ["review"]})
     tc.post(
         f"/worker/llm/{review['id']}/complete",
-        headers={"X-Worker-Secret": "secret"},
+        headers={"X-Worker-Secret": WORKER_SECRET},
         json={"result": {
             "pr_number": 7,
             "summary": "done",
@@ -585,7 +595,7 @@ def test_worker_claim_requires_configured_secret(client):
 
 def test_worker_cannot_complete_when_secret_is_cleared(client):
     tc, _ = client
-    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": WORKER_SECRET})
     job = tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+x"}).json()
     tc.put("/api/settings", json={"llm_worker_secret": ""})
     resp = tc.post(
@@ -797,7 +807,7 @@ def _sign(secret: bytes, body: bytes) -> str:
 
 def test_webhook_rejects_bad_signature(client):
     tc, _ = client
-    config_store.save_config({"webhook_secret": "s"})
+    config_store.save_config({"webhook_secret": WEBHOOK_SECRET})
     resp = tc.post("/webhook/github", content=b"{}",
                    headers={"X-GitHub-Event": "ping", "X-Hub-Signature-256": "sha256=bad"})
     assert resp.status_code == 401
@@ -805,11 +815,11 @@ def test_webhook_rejects_bad_signature(client):
 
 def test_webhook_ping_with_valid_signature(client):
     tc, _ = client
-    config_store.save_config({"webhook_secret": "s"})
+    config_store.save_config({"webhook_secret": WEBHOOK_SECRET})
     body = b"{}"
     resp = tc.post("/webhook/github", content=body, headers={
         "X-GitHub-Event": "ping",
-        "X-Hub-Signature-256": _sign(b"s", body),
+        "X-Hub-Signature-256": _sign(WEBHOOK_SECRET.encode(), body),
     })
     assert resp.status_code == 200 and resp.json() == {"status": "pong"}
 
@@ -824,7 +834,7 @@ def test_webhook_rejects_when_no_secret_configured(client):
 def test_webhook_rejects_unconfigured_repo(client):
     tc, _ = client
     config_store.save_config({
-        "webhook_secret": "s",
+        "webhook_secret": WEBHOOK_SECRET,
         "github_token": "ghp_test",
         "repos": ["org/a"],
     })
@@ -842,7 +852,7 @@ def test_webhook_rejects_unconfigured_repo(client):
     body = json.dumps(payload).encode()
     resp = tc.post("/webhook/github", content=body, headers={
         "X-GitHub-Event": "pull_request",
-        "X-Hub-Signature-256": _sign(b"s", body),
+        "X-Hub-Signature-256": _sign(WEBHOOK_SECRET.encode(), body),
     })
     assert resp.status_code == 403
     assert "not configured" in resp.json()["detail"]
@@ -889,12 +899,12 @@ def test_assessment_enqueues_and_runs(client, monkeypatch):
 
 def test_assessment_local_queue_can_be_claimed_by_type_and_saved(client):
     tc, _ = client
-    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": WORKER_SECRET})
 
     job = tc.post("/api/assessments", json={"repo": "org/a"}).json()
     claimed = tc.post(
         "/worker/llm/claim",
-        headers={"X-Worker-Secret": "secret"},
+        headers={"X-Worker-Secret": WORKER_SECRET},
         json={"worker_id": "mac-mini", "job_types": ["assessment"]},
     ).json()
     assert claimed["id"] == job["id"]
@@ -902,7 +912,7 @@ def test_assessment_local_queue_can_be_claimed_by_type_and_saved(client):
 
     done = tc.post(
         f"/worker/llm/{job['id']}/complete",
-        headers={"X-Worker-Secret": "secret"},
+        headers={"X-Worker-Secret": WORKER_SECRET},
         json={"result": {
             "repo": "org/a",
             "summary": "assessed",

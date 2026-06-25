@@ -64,6 +64,16 @@ def test_valid_token_passes(monkeypatch):
     assert run(auth.require_user(req("/api/settings", make_token(email="a@b.com")))) is None
 
 
+def test_wrong_issuer_rejected(monkeypatch):
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", SECRET)
+    monkeypatch.setenv("SUPABASE_URL", "https://ref.supabase.co")
+    monkeypatch.setenv("ALLOWED_EMAILS", "a@b.com")
+    token = make_token(email="a@b.com", iss="https://attacker.example/auth/v1")
+    with pytest.raises(HTTPException) as e:
+        run(auth.require_user(req("/api/settings", token)))
+    assert e.value.status_code == 401
+
+
 def test_empty_allowlist_denies(monkeypatch):
     # Fail closed: auth on + valid token but no ALLOWED_EMAILS -> 403.
     monkeypatch.setenv("SUPABASE_JWT_SECRET", SECRET)
@@ -188,7 +198,12 @@ def test_asymmetric_token_via_jwks(monkeypatch):
     private_key = ec.generate_private_key(ec.SECP256R1())
     public_key = private_key.public_key()
     token = jwt.encode(
-        {"aud": "authenticated", "exp": int(time.time()) + 3600, "email": "a@b.com"},
+        {
+            "aud": "authenticated",
+            "exp": int(time.time()) + 3600,
+            "email": "a@b.com",
+            "iss": "https://ref.supabase.co/auth/v1",
+        },
         private_key, algorithm="ES256",
     )
 
