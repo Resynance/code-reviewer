@@ -1,0 +1,183 @@
+"""API tests for the new /api/compliance/* endpoints."""
+
+import pytest
+
+
+@pytest.fixture
+def configured_repo(cfg, client, monkeypatch):
+    test_client, main = client
+    cfg.save_config({
+        "repos": ["acme/app"],
+        "github_token": "ghp_test_token",
+    })
+    return test_client, main, monkeypatch
+
+
+def test_compliance_dashboard(configured_repo):
+    test_client, main, monkeypatch = configured_repo
+    monkeypatch.setattr(
+        main.compliance_analysis, "get_dashboard",
+        lambda repo, history_limit=50: {
+            "repo": repo,
+            "health": {"score": 90},
+            "coverage": {"coverage_score": 75},
+            "suggestions": [],
+        },
+    )
+
+    resp = test_client.get("/api/compliance/dashboard?repo=acme/app")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["repo"] == "acme/app"
+    assert data["health"]["score"] == 90
+
+
+def test_compliance_health(configured_repo):
+    test_client, main, monkeypatch = configured_repo
+    monkeypatch.setattr(main.compliance_analysis, "get_health", lambda repo: {"score": 88})
+
+    resp = test_client.get("/api/compliance/health?repo=acme/app")
+    assert resp.status_code == 200
+    assert resp.json()["score"] == 88
+
+
+def test_compliance_coverage(configured_repo):
+    test_client, main, monkeypatch = configured_repo
+    monkeypatch.setattr(main.compliance_analysis, "get_coverage", lambda repo, limit=50: {"coverage_score": 60})
+
+    resp = test_client.get("/api/compliance/coverage?repo=acme/app")
+    assert resp.status_code == 200
+    assert resp.json()["coverage_score"] == 60
+
+
+def test_compliance_suggestions(configured_repo):
+    test_client, main, monkeypatch = configured_repo
+    monkeypatch.setattr(
+        main.compliance_analysis, "get_suggestions",
+        lambda repo: [{"id": "s1", "type": "enable_compliance"}],
+    )
+
+    resp = test_client.get("/api/compliance/suggestions?repo=acme/app")
+    assert resp.status_code == 200
+    assert resp.json()["suggestions"][0]["id"] == "s1"
+
+
+def test_apply_compliance_suggestion(configured_repo):
+    test_client, main, monkeypatch = configured_repo
+    monkeypatch.setattr(
+        main.compliance_analysis, "apply_suggestion",
+        lambda repo, suggestion: {"default": {}, "repos": {repo: {"enabled": True}}},
+    )
+
+    resp = test_client.post(
+        "/api/compliance/suggestions/apply",
+        json={"repo": "acme/app", "suggestion": {"type": "enable_compliance"}},
+    )
+    assert resp.status_code == 200
+    assert "compliance_policies" in resp.json()
+
+
+def test_compliance_endpoints_require_repo(configured_repo):
+    test_client, _, _ = configured_repo
+    resp = test_client.get("/api/compliance/dashboard")
+    assert resp.status_code == 422
+
+
+def test_analyze_compliance_persists_result(configured_repo):
+    test_client, main, monkeypatch = configured_repo
+    monkeypatch.setattr(
+        main.compliance_analysis, "get_dashboard",
+        lambda repo, history_limit=50: {
+            "repo": repo,
+            "health": {"score": 92},
+            "coverage": {"coverage_score": 80},
+            "suggestions": [],
+        },
+    )
+    monkeypatch.setattr(
+        main.compliance_analysis_store, "save_analysis",
+        lambda record: {**record, "id": 1, "created_at": "2024-01-01T00:00:00Z"},
+    )
+
+    resp = test_client.post("/api/compliance/analyze", json={"repo": "acme/app"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["id"] == 1
+    assert data["health"]["score"] == 92
+
+
+def test_list_compliance_analyses(configured_repo):
+    test_client, main, monkeypatch = configured_repo
+    monkeypatch.setattr(
+        main.compliance_analysis_store, "list_analyses",
+        lambda repo=None, limit=20: [
+            {"id": 1, "repo": "acme/app", "health": {}, "coverage": {}, "suggestions": [], "created_at": "2024-01-01T00:00:00Z"},
+        ],
+    )
+
+    resp = test_client.get("/api/compliance/analyses?repo=acme/app")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] == 1
+    assert data["analyses"][0]["id"] == 1
+
+
+def test_get_compliance_analysis(configured_repo):
+    test_client, main, monkeypatch = configured_repo
+    monkeypatch.setattr(
+        main.compliance_analysis_store, "get_analysis",
+        lambda analysis_id: {
+            "id": analysis_id,
+            "repo": "acme/app",
+            "health": {"score": 85},
+            "coverage": {},
+            "suggestions": [],
+            "created_at": "2024-01-01T00:00:00Z",
+        },
+    )
+
+    resp = test_client.get("/api/compliance/analyses/42")
+    assert resp.status_code == 200
+    assert resp.json()["health"]["score"] == 85
+
+
+def test_get_missing_compliance_analysis_returns_404(configured_repo):
+    test_client, main, monkeypatch = configured_repo
+    monkeypatch.setattr(main.compliance_analysis_store, "get_analysis", lambda analysis_id: None)
+
+    resp = test_client.get("/api/compliance/analyses/999")
+    assert resp.status_code == 404
+
+
+def test_reanalyze_compliance(configured_repo):
+    test_client, main, monkeypatch = configured_repo
+    monkeypatch.setattr(
+        main.compliance_analysis_store, "get_analysis",
+        lambda analysis_id: {
+            "id": analysis_id,
+            "repo": "acme/app",
+            "health": {},
+            "coverage": {},
+            "suggestions": [],
+            "created_at": "2024-01-01T00:00:00Z",
+        },
+    )
+    monkeypatch.setattr(
+        main.compliance_analysis, "get_dashboard",
+        lambda repo, history_limit=50: {
+            "repo": repo,
+            "health": {"score": 95},
+            "coverage": {},
+            "suggestions": [],
+        },
+    )
+    monkeypatch.setattr(
+        main.compliance_analysis_store, "save_analysis",
+        lambda record: {**record, "id": 2, "created_at": "2024-01-02T00:00:00Z"},
+    )
+
+    resp = test_client.post("/api/compliance/analyses/1/reanalyze")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["id"] == 2
+    assert data["health"]["score"] == 95
