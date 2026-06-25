@@ -242,3 +242,54 @@ def test_create_compliance_issue_enqueues_local_followup(configured_repo):
     body = resp.json()
     assert body["job_id"] == "job-1"
     assert body["job_status"] == "queued"
+
+
+def test_create_compliance_issue_missing_analysis_returns_404(configured_repo):
+    test_client, main, monkeypatch = configured_repo
+    monkeypatch.setattr(main.compliance_analysis_store, "get_analysis", lambda analysis_id: None)
+
+    resp = test_client.post("/api/compliance/analyses/99/issue", json={})
+    assert resp.status_code == 404
+
+
+def test_create_compliance_issue_rejects_agentic_target_in_inline_mode(configured_repo):
+    test_client, main, monkeypatch = configured_repo
+    test_client.put("/api/settings", json={"llm_execution_mode": "inline"})
+    monkeypatch.setattr(
+        main.compliance_analysis_store, "get_analysis",
+        lambda analysis_id: {
+            "id": analysis_id,
+            "repo": "acme/app",
+            "health": {"score": 85},
+            "coverage": {"coverage_score": 70},
+            "suggestions": [],
+            "created_at": "2024-01-01T00:00:00Z",
+        },
+    )
+
+    resp = test_client.post("/api/compliance/analyses/12/issue", json={"agentic_target": "codex"})
+    assert resp.status_code == 400
+    assert "local_queue" in resp.json()["detail"]
+
+
+def test_create_compliance_issue_rejects_disabled_agentic_target(configured_repo):
+    test_client, main, monkeypatch = configured_repo
+    test_client.put("/api/settings", json={
+        "llm_execution_mode": "local_queue",
+        "local_agentic_targets": [{"id": "codex", "label": "Codex", "enabled": False, "command": ["codex"]}],
+    })
+    monkeypatch.setattr(
+        main.compliance_analysis_store, "get_analysis",
+        lambda analysis_id: {
+            "id": analysis_id,
+            "repo": "acme/app",
+            "health": {"score": 85},
+            "coverage": {"coverage_score": 70},
+            "suggestions": [],
+            "created_at": "2024-01-01T00:00:00Z",
+        },
+    )
+
+    resp = test_client.post("/api/compliance/analyses/12/issue", json={"agentic_target": "codex"})
+    assert resp.status_code == 400
+    assert "not enabled" in resp.json()["detail"]
