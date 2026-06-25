@@ -193,6 +193,39 @@ Saved assessments, newest first. `repo` optional; `limit` defaults to 20, max 10
                      "created_at": "2026-06-19T…" } ], "count": 1 }
 ```
 
+## Compliance
+
+### `POST /api/compliance/analyze`
+Run compliance analysis for a repo and persist the result. `limit` defaults to 50.
+```json
+{ "repo": "org/a", "limit": 50 }
+```
+Returns the saved analysis record including `id`, `repo`, `health`, `coverage`,
+`suggestions`, and `created_at`.
+
+### `GET /api/compliance/analyses?repo=&limit=20`
+List saved compliance analyses, newest first.
+
+### `GET /api/compliance/analyses/{id}`
+Return one saved compliance analysis. `404` if unknown.
+
+### `POST /api/compliance/analyses/{id}/reanalyze`
+Re-run compliance analysis for the repo of a saved analysis and persist the new
+result. Returns the new analysis record.
+
+### `POST /api/compliance/analyses/{id}/issue`
+Create a GitHub issue from a saved compliance analysis.
+```json
+{ "title": "…", "body": "…", "agentic_target": "codex" }
+```
+`title` and `body` are optional; defaults are generated from the analysis.
+`agentic_target` is optional and only allowed when `llm_execution_mode=local_queue`
+and the target is enabled in settings. Returns:
+```json
+{ "html_url": "https://github.com/org/a/issues/9", "job_id": "…", "job_status": "queued" }
+```
+`job_id`/`job_status` are present only when an agentic follow-up was requested.
+
 ## Settings
 
 ### `GET /api/settings`
@@ -208,6 +241,9 @@ Secrets are reported as booleans, never echoed.
     { "id": "codex", "label": "Codex", "enabled": true, "command": ["codex", "exec", "..."] },
     { "id": "kimi", "label": "Kimi", "enabled": true, "command": ["kimi", "-p", "{prompt}", "--output-format", "stream-json"] }
   ],
+  "local_agentic_targets": [
+    { "id": "codex", "label": "Codex", "enabled": true, "command": ["codex", "exec", "--output-last-message", "{output_path}", "-"] }
+  ],
   "compliance_policies": {
     "default": { "enabled": false, "notes": "" },
     "repos": { "org/a": { "enabled": true } }
@@ -222,7 +258,8 @@ Secrets are reported as booleans, never echoed.
 ```
 `openrouter_models` is the canonical model list used by the Review and Assessment
 pages. `openrouter_model`/`openrouter_provider` reflect the first slot for backward
-compatibility.
+compatibility. `local_agentic_targets` configure agents that may be handed
+compliance follow-up jobs to open remediation PRs.
 
 ### `PUT /api/settings`
 Admin-only. Update settings. **Only provided (non-null) fields change**; send
@@ -236,6 +273,9 @@ Admin-only. Update settings. **Only provided (non-null) fields change**; send
   "local_review_agents": [
     { "id": "codex", "label": "Codex", "enabled": true, "command": ["codex", "exec", "..."] },
     { "id": "kimi", "label": "Kimi", "enabled": false, "command": ["kimi", "-p", "{prompt}", "--output-format", "stream-json"] }
+  ],
+  "local_agentic_targets": [
+    { "id": "codex", "label": "Codex", "enabled": true, "command": ["codex", "exec", "--output-last-message", "{output_path}", "-"] }
   ],
   "compliance_policies": {
     "default": { "enabled": false },
@@ -263,7 +303,7 @@ local-queue review or assessment can be enqueued.
 ### `POST /worker/llm/claim`
 Claims the oldest queued local LLM job and marks it `running`.
 ```json
-{ "worker_id": "mac-mini", "job_types": ["review", "assessment"] }
+{ "worker_id": "mac-mini", "job_types": ["review", "assessment", "compliance_followup"] }
 ```
 Returns `204 No Content` when no job is waiting, otherwise the full job record.
 
@@ -277,8 +317,9 @@ Stores the worker result and marks the job `done`.
 }
 ```
 For review jobs, `result` should match the normal review payload; for assessment
-jobs, it should match the normal assessment payload. Finished jobs are also saved
-to history with source `local_worker` for reviews.
+jobs, it should match the normal assessment payload. For `compliance_followup`
+jobs, `result` is stored as-is. Finished jobs are also saved to history with
+source `local_worker` for reviews.
 
 ### `POST /worker/llm/{id}/error`
 Marks the job failed.
