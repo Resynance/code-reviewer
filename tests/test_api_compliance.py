@@ -218,6 +218,7 @@ def test_create_compliance_issue_enqueues_local_followup(configured_repo):
     test_client, main, monkeypatch = configured_repo
     test_client.put("/api/settings", json={
         "llm_execution_mode": "local_queue",
+        "llm_worker_secret": "worker-secret",
         "local_agentic_targets": [{"id": "codex", "label": "Codex", "enabled": True, "command": ["codex", "exec", "-"]}],
     })
     monkeypatch.setattr(
@@ -276,6 +277,7 @@ def test_create_compliance_issue_rejects_disabled_agentic_target(configured_repo
     test_client, main, monkeypatch = configured_repo
     test_client.put("/api/settings", json={
         "llm_execution_mode": "local_queue",
+        "llm_worker_secret": "worker-secret",
         "local_agentic_targets": [{"id": "codex", "label": "Codex", "enabled": False, "command": ["codex"]}],
     })
     monkeypatch.setattr(
@@ -293,3 +295,30 @@ def test_create_compliance_issue_rejects_disabled_agentic_target(configured_repo
     resp = test_client.post("/api/compliance/analyses/12/issue", json={"agentic_target": "codex"})
     assert resp.status_code == 400
     assert "not enabled" in resp.json()["detail"]
+
+
+def test_create_compliance_issue_rejects_agentic_followup_without_worker_secret(configured_repo):
+    test_client, main, monkeypatch = configured_repo
+    test_client.put("/api/settings", json={
+        "llm_execution_mode": "local_queue",
+        "local_agentic_targets": [{"id": "codex", "label": "Codex", "enabled": True, "command": ["codex", "exec", "-"]}],
+    })
+    monkeypatch.setattr(
+        main.compliance_analysis_store, "get_analysis",
+        lambda analysis_id: {
+            "id": analysis_id,
+            "repo": "acme/app",
+            "health": {"score": 85},
+            "coverage": {"coverage_score": 70},
+            "suggestions": [],
+            "created_at": "2024-01-01T00:00:00Z",
+        },
+    )
+    monkeypatch.setattr(
+        main, "create_issue",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("issue should not be created")),
+    )
+
+    resp = test_client.post("/api/compliance/analyses/12/issue", json={"agentic_target": "codex"})
+    assert resp.status_code == 400
+    assert "worker secret" in resp.json()["detail"].lower()

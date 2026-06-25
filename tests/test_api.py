@@ -3,11 +3,25 @@
 import hmac
 import hashlib
 import json
+import time
 
+import jwt
 import config_store
 import rate_limit
 from review_engine import ReviewResult
 from assessment_engine import AssessmentResult
+
+
+AUTH_SECRET = "test-secret"
+
+
+def _auth_headers(email: str) -> dict:
+    token = jwt.encode(
+        {"aud": "authenticated", "exp": int(time.time()) + 3600, "email": email},
+        AUTH_SECRET,
+        algorithm="HS256",
+    )
+    return {"Authorization": f"Bearer {token}"}
 
 
 def test_health(client):
@@ -87,6 +101,27 @@ def test_settings_put_rejects_bad_llm_mode(client):
     assert tc.put("/api/settings", json={"llm_execution_mode": "sidecar"}).status_code == 400
 
 
+def test_settings_put_requires_admin_when_auth_enabled(client, monkeypatch):
+    tc, _ = client
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", AUTH_SECRET)
+    monkeypatch.setenv("ALLOWED_EMAILS", "admin@co.com,user@co.com")
+
+    user = tc.put(
+        "/api/settings",
+        headers=_auth_headers("user@co.com"),
+        json={"llm_base_url": "https://attacker.example/v1"},
+    )
+    assert user.status_code == 403
+
+    admin = tc.put(
+        "/api/settings",
+        headers=_auth_headers("admin@co.com"),
+        json={"openrouter_model": "m/x"},
+    )
+    assert admin.status_code == 200
+    assert admin.json()["openrouter_model"] == "m/x"
+
+
 # ----- repos ----- #
 
 def test_repo_add_remove(client):
@@ -100,6 +135,16 @@ def test_repo_add_remove(client):
 def test_repo_add_validates_form(client):
     tc, _ = client
     assert tc.post("/api/repos", json={"repo": "noslash"}).status_code == 400
+
+
+def test_repo_and_token_mutations_require_admin_when_auth_enabled(client, monkeypatch):
+    tc, _ = client
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", AUTH_SECRET)
+    monkeypatch.setenv("ALLOWED_EMAILS", "admin@co.com,user@co.com")
+
+    user_headers = _auth_headers("user@co.com")
+    assert tc.post("/api/repos", headers=user_headers, json={"repo": "org/a"}).status_code == 403
+    assert tc.post("/api/github/tokens", headers=user_headers, json={"token": "ghp_x"}).status_code == 403
 
 
 # ----- decisions + scoping ----- #
@@ -216,6 +261,38 @@ def test_llm_test_endpoint_success(client, monkeypatch):
     assert body["ok"] is True
     assert body["base_url"] == "http://192.168.0.197:8080/v1"
     assert body["model_count"] == 1
+
+
+def test_llm_test_endpoint_does_not_send_stored_key_to_custom_url(client, monkeypatch):
+    tc, main = client
+    tc.put("/api/settings", json={"llm_api_key": "stored-secret"})
+    captured = {}
+
+    class FakeResp:
+        status_code = 200
+        text = '{"data":[]}'
+
+        def json(self):
+            return {"data": []}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            captured["headers"] = kwargs.get("headers") or {}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url):
+            return FakeResp()
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", FakeClient)
+
+    resp = tc.post("/api/llm/test", json={"llm_base_url": "https://attacker.example/v1"})
+    assert resp.status_code == 200
+    assert "Authorization" not in captured["headers"]
 
 
 def test_llm_test_endpoint_suggests_v1_when_missing(client, monkeypatch):
@@ -401,37 +478,19 @@ def test_review_rejects_local_queue_when_worker_secret_missing(client):
     assert "worker secret" in resp.json()["detail"]
 
 
-def test_agentic_review_local_queue_does_not_require_worker_secret(client):
+def test_agentic_review_local_queue_requires_worker_secret(client):
     tc, _ = client
     tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": ""})
-    job = tc.post("/api/review", json={
+    resp = tc.post("/api/review", json={
         "pr_number": 7,
         "repo": "org/a",
         "title": "t",
         "diff": "+x",
         "agentic": True,
         "agent_sources": ["codex"],
-    }).json()
-    claimed = tc.post("/worker/llm/claim", json={"worker_id": "mac-mini"}).json()
-    assert claimed["id"] == job["id"]
-    assert claimed["request"]["agentic"] is True
-
-    done = tc.post(
-        f"/worker/llm/{job['id']}/complete",
-        json={"result": {
-            "pr_number": 7,
-            "summary": "agentic ok",
-            "approved": True,
-            "confidence": 0.75,
-            "issues": [],
-            "suggestions": [],
-            "past_decisions_applied": [],
-            "compliance_review": {"enabled": False},
-            "model": "agentic: Codex",
-        }},
-    ).json()
-    assert done["status"] == "done"
-    assert done["result"]["summary"] == "agentic ok"
+    })
+    assert resp.status_code == 400
+    assert "worker secret" in resp.json()["detail"]
 
 
 def test_review_local_queue_preserves_agentic_request_fields(client):
@@ -467,7 +526,7 @@ def test_worker_endpoints_require_secret(client):
 
 def test_queue_lists_local_jobs_with_compact_summary(client):
     tc, _ = client
-    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": ""})
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
     tc.post("/api/review", json={
         "pr_number": 9,
         "repo": "org/a",
@@ -517,15 +576,14 @@ def test_queue_filters_by_status_and_job_type(client):
     assert assessments["jobs"][0]["job_type"] == "assessment"
 
 
-def test_secretless_worker_claim_ignores_non_agentic_jobs(client):
+def test_worker_claim_requires_configured_secret(client):
     tc, _ = client
     tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": ""})
-    tc.post("/api/review", json={"pr_number": 1, "repo": "org/a", "title": "t", "diff": "+x", "agentic": True, "agent_sources": ["codex"]})
     resp = tc.post("/worker/llm/claim", json={"worker_id": "mac", "job_types": ["assessment"]})
-    assert resp.status_code == 204
+    assert resp.status_code == 403
 
 
-def test_secretless_worker_cannot_complete_non_agentic_job(client):
+def test_worker_cannot_complete_when_secret_is_cleared(client):
     tc, _ = client
     tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
     job = tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+x"}).json()
@@ -534,7 +592,7 @@ def test_secretless_worker_cannot_complete_non_agentic_job(client):
         f"/worker/llm/{job['id']}/complete",
         json={"result": {"pr_number": 7, "summary": "nope", "approved": True, "confidence": 1, "issues": [], "suggestions": [], "past_decisions_applied": [], "compliance_review": {"enabled": False}, "model": "x"}},
     )
-    assert resp.status_code == 401
+    assert resp.status_code == 403
 
 
 def test_review_job_not_found(client):
@@ -570,11 +628,19 @@ def test_pr_comment_requires_token(client):
 
 def test_pr_comment_posts(client, monkeypatch):
     tc, main = client
-    config_store.save_config({"github_token": "t"})
+    config_store.save_config({"github_token": "t", "repos": ["org/a"]})
     monkeypatch.setattr(main, "post_pr_comment",
                         lambda repo, pr_number, body, token: "https://github.com/org/a/pull/5#c1")
     res = tc.post("/api/pr-comment", json={"repo": "org/a", "pr_number": 5, "body": "hi"}).json()
     assert res["html_url"].endswith("#c1")
+
+
+def test_github_token_use_requires_configured_repo(client):
+    tc, _ = client
+    config_store.save_config({"github_token": "t", "repos": ["org/a"]})
+    resp = tc.post("/api/pr-comment", json={"repo": "org/private", "pr_number": 5, "body": "hi"})
+    assert resp.status_code == 403
+    assert "not configured" in resp.json()["detail"]
 
 
 def test_issue_requires_token(client):
@@ -584,7 +650,7 @@ def test_issue_requires_token(client):
 
 def test_issue_created(client, monkeypatch):
     tc, main = client
-    config_store.save_config({"github_token": "t"})
+    config_store.save_config({"github_token": "t", "repos": ["org/a"]})
     captured = {}
     def fake_create(repo, title, body, token):
         captured.update(repo=repo, title=title, body=body)
@@ -626,7 +692,7 @@ def test_backfill_requires_token(client):
 
 def test_backfill_invokes_importer(client, monkeypatch):
     tc, main = client
-    config_store.save_config({"github_token": "t"})
+    config_store.save_config({"github_token": "t", "repos": ["org/a"]})
     monkeypatch.setattr(main, "run_backfill", lambda repo, pages, token, store: 5)
     resp = tc.post("/api/backfill", json={"repo": "org/a", "pages": 2})
     assert resp.json() == {"repo": "org/a", "imported": 5}
@@ -641,7 +707,7 @@ def test_github_owners_requires_token(client):
 
 def test_github_owners_and_repos(client, monkeypatch):
     tc, main = client
-    config_store.save_config({"github_token": "t"})
+    config_store.save_config({"github_token": "t", "repos": ["org/a"]})
     monkeypatch.setattr(main, "list_owners", lambda token: [
         {"login": "me", "type": "user"}, {"login": "acme", "type": "org"}])
     monkeypatch.setattr(main, "list_owner_repos",
@@ -660,7 +726,7 @@ def test_open_prs_requires_token(client):
 
 def test_open_prs_excludes_already_in_store(client, monkeypatch):
     tc, main = client
-    config_store.save_config({"github_token": "t"})
+    config_store.save_config({"github_token": "t", "repos": ["org/a"]})
     fake_prs = [
         {"number": 1, "title": "a", "author": "x", "url": "u1", "created_at": None, "draft": False},
         {"number": 2, "title": "b", "author": "y", "url": "u2", "created_at": None, "draft": True},
@@ -684,7 +750,7 @@ def test_repo_prs_requires_token(client):
 
 def test_repo_prs_orders_open_first_then_recent(client, monkeypatch):
     tc, main = client
-    config_store.save_config({"github_token": "t"})
+    config_store.save_config({"github_token": "t", "repos": ["org/a"]})
     prs = [
         {"number": 1, "state": "closed", "updated_at": "2026-06-10", "title": "c1"},
         {"number": 2, "state": "open", "updated_at": "2026-06-01", "title": "o1"},
@@ -714,7 +780,7 @@ def test_access_allowlist_crud(client):
 
 def test_repo_pr_returns_form_data(client, monkeypatch):
     tc, main = client
-    config_store.save_config({"github_token": "t"})
+    config_store.save_config({"github_token": "t", "repos": ["org/a"]})
     monkeypatch.setattr(main, "fetch_pr", lambda repo, number, token: {
         "pr_number": number, "repo": repo, "title": "T", "description": "D",
         "author": "dev", "base_branch": "main", "diff": "d", "files_changed": ["a.py"],
@@ -753,6 +819,33 @@ def test_webhook_rejects_when_no_secret_configured(client):
     resp = tc.post("/webhook/github", content=b"{}",
                    headers={"X-GitHub-Event": "ping", "X-Hub-Signature-256": "sha256=whatever"})
     assert resp.status_code == 401
+
+
+def test_webhook_rejects_unconfigured_repo(client):
+    tc, _ = client
+    config_store.save_config({
+        "webhook_secret": "s",
+        "github_token": "ghp_test",
+        "repos": ["org/a"],
+    })
+    payload = {
+        "action": "opened",
+        "pull_request": {
+            "number": 42,
+            "title": "Test PR",
+            "body": "desc",
+            "user": {"login": "dev"},
+            "base": {"ref": "main"},
+        },
+        "repository": {"full_name": "org/private"},
+    }
+    body = json.dumps(payload).encode()
+    resp = tc.post("/webhook/github", content=body, headers={
+        "X-GitHub-Event": "pull_request",
+        "X-Hub-Signature-256": _sign(b"s", body),
+    })
+    assert resp.status_code == 403
+    assert "not configured" in resp.json()["detail"]
 
 
 # ----- assessments ----- #

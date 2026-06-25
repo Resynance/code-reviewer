@@ -69,7 +69,7 @@ python local_worker.py
 Useful worker environment variables:
 
 - `REVIEWBOT_API_URL` — backend base URL, default `http://localhost:1500`
-- `REVIEWBOT_WORKER_SECRET` — required for queued local-LLM reviews and assessments; optional for agentic-only local review jobs
+- `REVIEWBOT_WORKER_SECRET` — required for all queued local-worker reviews and assessments
 - `REVIEWBOT_AGENT_TIMEOUT_SECONDS` — per-agent timeout for local agentic review commands, default `600`
 - `LOCAL_LLM_BASE_URL` — local OpenAI-compatible server for queued local-LLM reviews and assessments
 

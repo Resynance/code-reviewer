@@ -262,8 +262,8 @@ compatibility. `local_agentic_targets` configure agents that may be handed
 compliance follow-up jobs to open remediation PRs.
 
 ### `PUT /api/settings`
-Update settings. **Only provided (non-null) fields change**; send `""` to clear a
-value (falls back to env/default), omit/null to leave unchanged.
+Admin-only. Update settings. **Only provided (non-null) fields change**; send
+`""` to clear a value (falls back to env/default), omit/null to leave unchanged.
 ```json
 {
   "github_token": "ghp_…",
@@ -296,11 +296,9 @@ Returns the same shape as `GET /api/settings`.
 ## Local worker
 
 These endpoints are for a separate app running on your local machine when
-`llm_execution_mode=local_queue`. When `llm_worker_secret` is configured, they
-are authenticated with the shared `X-Worker-Secret` header. When no worker
-secret is configured, unauthenticated access is limited to **agentic local jobs**
-(reviews with `agentic=true` and `compliance_followup` jobs); queued local-LLM
-reviews and assessments still require a secret.
+`llm_execution_mode=local_queue`. They are authenticated with the shared
+`X-Worker-Secret` header, and `llm_worker_secret` must be configured before any
+local-queue review or assessment can be enqueued.
 
 ### `POST /worker/llm/claim`
 Claims the oldest queued local LLM job and marks it `running`.

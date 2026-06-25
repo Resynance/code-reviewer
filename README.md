@@ -141,8 +141,8 @@ review in **agentic** mode to multiple local sources. The worker reads the
 `local_review_agents` list from Settings, runs each enabled command with the PR
 prompt, and merges the structured outputs into one review result.
 
-For this agentic-only local path, `LLM_WORKER_SECRET` is optional. It is still
-required for queued local-LLM reviews and assessments.
+For this agentic local path, `LLM_WORKER_SECRET` is required so only trusted
+workers can claim queued PR diffs and submit review results.
 
 For queued local-LLM reviews and assessments, `local_worker.py` reads
 `LOCAL_LLM_BASE_URL` directly. Both root-style endpoints such as
