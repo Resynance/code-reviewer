@@ -70,7 +70,7 @@ def claim_next_job(job_types=None, executor: str = "local_queue", worker_id: str
 
 
 def claim_next_agentic_review_job(executor: str = "local_queue", worker_id: str = ""):
-    """Claim the next queued agentic review job, or None if none exist."""
+    """Claim the next queued agentic local job, or None if none exist."""
     if _backend() == "postgres":
         return _pg_claim_next_agentic_review(executor, worker_id)
     return _file_claim_next_agentic_review(executor, worker_id)
@@ -171,7 +171,7 @@ def _file_claim_next_agentic_review(executor, worker_id):
             req = job.get("request") or {}
             if job.get("status") != "queued" or job.get("executor") != executor:
                 continue
-            if job.get("job_type") != "review" or not req.get("agentic"):
+            if not req.get("agentic"):
                 continue
             job["status"] = "running"
             job["claimed_by"] = worker_id or None
@@ -346,7 +346,7 @@ def _pg_claim_next_agentic_review(executor, worker_id):
         cur.execute(
             "WITH next_job AS ("
             "  SELECT id FROM review_jobs "
-            "  WHERE status = 'queued' AND executor = %s AND job_type = 'review' "
+            "  WHERE status = 'queued' AND executor = %s "
             "    AND COALESCE((request->>'agentic')::boolean, false) = true "
             "  ORDER BY created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
             ") "

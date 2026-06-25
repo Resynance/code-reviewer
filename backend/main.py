@@ -221,6 +221,7 @@ class SettingsBody(BaseModel):
     llm_timeout_seconds: Optional[str] = None
     compliance_policies: Optional[dict] = None
     local_review_agents: Optional[list[dict]] = None
+    local_agentic_targets: Optional[list[dict]] = None
 
 
 class LlmTestBody(BaseModel):
@@ -272,6 +273,12 @@ class ComplianceSuggestionApplyBody(BaseModel):
 class ComplianceAnalyzeBody(BaseModel):
     repo: str
     limit: int = Field(default=50, ge=1, le=500)
+
+
+class ComplianceIssueBody(BaseModel):
+    title: Optional[str] = None
+    body: str = ""
+    agentic_target: Optional[str] = None
 
 
 class WorkerClaimBody(BaseModel):
@@ -337,6 +344,11 @@ def _is_agentic_review_job(job: Optional[dict]) -> bool:
     return bool(job and job.get("job_type") == "review" and req.get("agentic"))
 
 
+def _is_secretless_local_job(job: Optional[dict]) -> bool:
+    req = (job or {}).get("request") or {}
+    return bool(job and job.get("executor") == "local_queue" and req.get("agentic"))
+
+
 def _normalize_result_payload(result_payload: dict) -> dict:
     payload = dict(result_payload or {})
     payload["compliance_review"] = payload.get("compliance_review") or {}
@@ -348,6 +360,37 @@ def _normalize_result_payload(result_payload: dict) -> dict:
 def _summarize_job(job: dict) -> dict:
     req = dict((job or {}).get("request") or {})
     diff = req.pop("diff", "")
+    if job.get("job_type") == "compliance_followup":
+        req_summary = {
+            "repo": req.get("repo"),
+            "analysis_id": req.get("analysis_id"),
+            "issue_url": req.get("issue_url"),
+            "target_id": req.get("target_id"),
+            "agentic": bool(req.get("agentic")),
+        }
+        result = job.get("result")
+        result_summary = None
+        if isinstance(result, dict):
+            result_summary = {
+                "summary": result.get("summary"),
+                "status": result.get("status"),
+                "pr_url": result.get("pr_url"),
+                "target": result.get("target"),
+            }
+        return {
+            "id": job.get("id"),
+            "job_type": job.get("job_type"),
+            "executor": job.get("executor"),
+            "status": job.get("status"),
+            "claimed_by": job.get("claimed_by"),
+            "started_at": job.get("started_at"),
+            "completed_at": job.get("completed_at"),
+            "created_at": job.get("created_at"),
+            "updated_at": job.get("updated_at"),
+            "error": job.get("error"),
+            "request": req_summary,
+            "result": result_summary,
+        }
     req_summary = {
         "repo": req.get("repo"),
         "pr_number": req.get("pr_number"),
@@ -430,8 +473,67 @@ def _save_assessment_payload(result_payload: dict):
 def _persist_local_job_result(job: dict, result_payload: dict):
     if job.get("job_type") == "assessment":
         _save_assessment_payload(result_payload)
-    else:
+    elif job.get("job_type") == "review":
         _save_review_payload(job.get("request") or {}, result_payload, source="local_worker")
+
+
+def _compliance_issue_title(analysis: dict) -> str:
+    repo = analysis.get("repo") or "repo"
+    health = (analysis.get("health") or {}).get("score")
+    coverage = (analysis.get("coverage") or {}).get("coverage_score")
+    parts = [f"Compliance follow-up for {repo}"]
+    if health is not None or coverage is not None:
+        suffix = []
+        if health is not None:
+            suffix.append(f"health {health}")
+        if coverage is not None:
+            suffix.append(f"coverage {coverage}")
+        parts.append(f"({', '.join(suffix)})")
+    return " ".join(parts)
+
+
+def _compliance_issue_body(analysis: dict, analysis_id: int) -> str:
+    repo = analysis.get("repo") or ""
+    health = analysis.get("health") or {}
+    coverage = analysis.get("coverage") or {}
+    suggestions = analysis.get("suggestions") or []
+    lines = [
+        f"Compliance analysis follow-up for `{repo}`.",
+        "",
+        f"Saved analysis ID: `{analysis_id}`",
+        "",
+        "## Summary",
+        f"- Policy health score: {health.get('score', 'n/a')}",
+        f"- Coverage score: {coverage.get('coverage_score', 'n/a')}",
+        f"- Policy suggestions: {len(suggestions)}",
+        f"- Coverage blind spots: {len(coverage.get('blind_spots') or [])}",
+    ]
+    findings = health.get("findings") or []
+    if findings:
+        lines.extend(["", "## Policy Health Findings"])
+        for item in findings[:10]:
+            lines.append(f"- [{item.get('severity', 'info')}] {item.get('title', 'Finding')}: {item.get('recommendation') or item.get('evidence') or ''}".rstrip())
+    blind_spots = coverage.get("blind_spots") or []
+    if blind_spots:
+        lines.extend(["", "## Coverage Blind Spots"])
+        for item in blind_spots[:10]:
+            lines.append(f"- [{item.get('severity', 'info')}] {item.get('category', 'category')}: {item.get('suggestion', '')}".rstrip())
+    if suggestions:
+        lines.extend(["", "## Suggested Policy Updates"])
+        for item in suggestions[:10]:
+            lines.append(f"- [{item.get('severity', 'info')}] {item.get('reason', item.get('type', 'Suggestion'))}")
+    lines.extend([
+        "",
+        "## Raw Analysis",
+        "```json",
+        json.dumps({
+            "health": health,
+            "coverage": coverage,
+            "suggestions": suggestions,
+        }, indent=2),
+        "```",
+    ])
+    return "\n".join(lines)
 
 
 # ------------------------------------------------------------------ #
@@ -703,6 +805,57 @@ def analyze_compliance(body: ComplianceAnalyzeBody):
         raise HTTPException(status_code=502, detail=str(e))
 
 
+@app.post("/api/compliance/analyses/{analysis_id}/issue")
+def create_compliance_issue(analysis_id: int, body: ComplianceIssueBody):
+    """Create a GitHub issue from a saved compliance analysis, optionally enqueueing local agentic follow-up."""
+    analysis = compliance_analysis_store.get_analysis(analysis_id)
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Compliance analysis not found")
+    repo = analysis.get("repo")
+    if not repo:
+        raise HTTPException(status_code=400, detail="Saved analysis has no repo")
+    token = _token_for(repo)
+    target_id = (body.agentic_target or "").strip().lower()
+    if target_id:
+        if _llm_execution_mode() != "local_queue":
+            raise HTTPException(status_code=400, detail="Agentic follow-up is available only in local_queue mode")
+        enabled_targets = {
+            str(item.get("id") or "").strip().lower()
+            for item in config_store.get_local_agentic_targets()
+            if item.get("enabled")
+        }
+        if target_id not in enabled_targets:
+            raise HTTPException(status_code=400, detail="Selected local agentic target is not enabled")
+    title = (body.title or "").strip() or _compliance_issue_title(analysis)
+    issue_body = (body.body or "").strip() or _compliance_issue_body(analysis, analysis_id)
+    try:
+        url = create_issue(repo, title, issue_body, token)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    response = {"html_url": url}
+    if target_id:
+        job = review_jobs.create_job(
+            {
+                "repo": repo,
+                "analysis_id": analysis_id,
+                "issue_url": url,
+                "issue_title": title,
+                "issue_body": issue_body,
+                "analysis": analysis,
+                "target_id": target_id,
+                "agentic": True,
+            },
+            job_type="compliance_followup",
+            executor="local_queue",
+        )
+        response["job_id"] = job["id"]
+        response["job_status"] = job["status"]
+    return response
+
+
 @app.get("/api/compliance/analyses")
 def list_compliance_analyses(repo: Optional[str] = None, limit: int = Query(default=20, ge=1, le=100)):
     """Return persisted compliance analyses, newest first."""
@@ -905,6 +1058,7 @@ def get_settings():
         "embedding_model": config_store.get_embedding_model(),
         "compliance_policies": config_store.get_compliance_policies(),
         "local_review_agents": config_store.get_local_review_agents(),
+        "local_agentic_targets": config_store.get_local_agentic_targets(),
     }
 
 
@@ -951,6 +1105,8 @@ def update_settings(body: SettingsBody):
         update["compliance_policies"] = body.compliance_policies
     if body.local_review_agents is not None:
         update["local_review_agents"] = body.local_review_agents
+    if body.local_agentic_targets is not None:
+        update["local_agentic_targets"] = body.local_agentic_targets
     if update:
         config_store.save_config(update)
     return get_settings()
@@ -959,7 +1115,7 @@ def update_settings(body: SettingsBody):
 @app.post("/worker/llm/claim")
 def claim_llm_job(body: WorkerClaimBody, x_worker_secret: Optional[str] = Header(default=None, alias="X-Worker-Secret")):
     """Claim the next queued local-queue LLM job for an external worker."""
-    wanted = [t for t in body.job_types if t in {"review", "assessment"}]
+    wanted = [t for t in body.job_types if t in {"review", "assessment", "compliance_followup"}]
     expected = config_store.get_llm_worker_secret()
     if expected:
         _require_worker_secret(x_worker_secret)
@@ -967,7 +1123,7 @@ def claim_llm_job(body: WorkerClaimBody, x_worker_secret: Optional[str] = Header
     else:
         if x_worker_secret:
             raise HTTPException(status_code=401, detail="Invalid worker secret")
-        if wanted and "review" not in wanted:
+        if wanted and not any(t in {"review", "compliance_followup"} for t in wanted):
             return Response(status_code=204)
         job = review_jobs.claim_next_agentic_review_job(executor="local_queue", worker_id=body.worker_id.strip())
     if not job:
@@ -990,8 +1146,10 @@ def complete_llm_job(
     expected = config_store.get_llm_worker_secret()
     if expected:
         _require_worker_secret(x_worker_secret)
-    elif x_worker_secret or not _is_agentic_review_job(job):
+    elif x_worker_secret or not _is_secretless_local_job(job):
         raise HTTPException(status_code=401, detail="Invalid worker secret")
+    if job.get("job_type") == "compliance_followup":
+        return review_jobs.update_job(job_id, status="done", result=body.result)
     normalized = _normalize_result_payload(body.result)
     _persist_local_job_result(job, normalized)
     return review_jobs.update_job(job_id, status="done", result=normalized)
@@ -1012,7 +1170,7 @@ def fail_llm_job(
     expected = config_store.get_llm_worker_secret()
     if expected:
         _require_worker_secret(x_worker_secret)
-    elif x_worker_secret or not _is_agentic_review_job(job):
+    elif x_worker_secret or not _is_secretless_local_job(job):
         raise HTTPException(status_code=401, detail="Invalid worker secret")
     return review_jobs.update_job(job_id, status="error", error=body.error)
 

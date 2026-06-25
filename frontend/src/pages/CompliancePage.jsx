@@ -14,6 +14,14 @@ export default function CompliancePage() {
   const [loadingHistory, setLoadingHistory] = useState(false)
   const [applying, setApplying] = useState(null)
   const [applyMsg, setApplyMsg] = useState(null)
+  const [executionMode, setExecutionMode] = useState('inline')
+  const [localAgenticTargets, setLocalAgenticTargets] = useState([])
+  const [selectedAgenticTarget, setSelectedAgenticTarget] = useState('')
+  const [creatingIssue, setCreatingIssue] = useState(false)
+  const [issueMsg, setIssueMsg] = useState(null)
+  const [issueUrl, setIssueUrl] = useState(null)
+  const [followupJobId, setFollowupJobId] = useState(null)
+  const [handoffAfterIssue, setHandoffAfterIssue] = useState(false)
 
   useEffect(() => {
     api.listRepos().then(r => {
@@ -21,7 +29,13 @@ export default function CompliancePage() {
       setRepos(list)
       if (list.length > 0 && !selectedRepo) setSelectedRepo(list[0])
     }).catch(() => {})
-  }, [selectedRepo])
+    api.getSettings().then(s => {
+      setExecutionMode(s.llm_execution_mode || 'inline')
+      const targets = (s.local_agentic_targets || []).filter(t => t.enabled)
+      setLocalAgenticTargets(targets)
+      setSelectedAgenticTarget(targets[0]?.id || '')
+    }).catch(() => {})
+  }, [])
 
   const loadHistory = useCallback(async (repo) => {
     if (!repo) return
@@ -42,6 +56,10 @@ export default function CompliancePage() {
     setCurrentAnalysisId(null)
     setError(null)
     setApplyMsg(null)
+    setIssueMsg(null)
+    setIssueUrl(null)
+    setFollowupJobId(null)
+    setHandoffAfterIssue(false)
   }, [selectedRepo, loadHistory])
 
   async function runAnalysis() {
@@ -49,6 +67,7 @@ export default function CompliancePage() {
     setLoading(true)
     setError(null)
     setApplyMsg(null)
+    setIssueMsg(null)
     try {
       const data = await api.analyzeCompliance(selectedRepo)
       setDashboard(data)
@@ -67,6 +86,9 @@ export default function CompliancePage() {
     setLoading(true)
     setError(null)
     setApplyMsg(null)
+    setIssueMsg(null)
+    setIssueUrl(null)
+    setFollowupJobId(null)
     try {
       const data = await api.getComplianceAnalysis(id)
       setDashboard(data)
@@ -83,6 +105,9 @@ export default function CompliancePage() {
     setLoading(true)
     setError(null)
     setApplyMsg(null)
+    setIssueMsg(null)
+    setIssueUrl(null)
+    setFollowupJobId(null)
     try {
       const data = await api.reanalyzeCompliance(currentAnalysisId)
       setDashboard(data)
@@ -108,10 +133,33 @@ export default function CompliancePage() {
     }
   }
 
+  async function createIssueFromAnalysis() {
+    if (!currentAnalysisId) return
+    setCreatingIssue(true)
+    setIssueMsg(null)
+    setIssueUrl(null)
+    setFollowupJobId(null)
+    try {
+      const payload = {}
+      if (handoffAfterIssue && executionMode === 'local_queue' && selectedAgenticTarget) {
+        payload.agentic_target = selectedAgenticTarget
+      }
+      const res = await api.createComplianceIssue(currentAnalysisId, payload)
+      setIssueUrl(res.html_url || null)
+      setFollowupJobId(res.job_id || null)
+      setIssueMsg(res.job_id ? 'Issue created and local follow-up queued ✓' : 'Issue created ✓')
+    } catch (e) {
+      setIssueMsg(e.message)
+    } finally {
+      setCreatingIssue(false)
+    }
+  }
+
   const health = dashboard?.health
   const coverage = dashboard?.coverage
   const suggestions = dashboard?.suggestions || []
   const createdAt = dashboard?.created_at
+  const canQueueFollowup = executionMode === 'local_queue' && localAgenticTargets.length > 0
 
   return (
     <div style={{ maxWidth: 900, width: '100%' }}>
@@ -154,12 +202,42 @@ export default function CompliancePage() {
                 <div style={{ fontSize: 13, color: 'var(--text-2)' }}>
                   {currentAnalysisId ? `Saved analysis #${currentAnalysisId}` : 'Live preview'} · {new Date(createdAt).toLocaleString()}
                 </div>
-                {currentAnalysisId && (
-                  <button onClick={reanalyze} disabled={loading} style={{ ...smallBtn, opacity: loading ? 0.6 : 1 }}>
-                    {loading ? 'Re-analyzing…' : '↻ Re-analyze'}
-                  </button>
-                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  {canQueueFollowup && (
+                    <>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-2)' }}>
+                        <input type="checkbox" checked={handoffAfterIssue} onChange={e => setHandoffAfterIssue(e.target.checked)} />
+                        Hand off locally
+                      </label>
+                      <select value={selectedAgenticTarget} onChange={e => setSelectedAgenticTarget(e.target.value)} disabled={!handoffAfterIssue} style={{ ...inputStyle, width: 180, padding: '6px 10px', fontSize: 12, opacity: handoffAfterIssue ? 1 : 0.6 }}>
+                        {localAgenticTargets.map(target => <option key={target.id} value={target.id}>{target.label}</option>)}
+                      </select>
+                    </>
+                  )}
+                  {currentAnalysisId && (
+                    <button onClick={createIssueFromAnalysis} disabled={creatingIssue || (handoffAfterIssue && canQueueFollowup && !selectedAgenticTarget)} style={{ ...smallBtn, opacity: (creatingIssue || (handoffAfterIssue && canQueueFollowup && !selectedAgenticTarget)) ? 0.6 : 1 }}>
+                      {creatingIssue ? 'Creating issue…' : (handoffAfterIssue && canQueueFollowup ? 'Create issue + hand off' : 'Create GitHub issue')}
+                    </button>
+                  )}
+                  {currentAnalysisId && (
+                    <button onClick={reanalyze} disabled={loading} style={{ ...smallBtn, opacity: loading ? 0.6 : 1 }}>
+                      {loading ? 'Re-analyzing…' : '↻ Re-analyze'}
+                    </button>
+                  )}
+                </div>
               </div>
+              {canQueueFollowup && (
+                <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 12 }}>
+                  Local queue mode is enabled, so issue creation can optionally enqueue a configured agentic target to assess the findings, make changes, and open a PR tied to the issue.
+                </div>
+              )}
+              {issueMsg && (
+                <div style={{ fontSize: 13, color: issueMsg.includes('✓') ? 'var(--green)' : 'var(--red)', marginBottom: 12 }}>
+                  {issueMsg}
+                  {issueUrl && <> {' '}<a href={issueUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>View issue</a></>}
+                  {followupJobId && <> {' '}· queued job #{followupJobId}</>}
+                </div>
+              )}
               <DashboardView health={health} coverage={coverage} suggestions={suggestions} applying={applying} applyMsg={applyMsg} onApply={applySuggestion} />
             </Card>
           )}

@@ -995,3 +995,15 @@ def test_settings_roundtrip_local_review_agents(client):
     }).json()
     assert body["local_review_agents"][0]["id"] == "codex"
     assert any(agent["id"] == "kimi" and agent["enabled"] is False for agent in body["local_review_agents"])
+
+
+def test_settings_roundtrip_local_agentic_targets(client):
+    tc, _ = client
+    body = tc.put("/api/settings", json={
+        "local_agentic_targets": [
+            {"id": "codex", "label": "Codex", "enabled": True, "command": ["codex", "exec", "--output-last-message", "{output_path}", "-"]},
+            {"id": "builder", "label": "Builder", "enabled": False, "command": ["builder", "--prompt-file", "{prompt_path}"]},
+        ]
+    }).json()
+    assert body["local_agentic_targets"][0]["id"] == "codex"
+    assert any(target["id"] == "builder" and target["enabled"] is False for target in body["local_agentic_targets"])
