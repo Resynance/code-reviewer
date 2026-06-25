@@ -821,6 +821,33 @@ def test_webhook_rejects_when_no_secret_configured(client):
     assert resp.status_code == 401
 
 
+def test_webhook_rejects_unconfigured_repo(client):
+    tc, _ = client
+    config_store.save_config({
+        "webhook_secret": "s",
+        "github_token": "ghp_test",
+        "repos": ["org/a"],
+    })
+    payload = {
+        "action": "opened",
+        "pull_request": {
+            "number": 42,
+            "title": "Test PR",
+            "body": "desc",
+            "user": {"login": "dev"},
+            "base": {"ref": "main"},
+        },
+        "repository": {"full_name": "org/private"},
+    }
+    body = json.dumps(payload).encode()
+    resp = tc.post("/webhook/github", content=body, headers={
+        "X-GitHub-Event": "pull_request",
+        "X-Hub-Signature-256": _sign(b"s", body),
+    })
+    assert resp.status_code == 403
+    assert "not configured" in resp.json()["detail"]
+
+
 # ----- assessments ----- #
 
 def _fake_assessment_engine():

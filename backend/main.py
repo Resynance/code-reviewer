@@ -813,6 +813,7 @@ def create_compliance_issue(analysis_id: int, body: ComplianceIssueBody):
     if target_id:
         if _llm_execution_mode() != "local_queue":
             raise HTTPException(status_code=400, detail="Agentic follow-up is available only in local_queue mode")
+        _require_local_queue_configured()
         enabled_targets = {
             str(item.get("id") or "").strip().lower()
             for item in config_store.get_local_agentic_targets()
@@ -1487,7 +1488,7 @@ def _verify_github_signature(body: bytes, signature: Optional[str]) -> bool:
 
 async def _fetch_pr_diff(repo: str, pr_number: int) -> str:
     """Fetch a PR's unified diff from GitHub."""
-    token = config_store.get_token_for(repo.split("/")[0]) or ""
+    token = _token_for(repo)
     headers = {
         "Accept": "application/vnd.github.v3.diff",
         "X-GitHub-Api-Version": "2022-11-28",
