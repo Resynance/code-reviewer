@@ -33,6 +33,7 @@ _DEFAULTS = {
     "llm_worker_secret": "",
     "llm_base_url": "",
     "llm_api_key": "",
+    "llm_timeout_seconds": "",
     # New: ordered list of model slots [{label, model, provider}].
     # When set, this supersedes the legacy openrouter_model / openrouter_model_2 fields.
     "openrouter_models": [],
@@ -71,6 +72,8 @@ _DEFAULTS = {
 DEFAULT_MODEL = "anthropic/claude-sonnet-4.5"
 DEFAULT_EMBEDDING_MODEL = "openai/text-embedding-3-small"
 DEFAULT_LLM_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_LLM_TIMEOUT_SECONDS = 240
+DEFAULT_LOCAL_LLM_TIMEOUT_SECONDS = 600
 _LEGACY_LOCAL_AGENT_COMMANDS = {
     "kimi": [
         ["kimi"],
@@ -271,6 +274,20 @@ def get_llm_base_url() -> str:
 
 def get_llm_api_key() -> str:
     return load_config().get("llm_api_key") or os.getenv("OPENROUTER_API_KEY", "")
+
+
+def get_llm_timeout_seconds(base_url: Optional[str] = None) -> int:
+    raw = load_config().get("llm_timeout_seconds") or os.getenv("LLM_TIMEOUT_SECONDS") or ""
+    if str(raw).strip():
+        try:
+            value = int(str(raw).strip())
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    if is_openrouter_target(base_url):
+        return DEFAULT_LLM_TIMEOUT_SECONDS
+    return DEFAULT_LOCAL_LLM_TIMEOUT_SECONDS
 
 
 def is_openrouter_target(base_url: Optional[str] = None) -> bool:

@@ -269,7 +269,7 @@ class CodeReviewEngine:
             # a slow model call with an opaque 504. max_retries=0 is essential:
             # the SDK's default retries would re-fire a timed-out call and push
             # total time past the limit anyway.
-            "timeout": 240,
+            "timeout": config_store.get_llm_timeout_seconds(base_url),
             "max_retries": 0,
         }
         if config_store.is_openrouter_target(base_url):

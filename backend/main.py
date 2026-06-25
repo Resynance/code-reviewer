@@ -216,6 +216,7 @@ class SettingsBody(BaseModel):
     llm_worker_secret: Optional[str] = None
     llm_base_url: Optional[str] = None
     llm_api_key: Optional[str] = None
+    llm_timeout_seconds: Optional[str] = None
     compliance_policies: Optional[dict] = None
     local_review_agents: Optional[list[dict]] = None
 
@@ -480,8 +481,8 @@ def create_review(body: ReviewRequestBody):
         raise HTTPException(status_code=400, detail="Agentic review is available only in local_queue mode")
     if executor == "local_queue" and not body.agentic:
         _require_local_queue_configured()
-    if executor == "inline" and not os.getenv("OPENROUTER_API_KEY"):
-        raise HTTPException(status_code=400, detail="OPENROUTER_API_KEY not set")
+    if executor == "inline" and not config_store.get_llm_api_key():
+        raise HTTPException(status_code=400, detail="LLM API key not set")
     effective = _review_body_with_repo_defaults(body)
     job = review_jobs.create_job(effective.model_dump(), job_type="review", executor=executor)
     return {"id": job["id"], "status": job["status"]}
@@ -559,8 +560,8 @@ def create_assessment(body: AssessmentRequestBody):
     executor = _llm_execution_mode()
     if executor == "local_queue":
         _require_local_queue_configured()
-    if executor == "inline" and not os.getenv("OPENROUTER_API_KEY"):
-        raise HTTPException(status_code=400, detail="OPENROUTER_API_KEY not set")
+    if executor == "inline" and not config_store.get_llm_api_key():
+        raise HTTPException(status_code=400, detail="LLM API key not set")
     effective = _assessment_body_with_repo_defaults(body)
     payload = effective.model_dump()
     payload["_type"] = "assessment"
@@ -745,6 +746,7 @@ def get_stats():
         "llm_worker_secret_set": bool(config_store.get_llm_worker_secret()),
         "llm_base_url": config_store.get_llm_base_url(),
         "api_key_configured": bool(config_store.get_llm_api_key()),
+        "llm_timeout_seconds": config_store.get_llm_timeout_seconds(),
         "github_token_configured": bool(config_store.get_github_token()),
     }
 
@@ -767,6 +769,7 @@ def get_settings():
         "llm_worker_secret_set": bool(config_store.get_llm_worker_secret()),
         "llm_base_url": config_store.get_llm_base_url(),
         "llm_api_key_set": bool(config_store.get_llm_api_key()),
+        "llm_timeout_seconds": str(config_store.get_llm_timeout_seconds()),
         # Model list — not secret, return the effective resolved values.
         "openrouter_models": config_store.get_models(),
         # Legacy fields for backward compat with older frontend versions.
@@ -817,6 +820,8 @@ def update_settings(body: SettingsBody):
         update["llm_base_url"] = body.llm_base_url.strip()
     if body.llm_api_key is not None:
         update["llm_api_key"] = body.llm_api_key.strip()
+    if body.llm_timeout_seconds is not None:
+        update["llm_timeout_seconds"] = body.llm_timeout_seconds.strip()
     if body.compliance_policies is not None:
         update["compliance_policies"] = body.compliance_policies
     if body.local_review_agents is not None:

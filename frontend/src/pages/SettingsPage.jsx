@@ -17,6 +17,7 @@ export default function SettingsPage() {
   const [workerSecret, setWorkerSecret] = useState('')
   const [llmBaseUrl, setLlmBaseUrl] = useState('')
   const [llmApiKey, setLlmApiKey] = useState('')
+  const [llmTimeoutSeconds, setLlmTimeoutSeconds] = useState('')
   const [localReviewAgentsInput, setLocalReviewAgentsInput] = useState('')
   const [savingLlm, setSavingLlm] = useState(false)
   const [llmMsg, setLlmMsg] = useState(null)
@@ -66,6 +67,7 @@ export default function SettingsPage() {
       setEmbeddingInput(s.embedding_model || '')
       setLlmExecutionMode(s.llm_execution_mode || 'inline')
       setLlmBaseUrl(s.llm_base_url || '')
+      setLlmTimeoutSeconds(s.llm_timeout_seconds || '')
       setLocalReviewAgentsInput(JSON.stringify(s.local_review_agents || [], null, 2))
       setCompliancePoliciesInput(JSON.stringify(s.compliance_policies || { default: {}, repos: {} }, null, 2))
     }).catch(() => {})
@@ -180,11 +182,13 @@ export default function SettingsPage() {
         llm_worker_secret: workerSecret,
         llm_base_url: llmBaseUrl,
         llm_api_key: llmApiKey,
+        llm_timeout_seconds: llmTimeoutSeconds,
         local_review_agents: parsedAgents,
       })
       setSettings(s)
       setLlmExecutionMode(s.llm_execution_mode || 'inline')
       setLlmBaseUrl(s.llm_base_url || '')
+      setLlmTimeoutSeconds(s.llm_timeout_seconds || '')
       setLocalReviewAgentsInput(JSON.stringify(s.local_review_agents || [], null, 2))
       setWorkerSecret('')
       setLlmApiKey('')
@@ -349,6 +353,7 @@ export default function SettingsPage() {
           <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 14 }}>
             <StatRow label="LLM API key" value={stats.api_key_configured ? 'Configured ✓' : 'Not set ✗'} ok={stats.api_key_configured} />
             <StatRow label="LLM endpoint" value={stats.llm_base_url || '—'} />
+            <StatRow label="LLM timeout" value={`${stats.llm_timeout_seconds || '—'}s`} />
             <StatRow label="GitHub tokens" value={
               settings?.github_tokens?.length
                 ? `${settings.github_tokens.length} configured ✓`
@@ -406,6 +411,19 @@ export default function SettingsPage() {
             placeholder={settings?.llm_api_key_set ? 'Leave blank to clear or replace' : 'API key for the selected LLM endpoint'}
             style={inputStyle}
           />
+        </div>
+
+        <div style={{ marginTop: 14 }}>
+          <label style={labelStyle}>LLM timeout (seconds)</label>
+          <input
+            value={llmTimeoutSeconds}
+            onChange={e => setLlmTimeoutSeconds(e.target.value)}
+            placeholder="Leave blank for default (240s OpenRouter, 600s local)"
+            style={inputStyle}
+          />
+          <div style={{ color: 'var(--text-3)', fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
+            Network-hosted local models often need longer than the OpenRouter default. Leave blank to use 600 seconds for non-OpenRouter endpoints.
+          </div>
         </div>
 
         <div style={{ marginTop: 14 }}>

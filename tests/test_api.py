@@ -27,6 +27,7 @@ def test_settings_default(client):
     assert body["llm_worker_secret_set"] is False
     assert body["llm_base_url"] == config_store.DEFAULT_LLM_BASE_URL
     assert body["llm_api_key_set"] is False
+    assert body["llm_timeout_seconds"] == str(config_store.DEFAULT_LLM_TIMEOUT_SECONDS)
     assert body["openrouter_model"] == config_store.DEFAULT_MODEL
     assert isinstance(body["openrouter_models"], list)
     assert isinstance(body["local_review_agents"], list)
@@ -53,6 +54,7 @@ def test_settings_put_updates_and_hides_secrets(client):
         "llm_worker_secret": "worker-secret", "llm_execution_mode": "local_queue",
         "llm_base_url": "http://192.168.0.197:8080/",
         "llm_api_key": "local-llm",
+        "llm_timeout_seconds": "900",
         "repos": ["org/a"], "openrouter_model": "openai/gpt-4o",
         "openrouter_provider": "Azure",
     })
@@ -62,6 +64,7 @@ def test_settings_put_updates_and_hides_secrets(client):
     assert body["llm_worker_secret_set"] is True
     assert body["llm_base_url"] == "http://192.168.0.197:8080"
     assert body["llm_api_key_set"] is True
+    assert body["llm_timeout_seconds"] == "900"
     assert body["openrouter_model"] == "openai/gpt-4o"
     assert body["openrouter_provider"] == "Azure"
     # secrets must never be echoed back, in any field
@@ -164,6 +167,22 @@ def test_stats_shape(client):
 def test_balance_unconfigured(client):
     tc, _ = client  # clean_env clears OPENROUTER_API_KEY
     assert tc.get("/api/balance").json() == {"configured": False}
+
+
+def test_review_inline_accepts_saved_llm_api_key(client, monkeypatch):
+    tc, main = client
+    tc.put("/api/settings", json={"llm_api_key": "local-llm"})
+
+    class FakeEngine:
+        def review(self, req):
+            return ReviewResult(pr_number=req.pr_number, summary="ok", approved=True,
+                                confidence=0.8, issues=[], suggestions=[], past_decisions_applied=[],
+                                compliance_review={"enabled": req.compliance, "hipaa_relevant": req.compliance})
+
+    monkeypatch.setattr(main, "get_engine", lambda: FakeEngine())
+
+    job = tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+x"}).json()
+    assert job["status"] == "queued"
 
 
 def test_llm_test_endpoint_success(client, monkeypatch):

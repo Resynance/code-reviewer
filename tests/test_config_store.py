@@ -14,6 +14,7 @@ def test_defaults_when_no_file(cfg):
         "llm_worker_secret": "",
         "llm_base_url": "",
         "llm_api_key": "",
+        "llm_timeout_seconds": "",
         "openrouter_models": [],
         "openrouter_model": "",
         "openrouter_provider": "",
@@ -151,6 +152,16 @@ def test_llm_api_key_fallback(cfg, monkeypatch):
     assert cfg.get_llm_api_key() == "env-key"
     cfg.save_config({"llm_api_key": "cfg-key"})
     assert cfg.get_llm_api_key() == "cfg-key"
+
+
+def test_llm_timeout_default_varies_by_target(cfg):
+    assert cfg.get_llm_timeout_seconds("https://openrouter.ai/api/v1") == cfg.DEFAULT_LLM_TIMEOUT_SECONDS
+    assert cfg.get_llm_timeout_seconds("http://192.168.0.197:8080/v1") == cfg.DEFAULT_LOCAL_LLM_TIMEOUT_SECONDS
+
+
+def test_llm_timeout_config_overrides_default(cfg):
+    cfg.save_config({"llm_timeout_seconds": "900"})
+    assert cfg.get_llm_timeout_seconds("http://192.168.0.197:8080/v1") == 900
 
 
 def test_openrouter_target_detection(cfg):

@@ -182,7 +182,7 @@ class AssessmentEngine:
         kwargs = {
             "base_url": base_url,
             "api_key": config_store.get_llm_api_key(),
-            "timeout": 240,
+            "timeout": config_store.get_llm_timeout_seconds(base_url),
             "max_retries": 0,
         }
         if config_store.is_openrouter_target(base_url):
