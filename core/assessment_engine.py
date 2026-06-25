@@ -15,7 +15,6 @@ from typing import Optional
 import config_store
 import compliance
 
-OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 GITHUB_API_BASE = "https://api.github.com"
 
 _MAX_FILE_BYTES = 25_000   # content limit per file
@@ -174,19 +173,24 @@ Call submit_assessment exactly once with your findings."""
 
 class AssessmentEngine:
     def __init__(self, model: Optional[str] = None):
+        self._model_override = model
+
+    def _make_client(self):
         from openai import OpenAI
 
-        self._model_override = model
-        self._client = OpenAI(
-            base_url=OPENROUTER_BASE_URL,
-            api_key=os.getenv("OPENROUTER_API_KEY"),
-            default_headers={
-                "HTTP-Referer": os.getenv("OPENROUTER_APP_URL", "http://localhost:1500"),
+        base_url = config_store.get_llm_base_url()
+        kwargs = {
+            "base_url": base_url,
+            "api_key": config_store.get_llm_api_key(),
+            "timeout": config_store.get_llm_timeout_seconds(base_url),
+            "max_retries": 0,
+        }
+        if config_store.is_openrouter_target(base_url):
+            kwargs["default_headers"] = {
+                "HTTP-Referer": "http://localhost:1500",
                 "X-Title": "ReviewBot",
-            },
-            timeout=240,
-            max_retries=0,
-        )
+            }
+        return OpenAI(**kwargs)
 
     def assess(self, request: AssessmentRequest) -> AssessmentResult:
         owner = request.repo.split("/")[0]
@@ -196,6 +200,7 @@ class AssessmentEngine:
 
         tree_lines, file_contents = self._fetch_repo_content(request.repo, token)
         prompt = self._build_prompt(request.repo, tree_lines, file_contents, request.compliance)
+        client = self._make_client()
 
         model = request.model or self._model_override or config_store.get_model()
         provider = request.provider if request.provider is not None else config_store.get_provider()
@@ -210,10 +215,10 @@ class AssessmentEngine:
             tools=[_ASSESSMENT_TOOL],
             tool_choice={"type": "function", "function": {"name": "submit_assessment"}},
         )
-        if provider:
+        if provider and config_store.is_openrouter_target():
             kwargs["extra_body"] = {"provider": {"order": [provider], "allow_fallbacks": False}}
 
-        response = self._client.chat.completions.create(**kwargs)
+        response = client.chat.completions.create(**kwargs)
         payload = self._extract_tool_input(response)
 
         deterministic_compliance = None

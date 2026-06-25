@@ -47,7 +47,8 @@ class FakeClient:
 def make_engine(store, payload, monkeypatch, no_tool=False, model_override=None, content=None, raw_arguments=None, response=None):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     eng = CodeReviewEngine(store, model=model_override)
-    eng._client = FakeClient(response if response is not None else make_response(payload, no_tool=no_tool, content=content, raw_arguments=raw_arguments))
+    eng._test_client = FakeClient(response if response is not None else make_response(payload, no_tool=no_tool, content=content, raw_arguments=raw_arguments))
+    monkeypatch.setattr(eng, "_make_client", lambda: eng._test_client)
     return eng
 
 
@@ -493,10 +494,10 @@ def test_unsupported_tool_call_retries_without_tools(store, cfg, monkeypatch):
     eng = make_engine(store, payload, monkeypatch, response=responses)
     result = eng.review(make_req(model="google/gemini-2.5-flash-lite"))
     assert result.summary == "retry fallback"
-    assert "tools" in eng._client.calls[0]
-    assert "tool_choice" in eng._client.calls[0]
-    assert "tools" not in eng._client.calls[1]
-    assert "tool_choice" not in eng._client.calls[1]
+    assert "tools" in eng._test_client.calls[0]
+    assert "tool_choice" in eng._test_client.calls[0]
+    assert "tools" not in eng._test_client.calls[1]
+    assert "tool_choice" not in eng._test_client.calls[1]
 
 
 # ----- model & provider resolution ----- #
@@ -505,21 +506,24 @@ def test_model_resolved_from_config(store, cfg, monkeypatch):
     cfg.save_config({"openrouter_model": "openai/gpt-4o"})
     eng = make_engine(store, review_payload(), monkeypatch)
     eng.review(make_req())
-    assert eng._client.captured["model"] == "openai/gpt-4o"
+    assert eng._test_client.captured["model"] == "openai/gpt-4o"
 
 
 def test_model_override_wins(store, cfg, monkeypatch):
     cfg.save_config({"openrouter_model": "openai/gpt-4o"})
     eng = make_engine(store, review_payload(), monkeypatch, model_override="anthropic/claude-x")
     eng.review(make_req())
-    assert eng._client.captured["model"] == "anthropic/claude-x"
+    assert eng._test_client.captured["model"] == "anthropic/claude-x"
 
 
 def test_provider_sets_extra_body(store, cfg, monkeypatch):
-    cfg.save_config({"openrouter_provider": "Anthropic"})
+    cfg.save_config({
+        "llm_base_url": "https://openrouter.ai/api/v1",
+        "openrouter_provider": "Anthropic",
+    })
     eng = make_engine(store, review_payload(), monkeypatch)
     eng.review(make_req())
-    provider = eng._client.captured["extra_body"]["provider"]
+    provider = eng._test_client.captured["extra_body"]["provider"]
     assert provider["order"] == ["Anthropic"]
     assert provider["allow_fallbacks"] is False
 
@@ -527,10 +531,20 @@ def test_provider_sets_extra_body(store, cfg, monkeypatch):
 def test_no_provider_means_no_extra_body(store, cfg, monkeypatch):
     eng = make_engine(store, review_payload(), monkeypatch)
     eng.review(make_req())
-    assert "extra_body" not in eng._client.captured
+    assert "extra_body" not in eng._test_client.captured
+
+
+def test_non_openrouter_target_skips_provider_routing(store, cfg, monkeypatch):
+    cfg.save_config({
+        "llm_base_url": "http://192.168.0.197:8080/",
+        "openrouter_provider": "Anthropic",
+    })
+    eng = make_engine(store, review_payload(), monkeypatch)
+    eng.review(make_req())
+    assert "extra_body" not in eng._test_client.captured
 
 
 def test_forces_submit_review_tool(store, cfg, monkeypatch):
     eng = make_engine(store, review_payload(), monkeypatch)
     eng.review(make_req())
-    assert eng._client.captured["tool_choice"] == {"type": "function", "function": {"name": "submit_review"}}
+    assert eng._test_client.captured["tool_choice"] == {"type": "function", "function": {"name": "submit_review"}}

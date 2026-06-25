@@ -173,6 +173,8 @@ CHROMA_PERSIST_DIR=.chroma
 # Set llm_execution_mode to "local_queue" in Settings or via LLM_EXECUTION_MODE,
 # then run: python local_worker.py
 # LLM_EXECUTION_MODE=inline
+# OPENROUTER_BASE_URL=http://192.168.0.197:8080/
+# OPENROUTER_API_KEY=local-llm
 # LLM_WORKER_SECRET=change-me-to-a-strong-random-string
 # LOCAL_LLM_BASE_URL=http://localhost:8080/
 # Some servers expect /v1 (for example Ollama: http://localhost:11434/v1);

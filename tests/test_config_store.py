@@ -12,6 +12,9 @@ def test_defaults_when_no_file(cfg):
         "repos": [],
         "llm_execution_mode": "",
         "llm_worker_secret": "",
+        "llm_base_url": "",
+        "llm_api_key": "",
+        "llm_timeout_seconds": "",
         "openrouter_models": [],
         "openrouter_model": "",
         "openrouter_provider": "",
@@ -134,6 +137,36 @@ def test_llm_worker_secret_fallback(cfg, monkeypatch):
     assert cfg.get_llm_worker_secret() == "env-secret"
     cfg.save_config({"llm_worker_secret": "cfg-secret"})
     assert cfg.get_llm_worker_secret() == "cfg-secret"
+
+
+def test_llm_base_url_default_env_then_config(cfg, monkeypatch):
+    assert cfg.get_llm_base_url() == cfg.DEFAULT_LLM_BASE_URL
+    monkeypatch.setenv("OPENROUTER_BASE_URL", "http://192.168.0.197:8080/")
+    assert cfg.get_llm_base_url() == "http://192.168.0.197:8080"
+    cfg.save_config({"llm_base_url": "http://localhost:11434/v1/"})
+    assert cfg.get_llm_base_url() == "http://localhost:11434/v1"
+
+
+def test_llm_api_key_fallback(cfg, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "env-key")
+    assert cfg.get_llm_api_key() == "env-key"
+    cfg.save_config({"llm_api_key": "cfg-key"})
+    assert cfg.get_llm_api_key() == "cfg-key"
+
+
+def test_llm_timeout_default_varies_by_target(cfg):
+    assert cfg.get_llm_timeout_seconds("https://openrouter.ai/api/v1") == cfg.DEFAULT_LLM_TIMEOUT_SECONDS
+    assert cfg.get_llm_timeout_seconds("http://192.168.0.197:8080/v1") == cfg.DEFAULT_LOCAL_LLM_TIMEOUT_SECONDS
+
+
+def test_llm_timeout_config_overrides_default(cfg):
+    cfg.save_config({"llm_timeout_seconds": "900"})
+    assert cfg.get_llm_timeout_seconds("http://192.168.0.197:8080/v1") == 900
+
+
+def test_openrouter_target_detection(cfg):
+    assert cfg.is_openrouter_target("https://openrouter.ai/api/v1") is True
+    assert cfg.is_openrouter_target("http://192.168.0.197:8080/") is False
 
 
 def test_local_review_agents_normalized(cfg):

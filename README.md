@@ -110,6 +110,7 @@ a dropdown of configured repos.
 | Variable | Required | Description |
 |---|---|---|
 | `OPENROUTER_API_KEY` | Yes | Get from openrouter.ai/keys |
+| `OPENROUTER_BASE_URL` | No | Base URL for inline review/assessment model calls. Default: `https://openrouter.ai/api/v1`. Can point to any OpenAI-compatible server, for example `http://192.168.0.197:8080/`. |
 | `OPENROUTER_MODEL` | No | Model slug from openrouter.ai/models (default: `anthropic/claude-sonnet-4.5`) |
 | `LLM_EXECUTION_MODE` | No | `inline` (default) or `local_queue` |
 | `LLM_WORKER_SECRET` | No | Shared secret for the local worker endpoints |
@@ -147,6 +148,12 @@ For queued local-LLM reviews and assessments, `local_worker.py` reads
 `LOCAL_LLM_BASE_URL` directly. Both root-style endpoints such as
 `http://localhost:8080/` and versioned endpoints such as
 `http://localhost:11434/v1` are supported.
+
+For inline reviews and assessments, the backend uses `OPENROUTER_BASE_URL`
+from the environment or the Settings page. This can also point at a LAN-hosted
+OpenAI-compatible server such as `http://192.168.0.197:8080/`.
+The Settings page includes a `Test endpoint` button that probes the configured
+URL and suggests adding or removing `/v1` for common llama.cpp-style setups.
 
 The default local agent list includes:
 - `codex` using `codex exec`

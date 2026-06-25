@@ -15,9 +15,14 @@ export default function SettingsPage() {
   const [modelMsg, setModelMsg] = useState(null)
   const [llmExecutionMode, setLlmExecutionMode] = useState('inline')
   const [workerSecret, setWorkerSecret] = useState('')
+  const [llmBaseUrl, setLlmBaseUrl] = useState('')
+  const [llmApiKey, setLlmApiKey] = useState('')
+  const [llmTimeoutSeconds, setLlmTimeoutSeconds] = useState('')
   const [localReviewAgentsInput, setLocalReviewAgentsInput] = useState('')
   const [savingLlm, setSavingLlm] = useState(false)
   const [llmMsg, setLlmMsg] = useState(null)
+  const [testingLlm, setTestingLlm] = useState(false)
+  const [llmTestMsg, setLlmTestMsg] = useState(null)
 
   // GitHub token list
   const [tokenInput, setTokenInput] = useState('')
@@ -61,6 +66,8 @@ export default function SettingsPage() {
       setModelsList(s.openrouter_models || [])
       setEmbeddingInput(s.embedding_model || '')
       setLlmExecutionMode(s.llm_execution_mode || 'inline')
+      setLlmBaseUrl(s.llm_base_url || '')
+      setLlmTimeoutSeconds(s.llm_timeout_seconds || '')
       setLocalReviewAgentsInput(JSON.stringify(s.local_review_agents || [], null, 2))
       setCompliancePoliciesInput(JSON.stringify(s.compliance_policies || { default: {}, repos: {} }, null, 2))
     }).catch(() => {})
@@ -173,18 +180,47 @@ export default function SettingsPage() {
       const s = await api.saveSettings({
         llm_execution_mode: llmExecutionMode,
         llm_worker_secret: workerSecret,
+        llm_base_url: llmBaseUrl,
+        llm_api_key: llmApiKey,
+        llm_timeout_seconds: llmTimeoutSeconds,
         local_review_agents: parsedAgents,
       })
       setSettings(s)
       setLlmExecutionMode(s.llm_execution_mode || 'inline')
+      setLlmBaseUrl(s.llm_base_url || '')
+      setLlmTimeoutSeconds(s.llm_timeout_seconds || '')
       setLocalReviewAgentsInput(JSON.stringify(s.local_review_agents || [], null, 2))
       setWorkerSecret('')
+      setLlmApiKey('')
       setLlmMsg('Saved ✓')
       refreshStats()
     } catch (e) {
       setLlmMsg(e.message)
     } finally {
       setSavingLlm(false)
+    }
+  }
+
+  async function testLlmEndpoint() {
+    setTestingLlm(true)
+    setLlmTestMsg(null)
+    try {
+      const res = await api.testLlmEndpoint({
+        llm_base_url: llmBaseUrl,
+        llm_api_key: llmApiKey,
+      })
+      if (res.ok) {
+        const count = typeof res.model_count === 'number' ? ` (${res.model_count} models)` : ''
+        setLlmTestMsg(`Connected to ${res.base_url}${count}`)
+      } else if (res.suggested_base_url) {
+        setLlmTestMsg(`${res.message} Suggested: ${res.suggested_base_url}`)
+      } else {
+        setLlmTestMsg(res.message)
+      }
+    } catch (e) {
+      setLlmTestMsg(e.message)
+    } finally {
+      setTestingLlm(false)
     }
   }
 
@@ -315,7 +351,9 @@ export default function SettingsPage() {
       <Card title="System Status">
         {stats ? (
           <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 14 }}>
-            <StatRow label="OpenRouter API key" value={stats.api_key_configured ? 'Configured ✓' : 'Not set ✗'} ok={stats.api_key_configured} />
+            <StatRow label="LLM API key" value={stats.api_key_configured ? 'Configured ✓' : 'Not set ✗'} ok={stats.api_key_configured} />
+            <StatRow label="LLM endpoint" value={stats.llm_base_url || '—'} />
+            <StatRow label="LLM timeout" value={`${stats.llm_timeout_seconds || '—'}s`} />
             <StatRow label="GitHub tokens" value={
               settings?.github_tokens?.length
                 ? `${settings.github_tokens.length} configured ✓`
@@ -335,7 +373,7 @@ export default function SettingsPage() {
 
       <Card title="LLM Execution">
         <p style={{ color: 'var(--text-2)', fontSize: 13, marginBottom: 16 }}>
-          Choose whether reviews and assessments run inside this API process or are queued in the database for a separate local worker to claim.
+          Choose whether reviews and assessments run inside this API process or are queued in the database for a separate local worker to claim. Inline mode can point at OpenRouter or any OpenAI-compatible endpoint, including a LAN-hosted server.
         </p>
 
         <div style={{ marginBottom: 14 }}>
@@ -347,6 +385,48 @@ export default function SettingsPage() {
         </div>
 
         <div>
+          <label style={labelStyle}>LLM base URL</label>
+          <input
+            value={llmBaseUrl}
+            onChange={e => setLlmBaseUrl(e.target.value)}
+            placeholder="https://openrouter.ai/api/v1 or http://192.168.0.197:8080/"
+            style={inputStyle}
+          />
+          <div style={{ color: 'var(--text-3)', fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
+            Used for inline review and assessment calls. OpenRouter-specific provider routing is only applied when this target is OpenRouter.
+          </div>
+        </div>
+
+        <div style={{ marginTop: 14 }}>
+          <label style={labelStyle}>
+            LLM API key {settings?.llm_api_key_set
+              ? <span style={{ color: 'var(--green)' }}>· set</span>
+              : <span style={{ color: 'var(--text-3)' }}>· not set</span>}
+          </label>
+          <input
+            type="password"
+            value={llmApiKey}
+            onChange={e => setLlmApiKey(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && saveLlmSettings()}
+            placeholder={settings?.llm_api_key_set ? 'Leave blank to clear or replace' : 'API key for the selected LLM endpoint'}
+            style={inputStyle}
+          />
+        </div>
+
+        <div style={{ marginTop: 14 }}>
+          <label style={labelStyle}>LLM timeout (seconds)</label>
+          <input
+            value={llmTimeoutSeconds}
+            onChange={e => setLlmTimeoutSeconds(e.target.value)}
+            placeholder="Leave blank for default (240s OpenRouter, 600s local)"
+            style={inputStyle}
+          />
+          <div style={{ color: 'var(--text-3)', fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
+            Network-hosted local models often need longer than the OpenRouter default. Leave blank to use 600 seconds for non-OpenRouter endpoints.
+          </div>
+        </div>
+
+        <div style={{ marginTop: 14 }}>
           <label style={labelStyle}>
             Worker secret {settings?.llm_worker_secret_set
               ? <span style={{ color: 'var(--green)' }}>· set</span>
@@ -380,20 +460,24 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14, flexWrap: 'wrap' }}>
           <button onClick={saveLlmSettings} disabled={savingLlm} style={primaryBtn(savingLlm)}>
             {savingLlm ? 'Saving…' : 'Save'}
           </button>
+          <button onClick={testLlmEndpoint} disabled={testingLlm} style={smallBtn}>
+            {testingLlm ? 'Testing…' : 'Test endpoint'}
+          </button>
           {llmMsg && <span style={{ fontSize: 13, color: llmMsg === 'Saved ✓' ? 'var(--green)' : 'var(--red)' }}>{llmMsg}</span>}
+          {llmTestMsg && <span style={{ fontSize: 13, color: llmTestMsg.startsWith('Connected') ? 'var(--green)' : 'var(--red)' }}>{llmTestMsg}</span>}
         </div>
       </Card>
 
       {/* Model list */}
       <Card title="Models">
         <p style={{ color: 'var(--text-2)', fontSize: 13, marginBottom: 16 }}>
-          Add one or more OpenRouter models. The first entry is the default.
+          Add one or more model IDs. The first entry is the default.
           All configured models appear in the dropdown on the Review and Assess pages.
-          See <code style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>openrouter.ai/models</code> for available model IDs.
+          Use OpenRouter-style IDs when the endpoint is OpenRouter, or whatever model identifiers your selected OpenAI-compatible server expects.
         </p>
 
         {modelsList.length === 0 && (
