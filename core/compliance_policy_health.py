@@ -36,11 +36,27 @@ _KNOWN_VENDORS = {
     "slack", "mailgun", "sendgrid", "twilio",
     # LLM / AI
     "openai", "anthropic", "cohere", "huggingface", "huggingface_hub",
+    # auth / backend services
+    "supabase",
     # cloud
     "aws", "gcp", "google", "azure",
     # databases / infra
     "mongodb", "postgres", "mysql", "redis", "elasticsearch", "snowflake", "databricks",
 }
+
+_PACKAGE_VENDOR_ALIASES = {
+    "@supabase/supabase-js": "supabase",
+    "@supabase/auth-js": "supabase",
+    "@supabase/functions-js": "supabase",
+    "@supabase/phoenix": "supabase",
+    "@supabase/postgrest-js": "supabase",
+    "@supabase/realtime-js": "supabase",
+    "@supabase/storage-js": "supabase",
+}
+
+_NOISE_DIRS = {"node_modules", "dist", "build", ".venv", "venv", "__pycache__"}
+_DOC_TEST_DIRS = {"docs", "tests"}
+_DOC_BASENAMES = {"readme.md", "readme", "changelog.md", "contributing.md"}
 
 # Built-in PHI-ish terms from compliance.py so we can detect observed patterns
 # that are missing from the policy.
@@ -69,16 +85,20 @@ class PolicyHealthAnalyzer:
         assessment_count: int = 0,
     ) -> dict:
         """Return a structured health report for the configured policy."""
+        scanned_files = _filter_scannable_files(
+            files,
+            include_test_docs_findings=bool(self.policy.get("include_test_docs_findings")),
+        )
         manifest_packages = self._extract_manifest_packages(files)
-        code_vendors = self._extract_code_vendors(files)
+        code_vendors = self._extract_code_vendors(scanned_files)
         all_vendors = {*manifest_packages, *code_vendors}
 
         approved = {v.lower() for v in self.policy.get("approved_vendors") or []}
         disallowed = {v.lower() for v in self.policy.get("disallowed_vendors") or []}
 
         vendor_report = self._analyze_vendors(all_vendors, approved, disallowed)
-        signal_report = self._analyze_signals(files)
-        phi_report = self._analyze_phi_patterns(files)
+        signal_report = self._analyze_signals(scanned_files)
+        phi_report = self._analyze_phi_patterns(scanned_files)
 
         findings = []
         findings.extend(self._vendor_findings(vendor_report))
@@ -157,8 +177,7 @@ class PolicyHealthAnalyzer:
     def _parse_package_json(content: str) -> set[str]:
         data = json.loads(content)
         deps = data.get("dependencies") or {}
-        dev = data.get("devDependencies") or {}
-        return {str(k).lower() for k in {**deps, **dev}}
+        return {str(k).lower() for k in deps}
 
     @staticmethod
     def _parse_requirements_txt(content: str) -> set[str]:
@@ -266,9 +285,38 @@ class PolicyHealthAnalyzer:
     def _analyze_signals(self, files: dict[str, str]) -> dict:
         all_text = "\n".join(files.values())
         lower_text = all_text.lower()
+        auth_category_present = bool(compliance._AUTH_RE.search(lower_text))
+        audit_category_present = bool(compliance._AUDIT_RE.search(lower_text))
+        encryption_at_rest_present = bool(re.search(r"\b(encrypt|encrypted|kms|fernet|aes)\b", lower_text, re.IGNORECASE))
+        encryption_in_transit_present = bool(
+            re.search(r"\b(ssl|tls|https)\b", lower_text, re.IGNORECASE) or "https://" in lower_text
+        )
+        hl7_validation_category_present = bool(compliance._HL7_VALIDATION_RE.search(lower_text))
+        hl7_transport_category_present = bool(
+            compliance._HL7_TRANSPORT_RE.search(lower_text)
+            and re.search(r"\b(tls|ssl|https|mllps|vpn|ssh)\b", lower_text, re.IGNORECASE)
+        )
+
+        def signal_present(signal: str) -> bool:
+            normalized = signal.lower()
+            if normalized in lower_text:
+                return True
+            if normalized in {"require_user", "depends(require_user)", "@login_required"}:
+                return auth_category_present
+            if normalized in {"audit", "audit_log", "audit trail", "access_log"}:
+                return audit_category_present
+            if normalized == "at_rest":
+                return encryption_at_rest_present
+            if normalized == "in_transit":
+                return encryption_in_transit_present
+            if normalized in {"schema", "validate", "ack", "nack", "message_control_id"}:
+                return hl7_validation_category_present
+            if normalized in {"tls", "ssl", "https", "sftp", "vpn", "mllps"}:
+                return hl7_transport_category_present or normalized in lower_text
+            return False
 
         def observed(signals: list[str]) -> list[str]:
-            return sorted({s for s in signals if s.lower() in lower_text})
+            return sorted({s for s in signals if signal_present(s)})
 
         auth_observed = observed(self.policy.get("required_auth_signals") or [])
         audit_observed = observed(self.policy.get("required_audit_signals") or [])
@@ -424,7 +472,12 @@ def extract_manifest_packages(files: dict[str, str]) -> set[str]:
                 packages.update(PolicyHealthAnalyzer._parse_gemfile(content))
         except Exception:
             continue
-    return packages
+    vendors = set()
+    for package in packages:
+        vendor = _normalize_package_vendor(package)
+        if vendor:
+            vendors.add(vendor)
+    return vendors
 
 
 def extract_code_vendors(files: dict[str, str]) -> set[str]:
@@ -455,3 +508,36 @@ def _bare_package_names(list_fragment: str) -> set[str]:
         if name:
             names.add(name)
     return names
+
+
+def _normalize_package_vendor(package: str) -> str | None:
+    package = (package or "").strip().lower()
+    if not package:
+        return None
+    if package in _PACKAGE_VENDOR_ALIASES:
+        return _PACKAGE_VENDOR_ALIASES[package]
+    if package.startswith("@supabase/"):
+        return "supabase"
+    if package in _KNOWN_VENDORS:
+        return package
+    for known in _KNOWN_VENDORS:
+        if package == known or package.startswith(f"{known}-") or package.endswith(f"-{known}"):
+            return known
+    return None
+
+
+def _filter_scannable_files(files: dict[str, str], *, include_test_docs_findings: bool) -> dict[str, str]:
+    filtered = {}
+    for path, content in (files or {}).items():
+        normalized = (path or "").replace("\\", "/").lower()
+        parts = [p for p in normalized.split("/") if p]
+        basename = parts[-1] if parts else normalized
+        if any(part in _NOISE_DIRS for part in parts):
+            continue
+        if not include_test_docs_findings:
+            if any(part in _DOC_TEST_DIRS for part in parts):
+                continue
+            if basename in _DOC_BASENAMES or basename.endswith(".md"):
+                continue
+        filtered[path] = content
+    return filtered

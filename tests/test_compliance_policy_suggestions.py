@@ -28,12 +28,12 @@ def test_suggests_adding_new_vendor_to_approved():
 
 
 def test_suggests_reviewing_unknown_vendor():
-    files = {"package.json": '{"dependencies": {"weird-vendor": "^1.0"}}'}
+    files = {"package.json": '{"dependencies": {"openai": "^1.0"}}'}
     policy = {"approved_vendors": [], "disallowed_vendors": []}
     result = suggestions.suggest_policy_updates("acme/app", policy, files)
 
-    # Unknown vendors should be flagged for manual review rather than auto-added.
-    assert any(s["type"] == "review_vendor" for s in result)
+    # Observed service vendors outside the safe auto-approve list should be flagged for manual review.
+    assert any(s["type"] == "review_vendor" and s["value"] == "openai" for s in result)
 
 
 def test_suggests_adding_phi_pattern():
