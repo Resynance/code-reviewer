@@ -301,12 +301,16 @@ class WorkerErrorBody(BaseModel):
 def _token_for(repo: str) -> str:
     """Return the right GitHub token for a repo (owner-based routing).
 
-    Raises 400 if no tokens are configured at all.
+    Raises 400 if no tokens are configured at all, and 403 if the repo is not
+    explicitly configured for this app instance.
     """
     owner = repo.split("/")[0] if "/" in repo else repo
     token = config_store.get_token_for(owner)
     if not token:
         raise HTTPException(status_code=400, detail="GitHub token not configured")
+    configured = {r.strip().lower() for r in config_store.get_repos() if isinstance(r, str)}
+    if repo.strip().lower() not in configured:
+        raise HTTPException(status_code=403, detail="Repository is not configured")
     return token
 
 
@@ -337,16 +341,6 @@ def _require_worker_secret(provided: Optional[str]):
 def _require_local_queue_configured():
     if not config_store.get_llm_worker_secret():
         raise HTTPException(status_code=400, detail="LLM worker secret not configured for local_queue mode")
-
-
-def _is_agentic_review_job(job: Optional[dict]) -> bool:
-    req = (job or {}).get("request") or {}
-    return bool(job and job.get("job_type") == "review" and req.get("agentic"))
-
-
-def _is_secretless_local_job(job: Optional[dict]) -> bool:
-    req = (job or {}).get("request") or {}
-    return bool(job and job.get("executor") == "local_queue" and req.get("agentic"))
 
 
 def _normalize_result_payload(result_payload: dict) -> dict:
@@ -593,7 +587,7 @@ def create_review(body: ReviewRequestBody):
     executor = _llm_execution_mode()
     if body.agentic and executor != "local_queue":
         raise HTTPException(status_code=400, detail="Agentic review is available only in local_queue mode")
-    if executor == "local_queue" and not body.agentic:
+    if executor == "local_queue":
         _require_local_queue_configured()
     if executor == "inline" and not config_store.get_llm_api_key():
         raise HTTPException(status_code=400, detail="LLM API key not set")
@@ -777,7 +771,7 @@ def compliance_suggestions(repo: str):
         raise HTTPException(status_code=502, detail=str(e))
 
 
-@app.post("/api/compliance/suggestions/apply")
+@app.post("/api/compliance/suggestions/apply", dependencies=[Depends(require_admin)])
 def apply_compliance_suggestion(body: ComplianceSuggestionApplyBody):
     """Apply a single policy-update suggestion to the repo's compliance policy."""
     if "/" not in body.repo:
@@ -1062,7 +1056,7 @@ def get_settings():
     }
 
 
-@app.put("/api/settings")
+@app.put("/api/settings", dependencies=[Depends(require_admin)])
 def update_settings(body: SettingsBody):
     """Update settings. Only provided (non-null) fields are changed."""
     update = {}
@@ -1116,16 +1110,8 @@ def update_settings(body: SettingsBody):
 def claim_llm_job(body: WorkerClaimBody, x_worker_secret: Optional[str] = Header(default=None, alias="X-Worker-Secret")):
     """Claim the next queued local-queue LLM job for an external worker."""
     wanted = [t for t in body.job_types if t in {"review", "assessment", "compliance_followup"}]
-    expected = config_store.get_llm_worker_secret()
-    if expected:
-        _require_worker_secret(x_worker_secret)
-        job = review_jobs.claim_next_job(job_types=wanted or None, executor="local_queue", worker_id=body.worker_id.strip())
-    else:
-        if x_worker_secret:
-            raise HTTPException(status_code=401, detail="Invalid worker secret")
-        if wanted and not any(t in {"review", "compliance_followup"} for t in wanted):
-            return Response(status_code=204)
-        job = review_jobs.claim_next_agentic_review_job(executor="local_queue", worker_id=body.worker_id.strip())
+    _require_worker_secret(x_worker_secret)
+    job = review_jobs.claim_next_job(job_types=wanted or None, executor="local_queue", worker_id=body.worker_id.strip())
     if not job:
         return Response(status_code=204)
     return job
@@ -1143,11 +1129,7 @@ def complete_llm_job(
         raise HTTPException(status_code=404, detail="LLM job not found")
     if job.get("executor") != "local_queue":
         raise HTTPException(status_code=400, detail="Job is not configured for local queue execution")
-    expected = config_store.get_llm_worker_secret()
-    if expected:
-        _require_worker_secret(x_worker_secret)
-    elif x_worker_secret or not _is_secretless_local_job(job):
-        raise HTTPException(status_code=401, detail="Invalid worker secret")
+    _require_worker_secret(x_worker_secret)
     if job.get("job_type") == "compliance_followup":
         return review_jobs.update_job(job_id, status="done", result=body.result)
     normalized = _normalize_result_payload(body.result)
@@ -1167,11 +1149,7 @@ def fail_llm_job(
         raise HTTPException(status_code=404, detail="LLM job not found")
     if job.get("executor") != "local_queue":
         raise HTTPException(status_code=400, detail="Job is not configured for local queue execution")
-    expected = config_store.get_llm_worker_secret()
-    if expected:
-        _require_worker_secret(x_worker_secret)
-    elif x_worker_secret or not _is_secretless_local_job(job):
-        raise HTTPException(status_code=401, detail="Invalid worker secret")
+    _require_worker_secret(x_worker_secret)
     return review_jobs.update_job(job_id, status="error", error=body.error)
 
 
@@ -1181,7 +1159,7 @@ def list_repos():
     return {"repos": config_store.get_repos()}
 
 
-@app.post("/api/repos")
+@app.post("/api/repos", dependencies=[Depends(require_admin)])
 def add_repo(body: RepoBody):
     """Add a repository to the configured list."""
     repo = body.repo.strip()
@@ -1190,7 +1168,7 @@ def add_repo(body: RepoBody):
     return {"repos": config_store.add_repo(repo)}
 
 
-@app.delete("/api/repos")
+@app.delete("/api/repos", dependencies=[Depends(require_admin)])
 def delete_repo(repo: str):
     """Remove a repository from the configured list."""
     return {"repos": config_store.remove_repo(repo)}
@@ -1217,7 +1195,7 @@ def remove_access(email: str):
     return {"emails": access_store.remove_email(email)}
 
 
-@app.post("/api/github/tokens")
+@app.post("/api/github/tokens", dependencies=[Depends(require_admin)])
 def add_github_token(body: AddTokenBody):
     """Add a GitHub token — auto-discovers the account username and org memberships."""
     if not body.token.strip():
@@ -1235,7 +1213,7 @@ def add_github_token(body: AddTokenBody):
     return {"github_tokens": [{"username": t["username"], "orgs": t.get("orgs", [])} for t in tokens]}
 
 
-@app.delete("/api/github/tokens")
+@app.delete("/api/github/tokens", dependencies=[Depends(require_admin)])
 def remove_github_token(username: str):
     """Remove a GitHub token by username."""
     tokens = config_store.remove_github_token(username)
@@ -1427,7 +1405,13 @@ async def test_llm_endpoint(body: LlmTestBody):
     base_url = _normalize_url(body.llm_base_url or config_store.get_llm_base_url())
     if not base_url:
         raise HTTPException(status_code=400, detail="LLM base URL is required")
-    api_key = body.llm_api_key if body.llm_api_key is not None else config_store.get_llm_api_key()
+    configured_base_url = _normalize_url(config_store.get_llm_base_url())
+    if body.llm_api_key is not None:
+        api_key = body.llm_api_key
+    elif body.llm_base_url is None or base_url == configured_base_url:
+        api_key = config_store.get_llm_api_key()
+    else:
+        api_key = ""
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     candidates = _llm_base_candidates(base_url)
 

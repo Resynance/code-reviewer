@@ -9,12 +9,11 @@ LocalAI, vLLM), and posts results back to the ReviewBot API.
 Prerequisites:
     source .venv/bin/activate
     ReviewBot must be configured with llm_execution_mode="local_queue".
-    A non-empty llm_worker_secret is required for local-LLM queue jobs and
-    assessments, but local agentic review jobs may run without one.
+    A non-empty llm_worker_secret is required for all local-queue jobs.
 
 Environment variables:
     REVIEWBOT_API_URL      Base URL of the ReviewBot API (default: http://localhost:1500)
-    REVIEWBOT_WORKER_SECRET Shared secret for /worker/llm/* endpoints (optional for agentic-only local reviews)
+    REVIEWBOT_WORKER_SECRET Shared secret for /worker/llm/* endpoints
     REVIEWBOT_WORKER_ID    Optional worker identifier (default: local-worker)
     REVIEWBOT_POLL_INTERVAL Seconds between empty-queue polls (default: 1.0)
     LOCAL_LLM_BASE_URL     OpenAI-compatible local LLM base URL (default: http://localhost:11434/v1)
@@ -23,7 +22,7 @@ Environment variables:
     GITHUB_TOKEN           GitHub token for assessments; falls back to config.json/GITHUB_TOKEN
 
 Usage:
-    export REVIEWBOT_WORKER_SECRET="your-secret-from-settings"  # optional for agentic-only local reviews
+    export REVIEWBOT_WORKER_SECRET="your-secret-from-settings"
     export LOCAL_LLM_MODEL="llama3.1:8b"
     python local_worker.py
 """
@@ -642,7 +641,7 @@ def main() -> int:
         WORKER_ID,
     )
     if not WORKER_SECRET:
-        logger.info("No REVIEWBOT_WORKER_SECRET set — worker will claim only agentic local review jobs.")
+        logger.warning("No REVIEWBOT_WORKER_SECRET set — worker claims will be rejected by the API.")
 
     worker = Worker()
 
