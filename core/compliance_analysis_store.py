@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 
 _FILE_PATH = Path(__file__).parent.parent / "compliance_analysis.json"
 _LOCK = threading.Lock()
+_PG_SCHEMA_LOCK = threading.Lock()
+_PG_SCHEMA_READY = False
 
 _FIELDS = ("repo", "health", "coverage", "suggestions")
 
@@ -110,10 +112,48 @@ def _file_get(analysis_id):
 
 # ----- postgres backend ----- #
 
+def _pg_ensure_schema():
+    """Create/upgrade the compliance_analysis table in-place for older deployments."""
+    global _PG_SCHEMA_READY
+    if _PG_SCHEMA_READY:
+        return
+    import db
+
+    with _PG_SCHEMA_LOCK:
+        if _PG_SCHEMA_READY:
+            return
+        with db.connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS public.compliance_analysis ("
+                "  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,"
+                "  repo text NOT NULL,"
+                "  health jsonb NOT NULL DEFAULT '{}'::jsonb,"
+                "  coverage jsonb NOT NULL DEFAULT '{}'::jsonb,"
+                "  suggestions jsonb NOT NULL DEFAULT '[]'::jsonb,"
+                "  created_at timestamptz NOT NULL DEFAULT now()"
+                ")"
+            )
+            cur.execute(
+                "ALTER TABLE public.compliance_analysis "
+                "ADD COLUMN IF NOT EXISTS health jsonb NOT NULL DEFAULT '{}'::jsonb, "
+                "ADD COLUMN IF NOT EXISTS coverage jsonb NOT NULL DEFAULT '{}'::jsonb, "
+                "ADD COLUMN IF NOT EXISTS suggestions jsonb NOT NULL DEFAULT '[]'::jsonb"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS compliance_analysis_repo_idx "
+                "ON public.compliance_analysis (repo)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS compliance_analysis_created_at_idx "
+                "ON public.compliance_analysis (created_at DESC)"
+            )
+        _PG_SCHEMA_READY = True
+
 def _pg_save(rec):
     import db
     from psycopg.types.json import Jsonb
 
+    _pg_ensure_schema()
     with db.connect() as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO compliance_analysis "
@@ -133,6 +173,7 @@ def _pg_save(rec):
 def _pg_list(repo, limit):
     import db
 
+    _pg_ensure_schema()
     where, params = [], []
     if repo:
         where.append("repo = %s")
@@ -163,6 +204,7 @@ def _pg_list(repo, limit):
 def _pg_get(analysis_id):
     import db
 
+    _pg_ensure_schema()
     with db.connect() as conn, conn.cursor() as cur:
         cur.execute(
             f"SELECT {', '.join(_PG_COLS)} FROM compliance_analysis WHERE id = %s",

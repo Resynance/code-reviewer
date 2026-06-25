@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 
 _FILE_PATH = Path(__file__).parent.parent / "assessments.json"
 _LOCK = threading.Lock()
+_PG_SCHEMA_LOCK = threading.Lock()
+_PG_SCHEMA_READY = False
 
 _FIELDS = (
     "repo", "summary", "purpose",
@@ -95,10 +97,72 @@ def _file_list(repo, limit):
 
 # ----- postgres backend ----- #
 
+def _pg_ensure_schema():
+    """Create/upgrade the assessments table in-place for older deployments."""
+    global _PG_SCHEMA_READY
+    if _PG_SCHEMA_READY:
+        return
+    import db
+
+    with _PG_SCHEMA_LOCK:
+        if _PG_SCHEMA_READY:
+            return
+        with db.connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS public.assessments ("
+                "  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,"
+                "  repo text NOT NULL,"
+                "  summary text,"
+                "  purpose text,"
+                "  tech_stack jsonb NOT NULL DEFAULT '[]'::jsonb,"
+                "  key_components jsonb NOT NULL DEFAULT '[]'::jsonb,"
+                "  vulnerabilities jsonb NOT NULL DEFAULT '[]'::jsonb,"
+                "  compliance_review jsonb NOT NULL DEFAULT '{}'::jsonb,"
+                "  model text,"
+                "  created_at timestamptz NOT NULL DEFAULT now()"
+                ")"
+            )
+            cur.execute(
+                "DO $$ "
+                "BEGIN "
+                "  IF EXISTS ("
+                "    SELECT 1 FROM information_schema.columns "
+                "    WHERE table_schema = 'public' "
+                "      AND table_name = 'assessments' "
+                "      AND column_name = 'hipaa_review'"
+                "  ) AND NOT EXISTS ("
+                "    SELECT 1 FROM information_schema.columns "
+                "    WHERE table_schema = 'public' "
+                "      AND table_name = 'assessments' "
+                "      AND column_name = 'compliance_review'"
+                "  ) THEN "
+                "    ALTER TABLE public.assessments RENAME COLUMN hipaa_review TO compliance_review; "
+                "  END IF; "
+                "END $$;"
+            )
+            cur.execute(
+                "ALTER TABLE public.assessments "
+                "ADD COLUMN IF NOT EXISTS tech_stack jsonb NOT NULL DEFAULT '[]'::jsonb, "
+                "ADD COLUMN IF NOT EXISTS key_components jsonb NOT NULL DEFAULT '[]'::jsonb, "
+                "ADD COLUMN IF NOT EXISTS vulnerabilities jsonb NOT NULL DEFAULT '[]'::jsonb, "
+                "ADD COLUMN IF NOT EXISTS compliance_review jsonb NOT NULL DEFAULT '{}'::jsonb, "
+                "ADD COLUMN IF NOT EXISTS model text"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS assessments_repo_idx "
+                "ON public.assessments (repo)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS assessments_created_at_idx "
+                "ON public.assessments (created_at DESC)"
+            )
+        _PG_SCHEMA_READY = True
+
 def _pg_save(rec):
     import db
     from psycopg.types.json import Jsonb
 
+    _pg_ensure_schema()
     with db.connect() as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO assessments "
@@ -120,6 +184,7 @@ def _pg_save(rec):
 def _pg_list(repo, limit):
     import db
 
+    _pg_ensure_schema()
     where, params = [], []
     if repo:
         where.append("repo = %s")

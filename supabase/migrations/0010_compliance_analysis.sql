@@ -7,7 +7,10 @@ create table if not exists public.compliance_analysis (
   created_at  timestamptz not null default now()
 );
 
-create index if not exists compliance_analysis_repo_idx on public.compliance_analysis (repo);
-create index if not exists compliance_analysis_created_at_idx on public.compliance_analysis (created_at desc);
+create index if not exists compliance_analysis_repo_idx
+  on public.compliance_analysis (repo);
+
+create index if not exists compliance_analysis_created_at_idx
+  on public.compliance_analysis (created_at desc);
 
 alter table public.compliance_analysis enable row level security;
