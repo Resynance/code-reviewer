@@ -50,6 +50,19 @@ def test_compliance_coverage(configured_repo):
     assert resp.json()["coverage_score"] == 60
 
 
+def test_compliance_coverage_rejects_unconfigured_repo(configured_repo):
+    test_client, main, monkeypatch = configured_repo
+    monkeypatch.setattr(
+        main.compliance_analysis,
+        "get_coverage",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("coverage should not run")),
+    )
+
+    resp = test_client.get("/api/compliance/coverage?repo=acme/private")
+    assert resp.status_code == 403
+    assert "not configured" in resp.json()["detail"]
+
+
 def test_compliance_suggestions(configured_repo):
     test_client, main, monkeypatch = configured_repo
     monkeypatch.setattr(
@@ -122,6 +135,37 @@ def test_list_compliance_analyses(configured_repo):
     assert data["analyses"][0]["id"] == 1
 
 
+def test_list_compliance_analyses_rejects_unconfigured_repo(configured_repo):
+    test_client, main, monkeypatch = configured_repo
+    monkeypatch.setattr(
+        main.compliance_analysis_store,
+        "list_analyses",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("analysis history should not be read")),
+    )
+
+    resp = test_client.get("/api/compliance/analyses?repo=acme/private")
+    assert resp.status_code == 403
+    assert "not configured" in resp.json()["detail"]
+
+
+def test_list_compliance_analyses_without_repo_filters_to_configured_repos(configured_repo):
+    test_client, main, monkeypatch = configured_repo
+    monkeypatch.setattr(
+        main.compliance_analysis_store,
+        "list_analyses",
+        lambda repo=None, limit=20: [
+            {"id": 2, "repo": "acme/private", "health": {}, "coverage": {}, "suggestions": [], "created_at": "2024-01-02T00:00:00Z"},
+            {"id": 1, "repo": "acme/app", "health": {}, "coverage": {}, "suggestions": [], "created_at": "2024-01-01T00:00:00Z"},
+        ],
+    )
+
+    resp = test_client.get("/api/compliance/analyses")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] == 1
+    assert data["analyses"][0]["repo"] == "acme/app"
+
+
 def test_get_compliance_analysis(configured_repo):
     test_client, main, monkeypatch = configured_repo
     monkeypatch.setattr(
@@ -139,6 +183,26 @@ def test_get_compliance_analysis(configured_repo):
     resp = test_client.get("/api/compliance/analyses/42")
     assert resp.status_code == 200
     assert resp.json()["health"]["score"] == 85
+
+
+def test_get_compliance_analysis_rejects_unconfigured_repo(configured_repo):
+    test_client, main, monkeypatch = configured_repo
+    monkeypatch.setattr(
+        main.compliance_analysis_store,
+        "get_analysis",
+        lambda analysis_id: {
+            "id": analysis_id,
+            "repo": "acme/private",
+            "health": {"score": 85},
+            "coverage": {},
+            "suggestions": [],
+            "created_at": "2024-01-01T00:00:00Z",
+        },
+    )
+
+    resp = test_client.get("/api/compliance/analyses/42")
+    assert resp.status_code == 403
+    assert "not configured" in resp.json()["detail"]
 
 
 def test_get_missing_compliance_analysis_returns_404(configured_repo):

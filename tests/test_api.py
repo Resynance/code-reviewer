@@ -549,7 +549,12 @@ def test_queue_lists_local_jobs_with_compact_summary(client):
 
 def test_queue_filters_by_status_and_job_type(client):
     tc, _ = client
-    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+    tc.put("/api/settings", json={
+        "github_token": "t",
+        "repos": ["org/a"],
+        "llm_execution_mode": "local_queue",
+        "llm_worker_secret": "secret",
+    })
     review = tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+x"}).json()
     assessment = tc.post("/api/assessments", json={"repo": "org/a"}).json()
     tc.post("/worker/llm/claim", headers={"X-Worker-Secret": "secret"}, json={"worker_id": "mac-mini", "job_types": ["review"]})
@@ -871,7 +876,11 @@ def test_assessment_requires_api_key(client):
 def test_assessment_enqueues_and_runs(client, monkeypatch):
     tc, main = client
     monkeypatch.setenv("OPENROUTER_API_KEY", "key")
-    tc.put("/api/settings", json={"compliance_policies": {"default": {"enabled": False}, "repos": {"org/a": {"enabled": True}}}})
+    tc.put("/api/settings", json={
+        "github_token": "t",
+        "repos": ["org/a"],
+        "compliance_policies": {"default": {"enabled": False}, "repos": {"org/a": {"enabled": True}}},
+    })
     monkeypatch.setattr(main, "AssessmentEngine", _fake_assessment_engine())
 
     job = tc.post("/api/assessments", json={"repo": "org/a"}).json()
@@ -887,9 +896,25 @@ def test_assessment_enqueues_and_runs(client, monkeypatch):
     assert polled["status"] == "done" and polled["result"]["repo"] == "org/a"
 
 
+def test_assessment_rejects_unconfigured_repo(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    config_store.save_config({"github_token": "t", "repos": ["org/a"]})
+    monkeypatch.setattr(main, "AssessmentEngine", _fake_assessment_engine())
+
+    resp = tc.post("/api/assessments", json={"repo": "org/private"})
+    assert resp.status_code == 403
+    assert "not configured" in resp.json()["detail"]
+
+
 def test_assessment_local_queue_can_be_claimed_by_type_and_saved(client):
     tc, _ = client
-    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+    tc.put("/api/settings", json={
+        "github_token": "t",
+        "repos": ["org/a"],
+        "llm_execution_mode": "local_queue",
+        "llm_worker_secret": "secret",
+    })
 
     job = tc.post("/api/assessments", json={"repo": "org/a"}).json()
     claimed = tc.post(
@@ -931,7 +956,11 @@ def test_assessment_rejects_local_queue_when_worker_secret_missing(client):
 def test_assessment_uses_repo_compliance_setting(client, monkeypatch):
     tc, main = client
     monkeypatch.setenv("OPENROUTER_API_KEY", "key")
-    tc.put("/api/settings", json={"compliance_policies": {"default": {"enabled": False}, "repos": {"org/a": {"enabled": True}}}})
+    tc.put("/api/settings", json={
+        "github_token": "t",
+        "repos": ["org/a"],
+        "compliance_policies": {"default": {"enabled": False}, "repos": {"org/a": {"enabled": True}}},
+    })
     monkeypatch.setattr(main, "AssessmentEngine", _fake_assessment_engine())
 
     job = tc.post("/api/assessments", json={"repo": "org/a", "compliance": False}).json()
@@ -948,6 +977,7 @@ def test_assessment_job_not_found(client):
 def test_assessment_is_saved_to_history(client, monkeypatch):
     tc, main = client
     monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    config_store.save_config({"github_token": "t", "repos": ["org/b"]})
     monkeypatch.setattr(main, "AssessmentEngine", _fake_assessment_engine())
 
     job = tc.post("/api/assessments", json={"repo": "org/b"}).json()
@@ -963,7 +993,11 @@ def test_assessment_is_saved_to_history(client, monkeypatch):
 def test_assessment_ignores_manual_compliance_flag_when_repo_is_not_enabled(client, monkeypatch):
     tc, main = client
     monkeypatch.setenv("OPENROUTER_API_KEY", "key")
-    tc.put("/api/settings", json={"compliance_policies": {"default": {"enabled": False}, "repos": {"org/a": {"enabled": False}}}})
+    tc.put("/api/settings", json={
+        "github_token": "t",
+        "repos": ["org/a"],
+        "compliance_policies": {"default": {"enabled": False}, "repos": {"org/a": {"enabled": False}}},
+    })
     monkeypatch.setattr(main, "AssessmentEngine", _fake_assessment_engine())
 
     job = tc.post("/api/assessments", json={"repo": "org/a", "compliance": True}).json()
@@ -974,6 +1008,7 @@ def test_assessment_ignores_manual_compliance_flag_when_repo_is_not_enabled(clie
 def test_list_assessments(client, monkeypatch):
     tc, main = client
     monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    config_store.save_config({"github_token": "t", "repos": ["org/a", "org/b"]})
     monkeypatch.setattr(main, "AssessmentEngine", _fake_assessment_engine())
 
     j1 = tc.post("/api/assessments", json={"repo": "org/a"}).json()
@@ -1023,6 +1058,7 @@ def test_rate_limit_assessment_blocks_after_limit(client, monkeypatch):
     monkeypatch.setenv("RATE_LIMIT_REQUESTS", "1")
     monkeypatch.setenv("RATE_LIMIT_WINDOW", "60")
     _reset_rate_limit()
+    config_store.save_config({"github_token": "t", "repos": ["org/a"]})
     monkeypatch.setattr(main, "AssessmentEngine", _fake_assessment_engine())
 
     assert tc.post("/api/assessments", json={"repo": "org/a"}).status_code == 200
@@ -1046,6 +1082,7 @@ def test_rate_limit_review_independent_from_assessment(client, monkeypatch):
     monkeypatch.setenv("RATE_LIMIT_REQUESTS", "1")
     monkeypatch.setenv("RATE_LIMIT_WINDOW", "60")
     _reset_rate_limit()
+    config_store.save_config({"github_token": "t", "repos": ["org/a"]})
     monkeypatch.setattr(main, "AssessmentEngine", _fake_assessment_engine())
 
     class FakeEngine:
