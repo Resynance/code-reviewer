@@ -670,6 +670,7 @@ def create_assessment(body: AssessmentRequestBody):
         _require_local_queue_configured()
     if executor == "inline" and not config_store.get_llm_api_key():
         raise HTTPException(status_code=400, detail="LLM API key not set")
+    _token_for(body.repo)
     effective = _assessment_body_with_repo_defaults(body)
     payload = effective.model_dump()
     payload["_type"] = "assessment"
@@ -689,9 +690,10 @@ def run_assessment_job(job_id: str):
         return job
     if job["status"] != "queued":
         return job
+    req = job["request"]
+    _token_for(req["repo"])
     review_jobs.update_job(job_id, status="running")
     try:
-        req = job["request"]
         result = _execute_assessment(AssessmentRequestBody(
             repo=req["repo"],
             model=req.get("model"),
@@ -753,6 +755,7 @@ def compliance_health(repo: str):
 @app.get("/api/compliance/coverage")
 def compliance_coverage_endpoint(repo: str, limit: int = Query(default=50, ge=1, le=500)):
     """Compare deterministic vs LLM compliance findings over time."""
+    _token_for(repo)
     try:
         return compliance_analysis.get_coverage(repo, limit=limit)
     except Exception as e:
@@ -854,7 +857,21 @@ def create_compliance_issue(analysis_id: int, body: ComplianceIssueBody):
 @app.get("/api/compliance/analyses")
 def list_compliance_analyses(repo: Optional[str] = None, limit: int = Query(default=20, ge=1, le=100)):
     """Return persisted compliance analyses, newest first."""
+    if repo:
+        _token_for(repo)
     items = compliance_analysis_store.list_analyses(repo=repo, limit=limit)
+    if not repo:
+        allowed = []
+        for item in items:
+            item_repo = item.get("repo")
+            if not item_repo:
+                continue
+            try:
+                _token_for(item_repo)
+            except HTTPException:
+                continue
+            allowed.append(item)
+        items = allowed
     return {"analyses": items, "count": len(items)}
 
 
@@ -864,6 +881,10 @@ def get_compliance_analysis(analysis_id: int):
     item = compliance_analysis_store.get_analysis(analysis_id)
     if not item:
         raise HTTPException(status_code=404, detail="Compliance analysis not found")
+    repo = item.get("repo")
+    if not repo:
+        raise HTTPException(status_code=400, detail="Saved analysis has no repo")
+    _token_for(repo)
     return item
 
 
