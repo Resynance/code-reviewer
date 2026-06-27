@@ -907,6 +907,70 @@ def test_assessment_rejects_unconfigured_repo(client, monkeypatch):
     assert "not configured" in resp.json()["detail"]
 
 
+def test_assessment_history_rejects_unconfigured_repo_before_read(client, monkeypatch):
+    tc, main = client
+    config_store.save_config({"github_token": "t", "repos": ["org/a"]})
+    monkeypatch.setattr(
+        main.assessment_store,
+        "list_assessments",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("assessment history should not be read")),
+    )
+
+    resp = tc.get("/api/assessments", params={"repo": "org/private"})
+    assert resp.status_code == 403
+    assert "not configured" in resp.json()["detail"]
+
+
+def test_assessment_history_without_repo_filters_to_configured_repos(client):
+    tc, main = client
+    config_store.save_config({"github_token": "t", "repos": ["org/a"]})
+    main.assessment_store.save_assessment({
+        "repo": "org/private",
+        "summary": "private findings",
+        "purpose": "Private app",
+        "tech_stack": [],
+        "key_components": [],
+        "vulnerabilities": [{"severity": "critical", "description": "secret"}],
+        "compliance_review": {},
+        "model": "m",
+    })
+    main.assessment_store.save_assessment({
+        "repo": "org/a",
+        "summary": "allowed findings",
+        "purpose": "Allowed app",
+        "tech_stack": [],
+        "key_components": [],
+        "vulnerabilities": [],
+        "compliance_review": {},
+        "model": "m",
+    })
+
+    body = tc.get("/api/assessments").json()
+    assert body["count"] == 1
+    assert body["assessments"][0]["repo"] == "org/a"
+    assert body["assessments"][0]["summary"] == "allowed findings"
+
+
+def test_assessment_job_rejects_unconfigured_repo(client):
+    tc, main = client
+    config_store.save_config({"github_token": "t", "repos": ["org/a"]})
+    job = main.review_jobs.create_job({"repo": "org/private"}, job_type="assessment", executor="inline")
+    main.review_jobs.update_job(job["id"], status="done", result={
+        "repo": "org/private",
+        "summary": "private findings",
+        "purpose": "Private app",
+        "tech_stack": [],
+        "key_components": [],
+        "vulnerabilities": [{"severity": "critical", "description": "secret"}],
+        "compliance_review": {},
+        "model": "m",
+    })
+
+    resp = tc.get(f"/api/assessments/{job['id']}")
+    assert resp.status_code == 403
+    assert "not configured" in resp.json()["detail"]
+
+
 def test_assessment_local_queue_can_be_claimed_by_type_and_saved(client):
     tc, _ = client
     tc.put("/api/settings", json={
