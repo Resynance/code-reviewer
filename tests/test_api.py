@@ -295,6 +295,52 @@ def test_llm_test_endpoint_does_not_send_stored_key_to_custom_url(client, monkey
     assert "Authorization" not in captured["headers"]
 
 
+def test_llm_test_endpoint_requires_admin_when_auth_enabled(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", AUTH_SECRET)
+    monkeypatch.setenv("ALLOWED_EMAILS", "admin@co.com,user@co.com")
+    calls = []
+
+    class FakeResp:
+        status_code = 200
+        text = '{"data":[]}'
+
+        def json(self):
+            return {"data": []}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url):
+            calls.append(url)
+            return FakeResp()
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", FakeClient)
+
+    user = tc.post(
+        "/api/llm/test",
+        headers=_auth_headers("user@co.com"),
+        json={"llm_base_url": "https://internal.example/v1"},
+    )
+    assert user.status_code == 403
+    assert calls == []
+
+    admin = tc.post(
+        "/api/llm/test",
+        headers=_auth_headers("admin@co.com"),
+        json={"llm_base_url": "https://llm.example/v1"},
+    )
+    assert admin.status_code == 200
+    assert calls == ["https://llm.example/v1/models", "https://llm.example/models"]
+
+
 def test_llm_test_endpoint_suggests_v1_when_missing(client, monkeypatch):
     tc, main = client
 

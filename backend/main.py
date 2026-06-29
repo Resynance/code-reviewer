@@ -1422,7 +1422,7 @@ async def _probe_llm_models_endpoint(client: httpx.AsyncClient, base_url: str) -
     }
 
 
-@app.post("/api/llm/test")
+@app.post("/api/llm/test", dependencies=[Depends(require_admin)])
 async def test_llm_endpoint(body: LlmTestBody):
     base_url = _normalize_url(body.llm_base_url or config_store.get_llm_base_url())
     if not base_url:
