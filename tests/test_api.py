@@ -141,10 +141,13 @@ def test_repo_and_token_mutations_require_admin_when_auth_enabled(client, monkey
     tc, _ = client
     monkeypatch.setenv("SUPABASE_JWT_SECRET", AUTH_SECRET)
     monkeypatch.setenv("ALLOWED_EMAILS", "admin@co.com,user@co.com")
+    config_store.save_config({"github_token": "t"})
 
     user_headers = _auth_headers("user@co.com")
     assert tc.post("/api/repos", headers=user_headers, json={"repo": "org/a"}).status_code == 403
     assert tc.post("/api/github/tokens", headers=user_headers, json={"token": "ghp_x"}).status_code == 403
+    assert tc.get("/api/github/owners", headers=user_headers).status_code == 403
+    assert tc.get("/api/github/repos", headers=user_headers, params={"owner": "org"}).status_code == 403
 
 
 # ----- decisions + scoping ----- #
