@@ -581,6 +581,53 @@ def test_queue_filters_by_status_and_job_type(client):
     assert assessments["jobs"][0]["job_type"] == "assessment"
 
 
+def test_worker_complete_does_not_overwrite_or_repersist_terminal_job(client):
+    import review_store
+
+    tc, _ = client
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+    job = tc.post("/api/review", json={
+        "pr_number": 7,
+        "repo": "org/a",
+        "title": "t",
+        "diff": "+x",
+    }).json()
+    tc.post("/worker/llm/claim", headers={"X-Worker-Secret": "secret"}, json={"worker_id": "mac-mini"})
+
+    first_payload = {
+        "pr_number": 7,
+        "summary": "first",
+        "approved": True,
+        "confidence": 0.75,
+        "issues": [],
+        "suggestions": [],
+        "past_decisions_applied": [],
+        "compliance_review": {"enabled": False},
+        "model": "local/model",
+    }
+    second_payload = dict(first_payload, summary="second", confidence=0.2)
+
+    first = tc.post(
+        f"/worker/llm/{job['id']}/complete",
+        headers={"X-Worker-Secret": "secret"},
+        json={"result": first_payload},
+    )
+    assert first.status_code == 200
+    assert first.json()["result"]["summary"] == "first"
+
+    retry = tc.post(
+        f"/worker/llm/{job['id']}/complete",
+        headers={"X-Worker-Secret": "secret"},
+        json={"result": second_payload},
+    )
+    assert retry.status_code == 200
+    assert retry.json()["result"]["summary"] == "first"
+
+    history = review_store.list_reviews()
+    assert len(history) == 1
+    assert history[0]["summary"] == "first"
+
+
 def test_worker_claim_requires_configured_secret(client):
     tc, _ = client
     tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": ""})
