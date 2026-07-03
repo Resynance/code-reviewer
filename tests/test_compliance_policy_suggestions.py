@@ -36,6 +36,17 @@ def test_suggests_reviewing_unknown_vendor():
     assert any(s["type"] == "review_vendor" and s["value"] == "openai" for s in result)
 
 
+def test_suggests_disallowed_vendor_from_npm_dev_dependencies():
+    files = {"package.json": '{"dependencies": {"react": "^18.0"}, "devDependencies": {"sentry": "^7.0"}}'}
+    policy = {"approved_vendors": [], "disallowed_vendors": ["sentry"]}
+    result = suggestions.suggest_policy_updates("acme/app", policy, files)
+
+    assert any(
+        s["type"] == "disallowed_vendor_present" and s["value"] == "sentry" and s["severity"] == "high"
+        for s in result
+    )
+
+
 def test_suggests_adding_phi_pattern():
     files = {"src/models.py": "date_of_birth = None"}
     policy = {"phi_field_patterns": []}

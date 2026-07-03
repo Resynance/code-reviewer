@@ -176,8 +176,12 @@ class PolicyHealthAnalyzer:
     @staticmethod
     def _parse_package_json(content: str) -> set[str]:
         data = json.loads(content)
-        deps = data.get("dependencies") or {}
-        return {str(k).lower() for k in deps}
+        packages: set[str] = set()
+        for section in ("dependencies", "devDependencies"):
+            deps = data.get(section) or {}
+            if isinstance(deps, dict):
+                packages.update(str(k).lower() for k in deps)
+        return packages
 
     @staticmethod
     def _parse_requirements_txt(content: str) -> set[str]:
