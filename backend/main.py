@@ -995,7 +995,7 @@ def list_decisions(k: int = Query(default=20, ge=1, le=200), repo: Optional[str]
     return {"decisions": results, "count": len(results)}
 
 
-@app.post("/api/decisions")
+@app.post("/api/decisions", dependencies=[Depends(require_admin)])
 def add_decision(body: DecisionUpsertBody):
     """Manually add a decision (e.g. an ADR) to the store."""
     store = get_store()
@@ -1012,7 +1012,7 @@ def add_decision(body: DecisionUpsertBody):
     return {"doc_id": doc_id, "ref": body.ref}
 
 
-@app.delete("/api/decisions/{doc_id}")
+@app.delete("/api/decisions/{doc_id}", dependencies=[Depends(require_admin)])
 def delete_decision(doc_id: str):
     """Remove a decision from the store."""
     store = get_store()

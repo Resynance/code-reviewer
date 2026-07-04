@@ -165,6 +165,34 @@ def test_decisions_add_list_delete(client):
     assert tc.get("/api/decisions").json()["count"] == 0
 
 
+def test_decision_mutations_require_admin_when_auth_enabled(client, monkeypatch):
+    tc, _ = client
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", AUTH_SECRET)
+    monkeypatch.setenv("ALLOWED_EMAILS", "admin@co.com,user@co.com")
+
+    user_headers = _auth_headers("user@co.com")
+    admin_headers = _auth_headers("admin@co.com")
+    payload = {
+        "ref": "ADR-1",
+        "summary": "policy",
+        "reasoning": "r",
+        "outcome": "approved_and_merged",
+        "metadata": {"repo": "*"},
+    }
+
+    assert tc.post("/api/decisions", headers=user_headers, json=payload).status_code == 403
+
+    created = tc.post("/api/decisions", headers=admin_headers, json=payload)
+    assert created.status_code == 200
+    doc_id = created.json()["doc_id"]
+
+    assert tc.delete(f"/api/decisions/{doc_id}", headers=user_headers).status_code == 403
+    assert tc.get("/api/decisions", headers=user_headers).json()["count"] == 1
+
+    assert tc.delete(f"/api/decisions/{doc_id}", headers=admin_headers).status_code == 200
+    assert tc.get("/api/decisions", headers=user_headers).json()["count"] == 0
+
+
 def test_decisions_repo_and_global_filter(client):
     tc, _ = client
     _add_decision(tc, "PR #1", "auth a", "org/a")
