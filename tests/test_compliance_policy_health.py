@@ -21,6 +21,21 @@ def test_detects_disallowed_and_unlisted_vendors():
     assert result["score"] < 100
 
 
+def test_detects_disallowed_scoped_npm_vendor_packages():
+    files = {
+        "package.json": '{"dependencies": {"@segment/analytics": "^1.0", "@aws-sdk/client-s3": "^3.0"}}',
+    }
+    policy = {
+        "approved_vendors": ["aws"],
+        "disallowed_vendors": ["segment"],
+    }
+    result = health.analyze_policy_health("acme/app", [], files, policy)
+
+    assert result["vendors"]["disallowed_hits"] == ["segment"]
+    assert result["vendors"]["approved_hits"] == ["aws"]
+    assert any(f["severity"] == "high" and "Disallowed vendor" in f["title"] for f in result["findings"])
+
+
 def test_detects_missing_required_signals():
     files = {
         "src/api.py": 'def create_patient(): pass',

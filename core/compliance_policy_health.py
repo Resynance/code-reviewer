@@ -518,11 +518,16 @@ def _normalize_package_vendor(package: str) -> str | None:
         return _PACKAGE_VENDOR_ALIASES[package]
     if package.startswith("@supabase/"):
         return "supabase"
-    if package in _KNOWN_VENDORS:
-        return package
-    for known in _KNOWN_VENDORS:
-        if package == known or package.startswith(f"{known}-") or package.endswith(f"-{known}"):
-            return known
+    package_candidates = [package]
+    if package.startswith("@") and "/" in package:
+        scope, name = package[1:].split("/", 1)
+        package_candidates.extend([scope, name])
+    for candidate in package_candidates:
+        if candidate in _KNOWN_VENDORS:
+            return candidate
+        for known in _KNOWN_VENDORS:
+            if candidate == known or candidate.startswith(f"{known}-") or candidate.endswith(f"-{known}"):
+                return known
     return None
 
 
