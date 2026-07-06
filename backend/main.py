@@ -36,7 +36,7 @@ import review_jobs
 import assessment_store
 import compliance_analysis_store
 import access_store
-from decision_store import create_store, ChromaDecisionStore
+from decision_store import create_store, ChromaDecisionStore, GLOBAL_REPO
 from review_engine import CodeReviewEngine, ReviewRequest
 from assessment_engine import AssessmentEngine, AssessmentRequest
 import compliance_analysis
@@ -312,6 +312,47 @@ def _token_for(repo: str) -> str:
     if repo.strip().lower() not in configured:
         raise HTTPException(status_code=403, detail="Repository is not configured")
     return token
+
+
+def _repo_visible(repo: Optional[str], *, allow_global: bool = False) -> bool:
+    if allow_global and repo == GLOBAL_REPO:
+        return True
+    if not isinstance(repo, str) or not repo:
+        return False
+    try:
+        _token_for(repo)
+    except HTTPException:
+        return False
+    return True
+
+
+def _decision_repo(record: dict) -> Optional[str]:
+    repo = record.get("repo")
+    if isinstance(repo, str) and repo:
+        return repo
+    metadata = record.get("metadata")
+    if isinstance(metadata, dict):
+        repo = metadata.get("repo")
+        if isinstance(repo, str) and repo:
+            return repo
+    return None
+
+
+def _filter_decisions_for_configured_repos(records: list[dict]) -> list[dict]:
+    return [
+        record
+        for record in records
+        if _repo_visible(_decision_repo(record), allow_global=True)
+    ]
+
+
+def _filter_jobs_for_configured_repos(jobs: list[dict]) -> list[dict]:
+    allowed = []
+    for job in jobs:
+        request_payload = job.get("request") or {}
+        if _repo_visible(request_payload.get("repo")):
+            allowed.append(job)
+    return allowed
 
 
 def _llm_execution_mode() -> str:
@@ -916,6 +957,7 @@ def list_queue_jobs(
 ):
     """List local-queue jobs newest-first with compact request/result summaries."""
     jobs = review_jobs.list_jobs(limit=limit, executor="local_queue", status=status.strip(), job_type=job_type.strip())
+    jobs = _filter_jobs_for_configured_repos(jobs)
     return {"jobs": [_summarize_job(job) for job in jobs], "count": len(jobs)}
 
 
@@ -982,16 +1024,24 @@ def open_issue(body: CreateIssueBody):
 @app.post("/api/decisions/search")
 def search_decisions(body: SearchBody):
     """Search the decision store by semantic query, optionally scoped to a repo."""
+    if body.repo and body.repo != GLOBAL_REPO:
+        _token_for(body.repo)
     store = get_store()
     results = store.retrieve(body.query, k=body.k, repo=body.repo)
+    if not body.repo:
+        results = _filter_decisions_for_configured_repos(results)
     return {"results": results, "count": len(results)}
 
 
 @app.get("/api/decisions")
 def list_decisions(k: int = Query(default=20, ge=1, le=200), repo: Optional[str] = None):
     """List recent decisions from the store, optionally scoped to a repo."""
+    if repo and repo != GLOBAL_REPO:
+        _token_for(repo)
     store = get_store()
     results = store.retrieve("code review decision architecture pattern", k=k, repo=repo)
+    if not repo:
+        results = _filter_decisions_for_configured_repos(results)
     return {"decisions": results, "count": len(results)}
 
 
