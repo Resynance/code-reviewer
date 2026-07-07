@@ -251,7 +251,7 @@ class CreateIssueBody(BaseModel):
 
 class BackfillBody(BaseModel):
     repo: str
-    pages: int = 5
+    pages: int = Field(default=5, ge=1, le=50)
 
 
 class AddTokenBody(BaseModel):

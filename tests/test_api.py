@@ -703,6 +703,19 @@ def test_backfill_invokes_importer(client, monkeypatch):
     assert resp.json() == {"repo": "org/a", "imported": 5}
 
 
+def test_backfill_rejects_unbounded_page_counts(client, monkeypatch):
+    tc, main = client
+    config_store.save_config({"github_token": "t", "repos": ["org/a"]})
+
+    def fail_backfill(*args, **kwargs):
+        raise AssertionError("backfill importer should not run for invalid pages")
+
+    monkeypatch.setattr(main, "run_backfill", fail_backfill)
+
+    assert tc.post("/api/backfill", json={"repo": "org/a", "pages": 0}).status_code == 422
+    assert tc.post("/api/backfill", json={"repo": "org/a", "pages": 51}).status_code == 422
+
+
 # ----- open PRs ----- #
 
 def test_github_owners_requires_token(client):
