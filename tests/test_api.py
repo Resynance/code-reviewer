@@ -657,13 +657,63 @@ def test_issue_created(client, monkeypatch):
     tc, main = client
     config_store.save_config({"github_token": "t", "repos": ["org/a"]})
     captured = {}
+
     def fake_create(repo, title, body, token):
         captured.update(repo=repo, title=title, body=body)
         return "https://github.com/org/a/issues/9"
+
     monkeypatch.setattr(main, "create_issue", fake_create)
     res = tc.post("/api/issue", json={"repo": "org/a", "title": "Bug", "body": "b"}).json()
     assert res["html_url"].endswith("/issues/9")
     assert captured == {"repo": "org/a", "title": "Bug", "body": "b"}
+
+
+def test_github_write_endpoints_require_admin_when_auth_enabled(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", AUTH_SECRET)
+    monkeypatch.setenv("ALLOWED_EMAILS", "admin@co.com,user@co.com")
+    config_store.save_config({"github_token": "t", "repos": ["org/a"]})
+
+    calls = {"comment": 0, "issue": 0}
+
+    def fake_comment(repo, pr_number, body, token):
+        calls["comment"] += 1
+        return "https://github.com/org/a/pull/5#c1"
+
+    def fake_issue(repo, title, body, token):
+        calls["issue"] += 1
+        return "https://github.com/org/a/issues/9"
+
+    monkeypatch.setattr(main, "post_pr_comment", fake_comment)
+    monkeypatch.setattr(main, "create_issue", fake_issue)
+
+    user_headers = _auth_headers("user@co.com")
+    assert tc.post(
+        "/api/pr-comment",
+        headers=user_headers,
+        json={"repo": "org/a", "pr_number": 5, "body": "hi"},
+    ).status_code == 403
+    assert tc.post(
+        "/api/issue",
+        headers=user_headers,
+        json={"repo": "org/a", "title": "Bug", "body": "b"},
+    ).status_code == 403
+    assert calls == {"comment": 0, "issue": 0}
+
+    admin_headers = _auth_headers("admin@co.com")
+    comment = tc.post(
+        "/api/pr-comment",
+        headers=admin_headers,
+        json={"repo": "org/a", "pr_number": 5, "body": "hi"},
+    )
+    issue = tc.post(
+        "/api/issue",
+        headers=admin_headers,
+        json={"repo": "org/a", "title": "Bug", "body": "b"},
+    )
+    assert comment.status_code == 200
+    assert issue.status_code == 200
+    assert calls == {"comment": 1, "issue": 1}
 
 
 def test_review_is_saved_to_history(client, monkeypatch):
