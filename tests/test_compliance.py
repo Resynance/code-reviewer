@@ -41,7 +41,7 @@ def test_review_findings_keep_fileless_manual_review_fallback():
     )
     assert result["hipaa_relevant"] is True
     assert result["requires_manual_compliance_review"] is True
-    assert any(f["category"] == "manual_review" and f["file"] == "" for f in result["hipaa_findings"])
+    assert any(f["category"] == "manual_review" and f["file"] == "api/patient.py" for f in result["hipaa_findings"])
 
 
 def test_assessment_findings_keep_fileless_manual_review_fallback():

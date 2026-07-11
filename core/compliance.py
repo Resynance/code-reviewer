@@ -433,6 +433,15 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
                 return path
         return ""
 
+    def fallback_file():
+        for path in paths:
+            if not _should_skip_for_review(path, paths, mode, policy):
+                return path
+        return ""
+
+    def allow_fileless_fallback():
+        return mode != "review" or not paths
+
     for line in text.splitlines():
         ll = line.lower()
         if _LOG_RE.search(ll) and any(term in ll for term in all_phi_terms):
@@ -523,9 +532,10 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
             "HIPAA-relevant data appears in scope",
             "The code references healthcare or patient-data concepts, but deterministic checks did not prove a direct violation.",
             "Run a manual compliance review for data classification, retention, and operational controls.",
+            file=fallback_file(),
             manual_review=True,
             bucket="minimum_necessary_gaps",
-            allow_empty_file=True,
+            allow_empty_file=allow_fileless_fallback(),
         )
     elif any(term in lower_text for term in all_hl7_terms) and not findings:
         add(
@@ -534,9 +544,10 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
             "HL7-relevant integration appears in scope",
             "The code references HL7/FHIR integration concepts, but deterministic checks did not prove a direct interface-control violation.",
             "Run a manual interface review for message mapping, partner contracts, ACK behavior, retry/idempotency, and operational monitoring.",
+            file=fallback_file(),
             manual_review=True,
             bucket="hl7_interface_gaps",
-            allow_empty_file=True,
+            allow_empty_file=allow_fileless_fallback(),
         )
 
     for match in _EXTERNAL_VENDOR_RE.finditer(text):
