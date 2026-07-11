@@ -112,10 +112,31 @@ def policy_for_repo(policies: dict, repo: str) -> dict:
     return _normalize_policy(merged)
 
 
+def _review_paths(diff: str, files_changed: Iterable[str]) -> list:
+    paths = []
+    seen = set()
+
+    def add(path):
+        path = (path or "").strip()
+        if not path or path == "/dev/null" or path in seen:
+            return
+        seen.add(path)
+        paths.append(path)
+
+    for path in files_changed or []:
+        add(path)
+
+    for line in (diff or "").splitlines():
+        if line.startswith("+++ b/"):
+            add(line[len("+++ b/"):].split("\t", 1)[0])
+    return paths
+
+
 def review_findings(diff: str, files_changed: Iterable[str], policy: dict) -> dict:
-    path_lines = [f"+++ b/{p}" for p in (files_changed or [])]
+    paths = _review_paths(diff, files_changed)
+    path_lines = [f"+++ b/{p}" for p in paths]
     text = "\n".join(path_lines + [diff or ""])
-    return _scan_text(text, files_changed or [], policy, mode="review")
+    return _scan_text(text, paths, policy, mode="review")
 
 
 def assessment_findings(tree_lines: list, files: dict, policy: dict) -> dict:
@@ -504,6 +525,7 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
             "Run a manual compliance review for data classification, retention, and operational controls.",
             manual_review=True,
             bucket="minimum_necessary_gaps",
+            allow_empty_file=True,
         )
     elif any(term in lower_text for term in all_hl7_terms) and not findings:
         add(
@@ -514,6 +536,7 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
             "Run a manual interface review for message mapping, partner contracts, ACK behavior, retry/idempotency, and operational monitoring.",
             manual_review=True,
             bucket="hl7_interface_gaps",
+            allow_empty_file=True,
         )
 
     for match in _EXTERNAL_VENDOR_RE.finditer(text):

@@ -853,6 +853,96 @@ def test_webhook_rejects_unconfigured_repo(client):
     assert "not configured" in resp.json()["detail"]
 
 
+def test_webhook_passes_changed_files_to_review(client, monkeypatch):
+    tc, main = client
+    config_store.save_config({
+        "webhook_secret": "s",
+        "github_token": "ghp_test",
+        "repos": ["org/a"],
+        "compliance_policies": {"default": {"enabled": True}, "repos": {}},
+    })
+
+    class FakeResp:
+        def __init__(self, status_code, payload=None, text=""):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = text
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"HTTP {self.status_code}")
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, params=None, headers=None):
+            if url.endswith("/files"):
+                page = (params or {}).get("page", 1)
+                if page == 1:
+                    return FakeResp(200, [{"filename": "api/patient.py"}])
+                return FakeResp(200, [])
+            return FakeResp(
+                200,
+                text=(
+                    "diff --git a/api/patient.py b/api/patient.py\n"
+                    "--- a/api/patient.py\n"
+                    "+++ b/api/patient.py\n"
+                    '+ logger.info("patient_ssn=%s", patient_ssn)'
+                ),
+            )
+
+    class FakeEngine:
+        request = None
+
+        def review(self, req):
+            self.request = req
+            return ReviewResult(
+                pr_number=req.pr_number,
+                summary="reviewed",
+                approved=True,
+                confidence=0.9,
+                issues=[],
+                suggestions=[],
+                past_decisions_applied=[],
+                compliance_review={"enabled": req.compliance, "hipaa_relevant": req.compliance},
+            )
+
+    fake_engine = FakeEngine()
+    monkeypatch.setattr(main.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(main, "get_engine", lambda: fake_engine)
+
+    payload = {
+        "action": "opened",
+        "pull_request": {
+            "number": 42,
+            "title": "Test PR",
+            "body": "desc",
+            "user": {"login": "dev"},
+            "base": {"ref": "main"},
+        },
+        "repository": {"full_name": "org/a"},
+    }
+    body = json.dumps(payload).encode()
+    resp = tc.post("/webhook/github", content=body, headers={
+        "X-GitHub-Event": "pull_request",
+        "X-Hub-Signature-256": _sign(b"s", body),
+    })
+
+    assert resp.status_code == 200
+    assert fake_engine.request.files_changed == ["api/patient.py"]
+    assert fake_engine.request.compliance is True
+
+
 # ----- assessments ----- #
 
 def _fake_assessment_engine():

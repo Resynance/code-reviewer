@@ -1507,20 +1507,35 @@ def _verify_github_signature(body: bytes, signature: Optional[str]) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
-async def _fetch_pr_diff(repo: str, pr_number: int) -> str:
-    """Fetch a PR's unified diff from GitHub."""
+async def _fetch_pr_diff_and_files(repo: str, pr_number: int) -> tuple[str, list[str]]:
+    """Fetch a PR's unified diff plus changed files from GitHub."""
     token = _token_for(repo)
     headers = {
-        "Accept": "application/vnd.github.v3.diff",
         "X-GitHub-Api-Version": "2022-11-28",
     }
     if token:
         headers["Authorization"] = f"Bearer {token}"
     url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}"
+    files_url = f"{url}/files"
     async with httpx.AsyncClient(timeout=30.0, headers=headers) as client:
-        resp = await client.get(url)
+        files = []
+        for page in range(1, 21):
+            files_resp = await client.get(files_url, params={"per_page": 100, "page": page})
+            files_resp.raise_for_status()
+            batch = files_resp.json()
+            if not batch:
+                break
+            files.extend(item.get("filename") for item in batch if item.get("filename"))
+
+        resp = await client.get(url, headers={"Accept": "application/vnd.github.v3.diff"})
         resp.raise_for_status()
-        return resp.text
+        return resp.text, files
+
+
+async def _fetch_pr_diff(repo: str, pr_number: int) -> str:
+    """Fetch a PR's unified diff from GitHub."""
+    diff, _ = await _fetch_pr_diff_and_files(repo, pr_number)
+    return diff
 
 
 @app.post("/webhook/github")
@@ -1544,7 +1559,7 @@ async def github_webhook(request: Request):
     repo = payload["repository"]["full_name"]
     pr_number = pr["number"]
 
-    diff = await _fetch_pr_diff(repo, pr_number)
+    diff, files_changed = await _fetch_pr_diff_and_files(repo, pr_number)
 
     engine = get_engine()
     request_obj = ReviewRequest(
@@ -1555,7 +1570,7 @@ async def github_webhook(request: Request):
         diff=diff,
         author=(pr.get("user") or {}).get("login", "unknown"),
         base_branch=(pr.get("base") or {}).get("ref", "main"),
-        files_changed=[],
+        files_changed=files_changed,
         compliance=_repo_compliance_enabled(repo),
     )
     result = engine.review(request_obj)

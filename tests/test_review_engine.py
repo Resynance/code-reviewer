@@ -332,6 +332,30 @@ def test_vendor_policy_findings_survive_without_file_anchor(store, cfg, monkeypa
     assert any(i["file"] == "" for i in result.issues if i["description"] == "Disallowed third-party vendor appears in HIPAA review scope")
 
 
+def test_manual_review_findings_survive_without_file_anchor(store, cfg, monkeypatch):
+    payload = review_payload(
+        compliance_review={
+            "enabled": True,
+            "hipaa_relevant": True,
+            "requires_manual_compliance_review": True,
+            "hipaa_findings": [
+                {
+                    "category": "manual_review",
+                    "severity": "medium",
+                    "title": "HIPAA-relevant data appears in scope",
+                    "evidence": "Patient-data concepts require manual review.",
+                    "recommendation": "Run a manual compliance review.",
+                    "manual_review": True,
+                },
+            ],
+        }
+    )
+    eng = make_engine(store, payload, monkeypatch)
+    result = eng.review(make_req(compliance=True, files_changed=["api/patient.py"]))
+    assert any(i["description"] == "HIPAA-relevant data appears in scope" for i in result.issues)
+    assert any(i["file"] == "" for i in result.issues if i["description"] == "HIPAA-relevant data appears in scope")
+
+
 def test_compliance_overlays_deduped(store, cfg, monkeypatch):
     payload = review_payload(
         compliance_review={

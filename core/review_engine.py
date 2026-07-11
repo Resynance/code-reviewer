@@ -578,7 +578,7 @@ class CodeReviewEngine:
     @staticmethod
     def _allows_fileless_overlay(category: str) -> bool:
         """Some policy findings are real review items even without a precise file anchor."""
-        return category in {"third_party_baa"}
+        return category in {"third_party_baa", "manual_review", "hl7_manual_review"}
 
     def _clean_compliance_overlays(self, overlays: list, files_changed: list) -> list:
         """Keep only valid, non-duplicate compliance overlays."""
