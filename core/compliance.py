@@ -403,6 +403,10 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
     }
     paths = list(file_paths or [])
     lower_text = text.lower()
+    content_lower_text = "\n".join(
+        line for line in text.splitlines()
+        if not line.startswith(("+++ ", "--- ", "diff --git ", "index "))
+    ).lower()
     all_phi_terms = list(dict.fromkeys([*_PHI_TERMS, *(t.lower() for t in policy.get("phi_field_patterns") or [])]))
     all_hl7_terms = list(dict.fromkeys([*_HL7_TERMS, *(t.lower() for t in policy.get("approved_hl7_versions") or [])]))
 
@@ -525,7 +529,7 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
                 bucket="hl7_message_integrity_gaps",
             )
 
-    if any(term in lower_text for term in all_phi_terms) and not findings:
+    if any(term in content_lower_text for term in all_phi_terms) and not findings:
         add(
             "manual_review",
             "medium",
@@ -537,7 +541,7 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
             bucket="minimum_necessary_gaps",
             allow_empty_file=allow_fileless_fallback(),
         )
-    elif any(term in lower_text for term in all_hl7_terms) and not findings:
+    elif any(term in content_lower_text for term in all_hl7_terms) and not findings:
         add(
             "hl7_manual_review",
             "medium",
