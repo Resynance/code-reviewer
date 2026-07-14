@@ -49,6 +49,7 @@ _DEFAULTS = {
             "id": "codex",
             "label": "Codex",
             "enabled": True,
+            "working_directory": "",
             "command": [
                 "codex",
                 "exec",
@@ -244,6 +245,9 @@ def _normalize_local_agentic_targets(raw) -> list:
                 base["label"] = label.strip()
             if isinstance(item.get("enabled"), bool):
                 base["enabled"] = item["enabled"]
+            working_directory = item.get("working_directory", item.get("cwd"))
+            if isinstance(working_directory, str):
+                base["working_directory"] = working_directory.strip()
             targets.append(base)
     seen = {item["id"] for item in targets}
     for default in _DEFAULTS["local_agentic_targets"]:

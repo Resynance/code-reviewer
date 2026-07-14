@@ -57,6 +57,7 @@ def test_defaults_when_no_file(cfg):
                 "id": "codex",
                 "label": "Codex",
                 "enabled": True,
+                "working_directory": "",
                 "command": ["codex", "exec", "--skip-git-repo-check", "--output-last-message", "{output_path}", "-"],
             },
         ],

@@ -184,9 +184,9 @@ def test_run_command_agent_reports_timeout_without_prompt_dump(monkeypatch):
 def test_compliance_followup_runner_returns_structured_result(monkeypatch):
     runner = local_worker.ComplianceFollowupRunner()
     monkeypatch.setattr(local_worker.config_store, "get_local_agentic_targets", lambda: [
-        {"id": "codex", "label": "Codex", "enabled": True, "command": ["codex"]},
+        {"id": "codex", "label": "Codex", "enabled": True, "working_directory": ".", "command": ["codex"]},
     ])
-    monkeypatch.setattr(runner, "_run_target", lambda target, prompt: '{"status":"completed","summary":"Opened PR","pr_url":"https://github.com/org/a/pull/9"}')
+    monkeypatch.setattr(runner, "_run_target", lambda target, prompt, repo, workdir: '{"status":"completed","summary":"Opened PR","pr_url":"https://github.com/org/a/pull/9"}')
 
     result = runner.run({
         "repo": "org/a",
@@ -203,9 +203,9 @@ def test_compliance_followup_runner_returns_structured_result(monkeypatch):
 def test_compliance_followup_runner_falls_back_to_manual_summary(monkeypatch):
     runner = local_worker.ComplianceFollowupRunner()
     monkeypatch.setattr(local_worker.config_store, "get_local_agentic_targets", lambda: [
-        {"id": "codex", "label": "Codex", "enabled": True, "command": ["codex"]},
+        {"id": "codex", "label": "Codex", "enabled": True, "working_directory": ".", "command": ["codex"]},
     ])
-    monkeypatch.setattr(runner, "_run_target", lambda target, prompt: "Manual follow-up needed")
+    monkeypatch.setattr(runner, "_run_target", lambda target, prompt, repo, workdir: "Manual follow-up needed")
 
     result = runner.run({
         "repo": "org/a",
@@ -216,3 +216,60 @@ def test_compliance_followup_runner_falls_back_to_manual_summary(monkeypatch):
 
     assert result["status"] == "manual_followup"
     assert result["summary"] == "Manual follow-up needed"
+
+
+def test_compliance_followup_runner_uses_configured_working_directory(monkeypatch, tmp_path):
+    runner = local_worker.ComplianceFollowupRunner()
+    checkout = tmp_path / "app"
+    checkout.mkdir()
+    monkeypatch.setattr(local_worker.config_store, "get_local_agentic_targets", lambda: [
+        {
+            "id": "codex",
+            "label": "Codex",
+            "enabled": True,
+            "working_directory": str(checkout),
+            "command": ["codex", "--repo", "{repo}", "--cwd", "{working_directory}"],
+        },
+    ])
+    monkeypatch.setattr(local_worker.shutil, "which", lambda exe: f"/usr/bin/{exe}")
+    seen = {}
+
+    class Completed:
+        returncode = 0
+        stdout = '{"status":"completed","summary":"Opened PR"}'
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        seen["command"] = command
+        seen["cwd"] = kwargs["cwd"]
+        return Completed()
+
+    monkeypatch.setattr(local_worker.subprocess, "run", fake_run)
+
+    result = runner.run({
+        "repo": "org/a",
+        "issue_url": "https://github.com/org/a/issues/7",
+        "target_id": "codex",
+        "analysis": {"health": {"score": 90}},
+    })
+
+    assert result["status"] == "completed"
+    assert seen["cwd"] == str(checkout)
+    assert seen["command"][-4:] == ["--repo", "org/a", "--cwd", str(checkout)]
+
+
+def test_compliance_followup_runner_requires_matching_checkout_without_config(monkeypatch, tmp_path):
+    runner = local_worker.ComplianceFollowupRunner()
+    monkeypatch.setattr(local_worker.config_store, "get_local_agentic_targets", lambda: [
+        {"id": "codex", "label": "Codex", "enabled": True, "command": ["codex"]},
+    ])
+    monkeypatch.setattr(local_worker.Path, "cwd", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(local_worker, "_workdir_matches_repo", lambda path, repo: False)
+
+    with pytest.raises(RuntimeError, match="needs working_directory"):
+        runner.run({
+            "repo": "org/a",
+            "issue_url": "https://github.com/org/a/issues/7",
+            "target_id": "codex",
+            "analysis": {"health": {"score": 90}},
+        })

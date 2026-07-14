@@ -482,7 +482,8 @@ export default function SettingsPage() {
           />
           <div style={{ color: 'var(--text-3)', fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
             These targets are used for compliance follow-up jobs that may build changes and open PRs after an issue is created.
-            Supported placeholders in commands: <code>{'{output_path}'}</code>, <code>{'{prompt_path}'}</code>, and <code>{'{prompt}'}</code>.
+            Set <code>working_directory</code> to the repo checkout; it supports <code>{'{repo}'}</code>, <code>{'{repo_owner}'}</code>, and <code>{'{repo_name}'}</code>.
+            Supported placeholders in commands: <code>{'{output_path}'}</code>, <code>{'{prompt_path}'}</code>, <code>{'{prompt}'}</code>, <code>{'{working_directory}'}</code>, and repo placeholders.
             The default Codex entry works with <code>codex exec --output-last-message</code>.
           </div>
         </div>
