@@ -49,7 +49,6 @@ _DEFAULTS = {
             "id": "codex",
             "label": "Codex",
             "enabled": True,
-            "working_directory": "",
             "command": [
                 "codex",
                 "exec",
@@ -73,6 +72,7 @@ _DEFAULTS = {
             "id": "codex",
             "label": "Codex",
             "enabled": True,
+            "working_directory": "",
             "command": [
                 "codex",
                 "exec",
