@@ -471,6 +471,13 @@ def _persist_local_job_result(job: dict, result_payload: dict):
         _save_review_payload(job.get("request") or {}, result_payload, source="local_worker")
 
 
+def _require_running_local_queue_job(job: dict):
+    if job.get("executor") != "local_queue":
+        raise HTTPException(status_code=400, detail="Job is not configured for local queue execution")
+    if job.get("status") != "running":
+        raise HTTPException(status_code=409, detail="Job must be claimed before worker completion")
+
+
 def _compliance_issue_title(analysis: dict) -> str:
     repo = analysis.get("repo") or "repo"
     health = (analysis.get("health") or {}).get("score")
@@ -1149,9 +1156,8 @@ def complete_llm_job(
     job = review_jobs.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="LLM job not found")
-    if job.get("executor") != "local_queue":
-        raise HTTPException(status_code=400, detail="Job is not configured for local queue execution")
     _require_worker_secret(x_worker_secret)
+    _require_running_local_queue_job(job)
     if job.get("job_type") == "compliance_followup":
         return review_jobs.update_job(job_id, status="done", result=body.result)
     normalized = _normalize_result_payload(body.result)
@@ -1169,9 +1175,8 @@ def fail_llm_job(
     job = review_jobs.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="LLM job not found")
-    if job.get("executor") != "local_queue":
-        raise HTTPException(status_code=400, detail="Job is not configured for local queue execution")
     _require_worker_secret(x_worker_secret)
+    _require_running_local_queue_job(job)
     return review_jobs.update_job(job_id, status="error", error=body.error)
 
 
