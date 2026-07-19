@@ -168,7 +168,8 @@ Based on the provided file tree and key source files, produce a thorough analysi
 If HIPAA / HL7 mode is enabled, populate compliance_review with evidence-backed findings and
 separate manual-review concerns from direct code-level violations.
 
-Call submit_assessment exactly once with your findings."""
+Call submit_assessment exactly once with your findings. If tool calling is unavailable,
+return a raw JSON object matching the submit_assessment schema and nothing else."""
 
 
 class AssessmentEngine:
@@ -218,7 +219,7 @@ class AssessmentEngine:
         if provider and config_store.is_openrouter_target():
             kwargs["extra_body"] = {"provider": {"order": [provider], "allow_fallbacks": False}}
 
-        response = client.chat.completions.create(**kwargs)
+        response = self._create_assessment_completion(client, kwargs)
         payload = self._extract_tool_input(response)
 
         deterministic_compliance = None
@@ -360,6 +361,43 @@ class AssessmentEngine:
     # Prompt + parsing
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _should_retry_without_tools(exc: Exception) -> bool:
+        details = []
+        for value in (
+            str(exc),
+            getattr(exc, "message", None),
+            getattr(exc, "body", None),
+            getattr(getattr(exc, "response", None), "text", None),
+        ):
+            if value:
+                details.append(str(value).lower())
+        haystack = "\n".join(details)
+        unsupported_markers = (
+            "tool_choice",
+            "tools are not supported",
+            "tool use is not supported",
+            "does not support tools",
+            "doesn't support tools",
+            "function calling is not supported",
+            "tool calling is not supported",
+            "unsupported tools",
+            "unsupported parameter: tools",
+            "unsupported parameter: tool_choice",
+        )
+        return any(marker in haystack for marker in unsupported_markers)
+
+    def _create_assessment_completion(self, client, kwargs: dict):
+        try:
+            return client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            if "tools" not in kwargs or not self._should_retry_without_tools(exc):
+                raise
+            retry_kwargs = dict(kwargs)
+            retry_kwargs.pop("tools", None)
+            retry_kwargs.pop("tool_choice", None)
+            return client.chat.completions.create(**retry_kwargs)
+
     def _build_prompt(self, repo: str, tree_lines: list, files: dict, compliance_enabled: bool = False) -> str:
         tree_text = "\n".join(tree_lines[:400])
         truncated = len(tree_lines) > 400
@@ -383,9 +421,153 @@ class AssessmentEngine:
             f"{compliance_section}"
         )
 
+    @staticmethod
+    def _escape_json_string_controls(text: str) -> str:
+        out = []
+        in_string = False
+        escape = False
+        for ch in text:
+            if in_string:
+                if escape:
+                    out.append(ch)
+                    escape = False
+                    continue
+                if ch == "\\":
+                    out.append(ch)
+                    escape = True
+                    continue
+                if ch == '"':
+                    out.append(ch)
+                    in_string = False
+                    continue
+                if ch == "\n":
+                    out.append("\\n")
+                    continue
+                if ch == "\r":
+                    out.append("\\r")
+                    continue
+                if ch == "\t":
+                    out.append("\\t")
+                    continue
+                out.append(ch)
+                continue
+            out.append(ch)
+            if ch == '"':
+                in_string = True
+        return "".join(out)
+
+    @classmethod
+    def _is_assessment_payload(cls, payload) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        required = set(_ASSESSMENT_SCHEMA["required"])
+        if not required.issubset(payload.keys()):
+            return False
+        if not isinstance(payload.get("summary"), str):
+            return False
+        if not isinstance(payload.get("purpose"), str):
+            return False
+        if not isinstance(payload.get("tech_stack"), list):
+            return False
+        if not isinstance(payload.get("key_components"), list):
+            return False
+        if not isinstance(payload.get("vulnerabilities"), list):
+            return False
+        return True
+
+    @classmethod
+    def _parse_json_payload(cls, text: str) -> dict:
+        candidate = (text or "").strip()
+        if not candidate:
+            raise RuntimeError("Model returned empty content.")
+        try:
+            payload = json.loads(candidate)
+            if cls._is_assessment_payload(payload):
+                return payload
+        except json.JSONDecodeError:
+            pass
+
+        escaped = cls._escape_json_string_controls(candidate)
+        if escaped != candidate:
+            try:
+                payload = json.loads(escaped)
+                if cls._is_assessment_payload(payload):
+                    return payload
+            except json.JSONDecodeError:
+                pass
+
+        if "```" in candidate:
+            for block in candidate.split("```"):
+                block = block.strip()
+                if not block:
+                    continue
+                if "\n" in block:
+                    first, rest = block.split("\n", 1)
+                    if first.strip().lower() in {"json", "javascript", "js"}:
+                        try:
+                            payload = json.loads(rest.strip())
+                            if cls._is_assessment_payload(payload):
+                                return payload
+                        except json.JSONDecodeError:
+                            pass
+                try:
+                    payload = json.loads(block)
+                    if cls._is_assessment_payload(payload):
+                        return payload
+                except json.JSONDecodeError:
+                    pass
+
+        start = candidate.find("{")
+        while start != -1:
+            depth = 0
+            in_string = False
+            escape = False
+            for idx in range(start, len(candidate)):
+                ch = candidate[idx]
+                if in_string:
+                    if escape:
+                        escape = False
+                    elif ch == "\\":
+                        escape = True
+                    elif ch == '"':
+                        in_string = False
+                    continue
+                if ch == '"':
+                    in_string = True
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        snippet = candidate[start:idx + 1]
+                        try:
+                            payload = json.loads(snippet)
+                            if cls._is_assessment_payload(payload):
+                                return payload
+                        except json.JSONDecodeError:
+                            break
+            start = candidate.find("{", start + 1)
+
+        raise RuntimeError("Model did not return valid JSON content.")
+
     def _extract_tool_input(self, response) -> dict:
-        message = response.choices[0].message
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            raise RuntimeError("Model returned no assessment choices.")
+        message = choices[0].message
         for call in getattr(message, "tool_calls", None) or []:
             if call.function.name == "submit_assessment":
-                return json.loads(call.function.arguments)
+                return self._parse_json_payload(call.function.arguments)
+        content = getattr(message, "content", None)
+        if isinstance(content, str) and content.strip():
+            return self._parse_json_payload(content)
+        if isinstance(content, list):
+            text_parts = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
+                    text_parts.append(item["text"])
+                elif hasattr(item, "type") and getattr(item, "type") == "text" and isinstance(getattr(item, "text", None), str):
+                    text_parts.append(item.text)
+            if text_parts:
+                return self._parse_json_payload("\n".join(text_parts))
         raise RuntimeError("Model did not return a submit_assessment function call.")
