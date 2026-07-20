@@ -14,6 +14,8 @@ import threading
 from pathlib import Path
 from datetime import datetime, timezone
 
+from json_store import read_json_file
+
 _FILE_PATH = Path(__file__).parent.parent / "compliance_analysis.json"
 _LOCK = threading.Lock()
 _PG_SCHEMA_LOCK = threading.Lock()
@@ -64,13 +66,7 @@ def get_analysis(analysis_id) -> dict | None:
 # ----- file backend ----- #
 
 def _file_read():
-    if not _FILE_PATH.exists():
-        return []
-    try:
-        with open(_FILE_PATH) as f:
-            data = json.load(f)
-    except (ValueError, OSError):
-        return []
+    data = read_json_file(_FILE_PATH, [], expected_type=list)
     out = []
     for row in data:
         rec = dict(row)

@@ -59,6 +59,15 @@ def test_save_normalizes_empty_fields(store):
     assert saved["suggestions"] == []
 
 
+def test_corrupt_file_is_not_overwritten(store):
+    store._FILE_PATH.write_text("{not valid json")
+
+    with pytest.raises(RuntimeError):
+        store.save_analysis({"repo": "acme/app", "health": {"score": 90}})
+
+    assert store._FILE_PATH.read_text() == "{not valid json"
+
+
 def test_postgres_backend_auto_ensures_schema(store, monkeypatch):
     monkeypatch.setenv("REVIEW_STORE_BACKEND", "postgres")
 

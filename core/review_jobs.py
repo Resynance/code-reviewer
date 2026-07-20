@@ -20,6 +20,8 @@ import threading
 from pathlib import Path
 from datetime import datetime, timezone
 
+from json_store import read_json_file
+
 _FILE_PATH = Path(__file__).parent.parent / "review_jobs.json"
 _LOCK = threading.Lock()
 _PG_SCHEMA_LOCK = threading.Lock()
@@ -86,13 +88,7 @@ def update_job(job_id: str, status=None, result=None, error=None, claimed_by=Non
 # ----- file backend ----- #
 
 def _file_read():
-    if not _FILE_PATH.exists():
-        return []
-    try:
-        with open(_FILE_PATH) as f:
-            return json.load(f)
-    except (ValueError, OSError):
-        return []
+    return read_json_file(_FILE_PATH, [], expected_type=list)
 
 
 def _file_write(jobs):

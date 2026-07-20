@@ -2,6 +2,8 @@
 
 import os
 
+import pytest
+
 
 def test_defaults_when_no_file(cfg):
     c = cfg.load_config()
@@ -104,9 +106,15 @@ def test_save_is_partial_merge(cfg):
     assert c["webhook_secret"] == "s1"
 
 
-def test_corrupt_file_falls_back_to_defaults(cfg):
+def test_corrupt_file_raises_and_save_does_not_overwrite(cfg):
     cfg._CONFIG_PATH.write_text("{not valid json")
-    assert cfg.load_config()["repos"] == []
+    with pytest.raises(RuntimeError):
+        cfg.load_config()
+
+    with pytest.raises(RuntimeError):
+        cfg.save_config({"repos": ["org/a"]})
+
+    assert cfg._CONFIG_PATH.read_text() == "{not valid json"
 
 
 def test_repos_normalized_to_strings(cfg):

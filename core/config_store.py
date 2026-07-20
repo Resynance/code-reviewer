@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 import compliance
+from json_store import read_json_file
 
 _CONFIG_PATH = Path(__file__).parent.parent / "config.json"
 _LOCK = threading.Lock()
@@ -124,14 +125,8 @@ def _merge(data: dict) -> dict:
 # ----- file backend ----- #
 
 def _read():
-    """Read config.json, falling back to defaults on missing/corrupt file."""
-    if not _CONFIG_PATH.exists():
-        return dict(_DEFAULTS)
-    try:
-        with open(_CONFIG_PATH) as f:
-            data = json.load(f)
-    except (ValueError, OSError):
-        return dict(_DEFAULTS)
+    """Read config.json, falling back to defaults only when it is missing."""
+    data = read_json_file(_CONFIG_PATH, _DEFAULTS, expected_type=dict)
     return _merge(data)
 
 
