@@ -8,6 +8,23 @@ from review_engine import ReviewRequest, ReviewResult
 import local_worker
 
 
+def test_configure_local_llm_overrides_saved_cloud_settings(cfg, monkeypatch):
+    cfg.save_config({
+        "llm_base_url": "https://openrouter.ai/api/v1/",
+        "llm_api_key": "cloud-key",
+    })
+    monkeypatch.setenv("LOCAL_LLM_BASE_URL", "http://localhost:11434/v1/")
+    monkeypatch.setenv("LOCAL_LLM_API_KEY", "local-key")
+
+    local_worker.configure_local_llm()
+    try:
+        assert cfg.get_llm_base_url() == "http://localhost:11434/v1"
+        assert cfg.get_llm_api_key() == "local-key"
+        assert cfg.is_openrouter_target() is False
+    finally:
+        cfg.clear_llm_runtime_override()
+
+
 class FakeEngine:
     def _retrieve_context(self, request):
         return [{"ref": "ADR-1", "summary": "Use JWT", "reasoning": "stateless"}]

@@ -23,6 +23,8 @@ import compliance
 
 _CONFIG_PATH = Path(__file__).parent.parent / "config.json"
 _LOCK = threading.Lock()
+_LLM_RUNTIME_BASE_URL_OVERRIDE: Optional[str] = None
+_LLM_RUNTIME_API_KEY_OVERRIDE: Optional[str] = None
 
 _DEFAULTS = {
     "github_token": "",   # legacy single-token field — superseded by github_tokens
@@ -318,12 +320,33 @@ def get_llm_worker_secret() -> str:
     return load_config().get("llm_worker_secret") or os.getenv("LLM_WORKER_SECRET", "")
 
 
+def set_llm_runtime_override(base_url: str, api_key: str) -> None:
+    """Force LLM endpoint settings for this process.
+
+    The local worker uses this so persisted server/cloud settings cannot route
+    queued local jobs away from the operator's LOCAL_LLM_* endpoint.
+    """
+    global _LLM_RUNTIME_BASE_URL_OVERRIDE, _LLM_RUNTIME_API_KEY_OVERRIDE
+    _LLM_RUNTIME_BASE_URL_OVERRIDE = (base_url or "").strip().rstrip("/") or None
+    _LLM_RUNTIME_API_KEY_OVERRIDE = api_key or ""
+
+
+def clear_llm_runtime_override() -> None:
+    global _LLM_RUNTIME_BASE_URL_OVERRIDE, _LLM_RUNTIME_API_KEY_OVERRIDE
+    _LLM_RUNTIME_BASE_URL_OVERRIDE = None
+    _LLM_RUNTIME_API_KEY_OVERRIDE = None
+
+
 def get_llm_base_url() -> str:
+    if _LLM_RUNTIME_BASE_URL_OVERRIDE:
+        return _LLM_RUNTIME_BASE_URL_OVERRIDE
     value = load_config().get("llm_base_url") or os.getenv("OPENROUTER_BASE_URL") or DEFAULT_LLM_BASE_URL
     return value.strip().rstrip("/")
 
 
 def get_llm_api_key() -> str:
+    if _LLM_RUNTIME_API_KEY_OVERRIDE is not None:
+        return _LLM_RUNTIME_API_KEY_OVERRIDE
     return load_config().get("llm_api_key") or os.getenv("OPENROUTER_API_KEY", "")
 
 

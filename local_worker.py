@@ -52,17 +52,25 @@ logger = logging.getLogger("local_worker")
 def _normalize_base_url(value: str) -> str:
     return (value or "").strip().rstrip("/")
 
+
+def _local_llm_base_url() -> str:
+    return _normalize_base_url(os.getenv("LOCAL_LLM_BASE_URL", "http://localhost:11434/v1"))
+
+
+def _local_llm_api_key() -> str:
+    return os.getenv("LOCAL_LLM_API_KEY", "local-llm")
+
 # --------------------------------------------------------------------------- #
 # Point the ReviewBot LLM engines at the local LLM *before* importing them.
 # The engines read OPENROUTER_BASE_URL / OPENROUTER_API_KEY as defaults.
 # --------------------------------------------------------------------------- #
 os.environ.setdefault(
     "OPENROUTER_BASE_URL",
-    _normalize_base_url(os.getenv("LOCAL_LLM_BASE_URL", "http://localhost:11434/v1")),
+    _local_llm_base_url(),
 )
 os.environ.setdefault(
     "OPENROUTER_API_KEY",
-    os.getenv("LOCAL_LLM_API_KEY", "local-llm"),
+    _local_llm_api_key(),
 )
 
 ROOT = Path(__file__).resolve().parent
@@ -81,6 +89,11 @@ WORKER_ID = os.getenv("REVIEWBOT_WORKER_ID", "local-worker")
 POLL_INTERVAL = float(os.getenv("REVIEWBOT_POLL_INTERVAL", "1.0"))
 LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "")
 AGENT_TIMEOUT_SECONDS = int(os.getenv("REVIEWBOT_AGENT_TIMEOUT_SECONDS", "600"))
+
+
+def configure_local_llm() -> None:
+    """Force this worker process to use LOCAL_LLM_* over persisted server settings."""
+    config_store.set_llm_runtime_override(_local_llm_base_url(), _local_llm_api_key())
 
 
 # --------------------------------------------------------------------------- #
@@ -569,6 +582,7 @@ class ComplianceFollowupRunner:
 
 class Worker:
     def __init__(self):
+        configure_local_llm()
         self.review_engine = CodeReviewEngine(create_store())
         self.assessment_engine = AssessmentEngine()
         self.agentic_runner = AgenticReviewRunner(self.review_engine)
