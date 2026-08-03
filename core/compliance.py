@@ -113,9 +113,7 @@ def policy_for_repo(policies: dict, repo: str) -> dict:
 
 
 def review_findings(diff: str, files_changed: Iterable[str], policy: dict) -> dict:
-    path_lines = [f"+++ b/{p}" for p in (files_changed or [])]
-    text = "\n".join(path_lines + [diff or ""])
-    return _scan_text(text, files_changed or [], policy, mode="review")
+    return _scan_text(diff or "", files_changed or [], policy, mode="review")
 
 
 def assessment_findings(tree_lines: list, files: dict, policy: dict) -> dict:
@@ -381,9 +379,11 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
         "hl7_transport_gaps": [],
     }
     paths = list(file_paths or [])
+    valid_paths = [path for path in paths if _is_valid_repo_path(path)]
     lower_text = text.lower()
     all_phi_terms = list(dict.fromkeys([*_PHI_TERMS, *(t.lower() for t in policy.get("phi_field_patterns") or [])]))
     all_hl7_terms = list(dict.fromkeys([*_HL7_TERMS, *(t.lower() for t in policy.get("approved_hl7_versions") or [])]))
+    current_file = ""
 
     def add(category, severity, title, evidence, recommendation, *, file="", manual_review=False, bucket=None, allow_empty_file=False):
         file = (file or "").strip()
@@ -405,7 +405,26 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
         if bucket:
             buckets[bucket] = _merge_gap_lists(buckets[bucket], [{"summary": title, "details": evidence, "file": file}])
 
+    def file_from_line(line: str) -> str:
+        if line.startswith("+++ b/"):
+            candidate = line[len("+++ b/"):].strip()
+            return candidate if candidate != "/dev/null" and _is_valid_repo_path(candidate) else ""
+        if line.startswith("--- ") and line.endswith(" ---"):
+            candidate = line[len("--- "):-len(" ---")].strip()
+            return candidate if _is_valid_repo_path(candidate) else ""
+        return ""
+
+    def fallback_file() -> str:
+        if current_file and _is_valid_repo_path(current_file):
+            return current_file
+        if len(valid_paths) == 1:
+            return valid_paths[0]
+        return ""
+
     def evidence_for(patterns, preferred_paths=None):
+        fallback = fallback_file()
+        if fallback:
+            return fallback
         pref = preferred_paths or paths
         for path in pref:
             if any(p in path.lower() for p in patterns):
@@ -413,6 +432,9 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
         return ""
 
     for line in text.splitlines():
+        detected_file = file_from_line(line)
+        if detected_file:
+            current_file = detected_file
         ll = line.lower()
         if _LOG_RE.search(ll) and any(term in ll for term in all_phi_terms):
             add(

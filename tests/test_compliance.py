@@ -51,6 +51,54 @@ def test_review_findings_only_include_touched_files():
             assert finding["file"] == "api/patient.py"
 
 
+def test_review_findings_use_single_touched_file_when_path_has_no_heuristic_match():
+    policy = compliance._normalize_policy({})
+    result = compliance.review_findings(
+        '+ logger.info("patient_ssn")',
+        ["services/billing.py"],
+        policy,
+    )
+
+    matches = [f for f in result["hipaa_findings"] if f["category"] == "phi_logging"]
+    assert len(matches) == 1
+    assert matches[0]["file"] == "services/billing.py"
+
+
+def test_review_findings_attribute_to_current_diff_file_before_path_heuristics():
+    policy = compliance._normalize_policy({})
+    diff = "\n".join([
+        "diff --git a/api/patient.py b/api/patient.py",
+        "+++ b/api/patient.py",
+        "+ def unchanged_patient_handler():",
+        "+     return True",
+        "diff --git a/services/billing.py b/services/billing.py",
+        "+++ b/services/billing.py",
+        '+ logger.info("patient_ssn")',
+    ])
+    result = compliance.review_findings(
+        diff,
+        ["api/patient.py", "services/billing.py"],
+        policy,
+    )
+
+    matches = [f for f in result["hipaa_findings"] if f["category"] == "phi_logging"]
+    assert len(matches) == 1
+    assert matches[0]["file"] == "services/billing.py"
+
+
+def test_assessment_findings_use_current_file_when_path_has_no_heuristic_match():
+    policy = compliance._normalize_policy({})
+    result = compliance.assessment_findings(
+        [],
+        {"services/billing.py": 'logger.info("patient_ssn")'},
+        policy,
+    )
+
+    matches = [f for f in result["hipaa_findings"] if f["category"] == "phi_logging"]
+    assert len(matches) == 1
+    assert matches[0]["file"] == "services/billing.py"
+
+
 def test_review_findings_suppress_test_and_docs_by_default():
     policy = compliance._normalize_policy({})
     result = compliance.review_findings(
