@@ -122,6 +122,22 @@ def test_settings_put_requires_admin_when_auth_enabled(client, monkeypatch):
     assert admin.json()["openrouter_model"] == "m/x"
 
 
+def test_settings_reads_require_admin_when_auth_enabled(client, monkeypatch):
+    tc, _ = client
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", AUTH_SECRET)
+    monkeypatch.setenv("ALLOWED_EMAILS", "admin@co.com,user@co.com")
+
+    user_headers = _auth_headers("user@co.com")
+    assert tc.get("/api/settings", headers=user_headers).status_code == 403
+    assert tc.get("/api/stats", headers=user_headers).status_code == 403
+    assert tc.get("/api/access", headers=user_headers).status_code == 403
+
+    admin_headers = _auth_headers("admin@co.com")
+    assert tc.get("/api/settings", headers=admin_headers).status_code == 200
+    assert tc.get("/api/stats", headers=admin_headers).status_code == 200
+    assert tc.get("/api/access", headers=admin_headers).status_code == 200
+
+
 # ----- repos ----- #
 
 def test_repo_add_remove(client):

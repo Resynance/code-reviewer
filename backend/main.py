@@ -1020,7 +1020,7 @@ def delete_decision(doc_id: str):
     return {"deleted": doc_id}
 
 
-@app.get("/api/stats")
+@app.get("/api/stats", dependencies=[Depends(require_admin)])
 def get_stats():
     """Return basic stats about the decision store."""
     store = get_store()
@@ -1049,7 +1049,7 @@ def get_stats():
 # Settings & repositories (persisted server-side in config.json)
 # ------------------------------------------------------------------ #
 
-@app.get("/api/settings")
+@app.get("/api/settings", dependencies=[Depends(require_admin)])
 def get_settings():
     """Return GitHub settings. Secrets are reported as booleans, never echoed."""
     cfg = config_store.load_config()
@@ -1196,7 +1196,7 @@ def delete_repo(repo: str):
     return {"repos": config_store.remove_repo(repo)}
 
 
-@app.get("/api/access")
+@app.get("/api/access", dependencies=[Depends(require_admin)])
 def list_access():
     """List emails on the runtime allowlist (who may use the app)."""
     return {"emails": access_store.list_emails()}
