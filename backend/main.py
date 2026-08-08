@@ -447,11 +447,12 @@ def _save_review_payload(request_payload: dict, result_payload: dict, source: st
         pass
 
 
-def _save_assessment_payload(result_payload: dict):
+def _save_assessment_payload(request_payload: dict, result_payload: dict):
     try:
         result_payload = _normalize_result_payload(result_payload)
+        repo = request_payload.get("repo") or result_payload.get("repo")
         assessment_store.save_assessment({
-            "repo": result_payload.get("repo"),
+            "repo": repo,
             "summary": result_payload.get("summary"),
             "purpose": result_payload.get("purpose"),
             "tech_stack": result_payload.get("tech_stack") or [],
@@ -466,7 +467,7 @@ def _save_assessment_payload(result_payload: dict):
 
 def _persist_local_job_result(job: dict, result_payload: dict):
     if job.get("job_type") == "assessment":
-        _save_assessment_payload(result_payload)
+        _save_assessment_payload(job.get("request") or {}, result_payload)
     elif job.get("job_type") == "review":
         _save_review_payload(job.get("request") or {}, result_payload, source="local_worker")
 

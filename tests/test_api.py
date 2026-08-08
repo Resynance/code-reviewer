@@ -945,6 +945,44 @@ def test_assessment_local_queue_can_be_claimed_by_type_and_saved(client):
     assert hist["assessments"][0]["summary"] == "assessed"
 
 
+def test_worker_assessment_history_uses_queued_repo(client):
+    tc, _ = client
+    tc.put("/api/settings", json={
+        "github_token": "t",
+        "repos": ["org/a"],
+        "llm_execution_mode": "local_queue",
+        "llm_worker_secret": "secret",
+    })
+
+    job = tc.post("/api/assessments", json={"repo": "org/a"}).json()
+    tc.post(
+        "/worker/llm/claim",
+        headers={"X-Worker-Secret": "secret"},
+        json={"worker_id": "mac-mini", "job_types": ["assessment"]},
+    )
+
+    done = tc.post(
+        f"/worker/llm/{job['id']}/complete",
+        headers={"X-Worker-Secret": "secret"},
+        json={"result": {
+            "repo": "org/other",
+            "summary": "assessed",
+            "purpose": "Does things",
+            "tech_stack": ["Python"],
+            "key_components": [],
+            "vulnerabilities": [],
+            "compliance_review": {"enabled": False, "hipaa_relevant": False},
+            "model": "local/model",
+        }},
+    ).json()
+
+    assert done["status"] == "done"
+    org_a = tc.get("/api/assessments", params={"repo": "org/a"}).json()
+    assert org_a["count"] == 1
+    assert org_a["assessments"][0]["summary"] == "assessed"
+    assert tc.get("/api/assessments", params={"repo": "org/other"}).json()["count"] == 0
+
+
 def test_assessment_rejects_local_queue_when_worker_secret_missing(client):
     tc, _ = client
     tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": ""})
