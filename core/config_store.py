@@ -165,6 +165,42 @@ def _pg_write(data):
         )
 
 
+def _prepare_for_write(current: dict) -> dict:
+    current["repos"] = [r for r in (current.get("repos") or []) if isinstance(r, str)]
+    current["compliance_policies"] = compliance.normalize_policies(current.get("compliance_policies"))
+    current["local_review_agents"] = _normalize_local_review_agents(current.get("local_review_agents"))
+    current["local_agentic_targets"] = _normalize_local_agentic_targets(current.get("local_agentic_targets"))
+    return current
+
+
+def _pg_update_compliance_policies(update_fn):
+    import db
+
+    conn = db.connect()
+    conn.autocommit = False
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO app_settings (id, data) VALUES (1, %s) "
+                    "ON CONFLICT (id) DO NOTHING",
+                    (json.dumps({}),),
+                )
+                cur.execute("SELECT data FROM app_settings WHERE id = 1 FOR UPDATE")
+                row = cur.fetchone()
+                current = _merge(row[0] if row and row[0] else {})
+                policies = compliance.normalize_policies(current.get("compliance_policies"))
+                current["compliance_policies"] = update_fn(copy.deepcopy(policies))
+                current = _prepare_for_write(current)
+                cur.execute(
+                    "UPDATE app_settings SET data = %s WHERE id = 1",
+                    (json.dumps(current),),
+                )
+                return copy.deepcopy(current["compliance_policies"])
+    finally:
+        conn.close()
+
+
 def load_config():
     if _is_postgres():
         return _pg_read()
@@ -178,21 +214,28 @@ def save_config(update: dict):
     if _is_postgres():
         current = _pg_read()
         current.update(update)
-        current["repos"] = [r for r in (current.get("repos") or []) if isinstance(r, str)]
-        current["compliance_policies"] = compliance.normalize_policies(current.get("compliance_policies"))
-        current["local_review_agents"] = _normalize_local_review_agents(current.get("local_review_agents"))
-        current["local_agentic_targets"] = _normalize_local_agentic_targets(current.get("local_agentic_targets"))
+        current = _prepare_for_write(current)
         _pg_write(current)
         return current
     with _LOCK:
         current = _read()
         current.update(update)
-        current["repos"] = [r for r in (current.get("repos") or []) if isinstance(r, str)]
-        current["compliance_policies"] = compliance.normalize_policies(current.get("compliance_policies"))
-        current["local_review_agents"] = _normalize_local_review_agents(current.get("local_review_agents"))
-        current["local_agentic_targets"] = _normalize_local_agentic_targets(current.get("local_agentic_targets"))
+        current = _prepare_for_write(current)
         _write(current)
         return current
+
+
+def update_compliance_policies(update_fn):
+    """Atomically transform and persist the full compliance policy object."""
+    if _is_postgres():
+        return _pg_update_compliance_policies(update_fn)
+    with _LOCK:
+        current = _read()
+        policies = compliance.normalize_policies(current.get("compliance_policies"))
+        current["compliance_policies"] = update_fn(copy.deepcopy(policies))
+        current = _prepare_for_write(current)
+        _write(current)
+        return copy.deepcopy(current["compliance_policies"])
 
 
 def _normalize_local_review_agents(raw) -> list:
