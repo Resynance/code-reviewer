@@ -383,9 +383,109 @@ class AssessmentEngine:
             f"{compliance_section}"
         )
 
+    @staticmethod
+    def _escape_json_string_controls(text: str) -> str:
+        out = []
+        in_string = False
+        escape = False
+        for ch in text:
+            if in_string:
+                if escape:
+                    out.append(ch)
+                    escape = False
+                    continue
+                if ch == "\\":
+                    out.append(ch)
+                    escape = True
+                    continue
+                if ch == '"':
+                    out.append(ch)
+                    in_string = False
+                    continue
+                if ch == "\n":
+                    out.append("\\n")
+                    continue
+                if ch == "\r":
+                    out.append("\\r")
+                    continue
+                if ch == "\t":
+                    out.append("\\t")
+                    continue
+                out.append(ch)
+                continue
+            out.append(ch)
+            if ch == '"':
+                in_string = True
+        return "".join(out)
+
+    @staticmethod
+    def _is_assessment_payload(payload) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        required = set(_ASSESSMENT_SCHEMA["required"])
+        if not required.issubset(payload.keys()):
+            return False
+        if not isinstance(payload.get("summary"), str) or not payload.get("summary", "").strip():
+            return False
+        if not isinstance(payload.get("purpose"), str):
+            return False
+        if not isinstance(payload.get("tech_stack"), list):
+            return False
+        if not isinstance(payload.get("key_components"), list):
+            return False
+        if not isinstance(payload.get("vulnerabilities"), list):
+            return False
+        return True
+
+    @classmethod
+    def _parse_json_payload(cls, text: str) -> dict:
+        candidate = (text or "").strip()
+        if not candidate:
+            raise RuntimeError("Model returned empty assessment arguments.")
+        for value in (candidate, cls._escape_json_string_controls(candidate)):
+            try:
+                payload = json.loads(value)
+                if cls._is_assessment_payload(payload):
+                    return payload
+            except json.JSONDecodeError:
+                pass
+
+        start = candidate.find("{")
+        while start != -1:
+            depth = 0
+            in_string = False
+            escape = False
+            for idx in range(start, len(candidate)):
+                ch = candidate[idx]
+                if in_string:
+                    if escape:
+                        escape = False
+                    elif ch == "\\":
+                        escape = True
+                    elif ch == '"':
+                        in_string = False
+                    continue
+                if ch == '"':
+                    in_string = True
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        snippet = candidate[start:idx + 1]
+                        try:
+                            payload = json.loads(cls._escape_json_string_controls(snippet))
+                            if cls._is_assessment_payload(payload):
+                                return payload
+                        except json.JSONDecodeError:
+                            break
+            start = candidate.find("{", start + 1)
+
+        raise RuntimeError("Model did not return valid assessment JSON arguments.")
+
     def _extract_tool_input(self, response) -> dict:
         message = response.choices[0].message
         for call in getattr(message, "tool_calls", None) or []:
             if call.function.name == "submit_assessment":
-                return json.loads(call.function.arguments)
+                return self._parse_json_payload(call.function.arguments)
         raise RuntimeError("Model did not return a submit_assessment function call.")

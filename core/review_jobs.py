@@ -18,7 +18,7 @@ import json
 import uuid
 import threading
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 _FILE_PATH = Path(__file__).parent.parent / "review_jobs.json"
 _LOCK = threading.Lock()
@@ -38,6 +38,49 @@ def _backend() -> str:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _running_stale_after_seconds() -> int:
+    raw = os.getenv("REVIEW_JOB_RUNNING_TIMEOUT_SECONDS", "1800")
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return 1800
+    return max(0, value)
+
+
+def _parse_ts(value):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        ts = value
+    elif isinstance(value, str):
+        try:
+            ts = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts
+
+
+def _is_stale_running(job: dict, now: datetime, stale_after_seconds: int) -> bool:
+    if stale_after_seconds <= 0 or job.get("status") != "running":
+        return False
+    marker = _parse_ts(job.get("updated_at")) or _parse_ts(job.get("started_at"))
+    if not marker:
+        return False
+    return marker <= now - timedelta(seconds=stale_after_seconds)
+
+
+def _claimable_status(job: dict, executor: str, now: datetime, stale_after_seconds: int) -> bool:
+    if job.get("executor") != executor:
+        return False
+    if job.get("status") == "queued":
+        return True
+    return _is_stale_running(job, now, stale_after_seconds)
 
 
 def create_job(request: dict, job_type: str = "review", executor: str = "inline") -> dict:
@@ -150,15 +193,17 @@ def _file_list(limit, executor, status, job_type):
 def _file_claim_next(job_types, executor, worker_id):
     with _LOCK:
         jobs = _file_read()
+        now = datetime.now(timezone.utc)
+        stale_after = _running_stale_after_seconds()
         for job in jobs:
-            if job.get("status") != "queued" or job.get("executor") != executor:
+            if not _claimable_status(job, executor, now, stale_after):
                 continue
             if job_types and job.get("job_type") not in job_types:
                 continue
             job["status"] = "running"
             job["claimed_by"] = worker_id or None
-            job["started_at"] = _now()
-            job["updated_at"] = _now()
+            job["started_at"] = now.isoformat()
+            job["updated_at"] = now.isoformat()
             _file_write(jobs)
             return job
     return None
@@ -167,16 +212,18 @@ def _file_claim_next(job_types, executor, worker_id):
 def _file_claim_next_agentic_review(executor, worker_id):
     with _LOCK:
         jobs = _file_read()
+        now = datetime.now(timezone.utc)
+        stale_after = _running_stale_after_seconds()
         for job in jobs:
             req = job.get("request") or {}
-            if job.get("status") != "queued" or job.get("executor") != executor:
+            if not _claimable_status(job, executor, now, stale_after):
                 continue
             if not req.get("agentic"):
                 continue
             job["status"] = "running"
             job["claimed_by"] = worker_id or None
-            job["started_at"] = _now()
-            job["updated_at"] = _now()
+            job["started_at"] = now.isoformat()
+            job["updated_at"] = now.isoformat()
             _file_write(jobs)
             return job
     return None
@@ -314,8 +361,15 @@ def _pg_claim_next(job_types, executor, worker_id):
     import db
 
     _pg_ensure_schema()
-    where = ["status = 'queued'", "executor = %s"]
-    params = [executor]
+    stale_after = _running_stale_after_seconds()
+    status_clause = "status = 'queued'"
+    if stale_after > 0:
+        status_clause = "(status = 'queued' OR (status = 'running' AND updated_at <= now() - (%s * interval '1 second')))"
+    where = [status_clause, "executor = %s"]
+    params = []
+    if stale_after > 0:
+        params.append(stale_after)
+    params.append(executor)
     if job_types:
         where.append("job_type = ANY(%s)")
         params.append(list(job_types))
@@ -341,12 +395,18 @@ def _pg_claim_next_agentic_review(executor, worker_id):
     import db
 
     _pg_ensure_schema()
-    params = [executor, worker_id or None]
+    stale_after = _running_stale_after_seconds()
+    status_clause = "status = 'queued'"
+    params = []
+    if stale_after > 0:
+        status_clause = "(status = 'queued' OR (status = 'running' AND updated_at <= now() - (%s * interval '1 second')))"
+        params.append(stale_after)
+    params.extend([executor, worker_id or None])
     with db.connect() as conn, conn.cursor() as cur:
         cur.execute(
             "WITH next_job AS ("
             "  SELECT id FROM review_jobs "
-            "  WHERE status = 'queued' AND executor = %s "
+            f"  WHERE {status_clause} AND executor = %s "
             "    AND COALESCE((request->>'agentic')::boolean, false) = true "
             "  ORDER BY created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
             ") "

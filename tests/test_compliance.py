@@ -39,6 +39,32 @@ def test_review_findings_detect_hl7_logging_transport_and_validation_gaps():
     assert result["requires_manual_compliance_review"] is False
 
 
+def test_review_findings_do_not_suppress_gaps_with_unrelated_repo_wide_signals():
+    policy = compliance._normalize_policy({})
+    result = compliance.review_findings(
+        "\n".join([
+            "+ require_user = object()",
+            "+ audit_log = object()",
+            "+ def ack(message): return True",
+            "+ unrelated = True",
+            '+ @app.get("/patients/{patient_id}")',
+            "+ def get_patient(patient_id):",
+            "+     return patient_id",
+            "+ def update_patient(patient_id):",
+            "+     write_patient(patient_id)",
+            '+ msg = "MSH|^~\\\\&|ADT|PID|"',
+        ]),
+        ["api/patient.py", "integrations/hl7_listener.py"],
+        policy,
+    )
+
+    titles = {f["title"] for f in result["hipaa_findings"]}
+    hl7_titles = {f["title"] for f in result["hl7_findings"]}
+    assert "HIPAA-relevant route lacks obvious access control signal" in titles
+    assert "PHI modification path lacks obvious audit trail signal" in titles
+    assert "HL7 message handling lacks obvious validation or ACK controls" in hl7_titles
+
+
 def test_review_findings_only_include_touched_files():
     policy = compliance._normalize_policy({})
     result = compliance.review_findings(
