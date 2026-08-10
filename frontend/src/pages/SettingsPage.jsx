@@ -1,6 +1,12 @@
 import { useState, useEffect } from 'react'
 import { api } from '../lib/api.js'
 import { useMediaQuery } from '../lib/useMediaQuery.js'
+import {
+  DEFAULT_COMPLIANCE_POLICIES,
+  formatCompliancePolicies,
+  parseCompliancePolicies,
+  setRepoComplianceEnabledInPolicy,
+} from '../lib/compliancePolicies.js'
 
 export default function SettingsPage() {
   const isMobile = useMediaQuery('(max-width: 860px)')
@@ -71,7 +77,7 @@ export default function SettingsPage() {
       setLlmTimeoutSeconds(s.llm_timeout_seconds || '')
       setLocalReviewAgentsInput(JSON.stringify(s.local_review_agents || [], null, 2))
       setLocalAgenticTargetsInput(JSON.stringify(s.local_agentic_targets || [], null, 2))
-      setCompliancePoliciesInput(JSON.stringify(s.compliance_policies || { default: {}, repos: {} }, null, 2))
+      setCompliancePoliciesInput(formatCompliancePolicies(s.compliance_policies))
     }).catch(() => {})
     api.listAccess().then(r => setAccessEmails(r.emails || [])).catch(() => {})
     api.githubOwners().then(r => setOwners(r.owners || [])).catch(() => {})
@@ -143,7 +149,7 @@ export default function SettingsPage() {
     try {
       let parsedPolicies
       try {
-        parsedPolicies = JSON.parse(compliancePoliciesInput || '{}')
+        parsedPolicies = parseCompliancePolicies(compliancePoliciesInput)
       } catch {
         setModelMsg('HIPAA / HL7 policies must be valid JSON')
         setSavingModel(false)
@@ -157,7 +163,7 @@ export default function SettingsPage() {
       setSettings(s)
       setModelsList(s.openrouter_models || [])
       setEmbeddingInput(s.embedding_model || '')
-      setCompliancePoliciesInput(JSON.stringify(s.compliance_policies || { default: {}, repos: {} }, null, 2))
+      setCompliancePoliciesInput(formatCompliancePolicies(s.compliance_policies))
       setModelMsg('Saved ✓')
       refreshStats()
     } catch (e) {
@@ -307,21 +313,25 @@ export default function SettingsPage() {
 
   async function setRepoComplianceEnabled(repo, enabled) {
     setRepoErr(null)
-    const current = settings?.compliance_policies || { default: {}, repos: {} }
-    const next = {
-      ...current,
-      repos: {
-        ...(current.repos || {}),
-        [repo]: {
-          ...((current.repos || {})[repo] || {}),
-          enabled,
-        },
-      },
+    let current
+    try {
+      current = parseCompliancePolicies(compliancePoliciesInput)
+    } catch {
+      setRepoErr('HIPAA / HL7 policies must be valid JSON')
+      return
     }
     try {
+      const savedInput = formatCompliancePolicies(settings?.compliance_policies || DEFAULT_COMPLIANCE_POLICIES)
+      const hasLocalPolicyEdits = compliancePoliciesInput.trim() !== savedInput
+      if (!hasLocalPolicyEdits) {
+        const latest = await api.getSettings()
+        current = latest.compliance_policies || DEFAULT_COMPLIANCE_POLICIES
+        setSettings(latest)
+      }
+      const next = setRepoComplianceEnabledInPolicy(current, repo, enabled)
       const saved = await api.saveSettings({ compliance_policies: next })
       setSettings(saved)
-      setCompliancePoliciesInput(JSON.stringify(saved.compliance_policies || { default: {}, repos: {} }, null, 2))
+      setCompliancePoliciesInput(formatCompliancePolicies(saved.compliance_policies))
     } catch (e) {
       setRepoErr(e.message)
     }
