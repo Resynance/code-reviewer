@@ -19,6 +19,9 @@ GITHUB_API_BASE = "https://api.github.com"
 
 _MAX_FILE_BYTES = 25_000   # content limit per file
 _MAX_TOTAL_BYTES = 90_000  # total content budget across all selected files
+_MAX_COMPLIANCE_FILE_BYTES = 50_000
+_MAX_COMPLIANCE_TOTAL_BYTES = 1_500_000
+_MAX_COMPLIANCE_FILES = 500
 
 # Basenames that should always be included when present (case-insensitive).
 _PRIORITY_NAMES = frozenset({
@@ -44,6 +47,20 @@ _SENSITIVE_NAMES = frozenset({
 })
 _SENSITIVE_EXTENSIONS = frozenset({
     ".pem", ".key", ".p12", ".pfx", ".cer", ".crt", ".der",
+})
+_COMPLIANCE_SKIP_DIRS = frozenset({
+    ".git", "node_modules", "dist", "build", ".venv", "venv", "__pycache__",
+    "coverage", ".next", ".turbo",
+})
+_COMPLIANCE_SKIP_NAMES = frozenset({
+    "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "poetry.lock",
+    "cargo.lock", "composer.lock", "gemfile.lock",
+})
+_COMPLIANCE_TEXT_EXTENSIONS = frozenset({
+    ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+    ".go", ".rs", ".java", ".kt", ".swift", ".rb", ".php", ".cs",
+    ".json", ".toml", ".yml", ".yaml", ".ini", ".cfg", ".conf",
+    ".sql", ".graphql", ".html", ".css", ".scss", ".sh", ".md", ".txt",
 })
 
 
@@ -262,6 +279,32 @@ class AssessmentEngine:
     # ------------------------------------------------------------------ #
 
     def _fetch_repo_content(self, repo: str, token: str):
+        all_blobs = self._fetch_repo_blobs(repo, token)
+        tree_lines = [item["path"] for item in all_blobs]
+        selected = self._select_files(all_blobs)
+        file_contents = self._fetch_file_contents(
+            repo,
+            token,
+            selected,
+            max_file_bytes=_MAX_FILE_BYTES,
+            max_total_bytes=_MAX_TOTAL_BYTES,
+        )
+        return tree_lines, file_contents
+
+    def _fetch_repo_content_for_compliance(self, repo: str, token: str):
+        all_blobs = self._fetch_repo_blobs(repo, token)
+        tree_lines = [item["path"] for item in all_blobs]
+        selected = self._select_compliance_files(all_blobs)
+        file_contents = self._fetch_file_contents(
+            repo,
+            token,
+            selected,
+            max_file_bytes=_MAX_COMPLIANCE_FILE_BYTES,
+            max_total_bytes=_MAX_COMPLIANCE_TOTAL_BYTES,
+        )
+        return tree_lines, file_contents
+
+    def _fetch_repo_blobs(self, repo: str, token: str) -> list[dict]:
         import httpx
 
         headers = {
@@ -280,36 +323,49 @@ class AssessmentEngine:
                 params={"recursive": "1"},
             )
             r.raise_for_status()
-            all_blobs = [
+            return [
                 item for item in r.json().get("tree", [])
                 if item.get("type") == "blob"
             ]
 
-        tree_lines = [item["path"] for item in all_blobs]
-        selected = self._select_files(all_blobs)
+    def _fetch_file_contents(
+        self,
+        repo: str,
+        token: str,
+        selected: list[dict],
+        *,
+        max_file_bytes: int,
+        max_total_bytes: int,
+    ) -> dict[str, str]:
+        import httpx
 
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
         file_contents = {}
         total = 0
 
         with httpx.Client(timeout=30.0, headers=headers) as client:
             for item in selected:
-                if total >= _MAX_TOTAL_BYTES:
+                if total >= max_total_bytes:
                     break
                 path = item["path"]
-                if item.get("size", 0) > _MAX_FILE_BYTES:
+                if item.get("size", 0) > max_file_bytes:
                     continue
                 try:
                     r = client.get(f"{GITHUB_API_BASE}/repos/{repo}/contents/{path}")
                     r.raise_for_status()
                     raw = r.json().get("content", "").replace("\n", "")
                     content = base64.b64decode(raw).decode("utf-8", errors="replace")
-                    content = content[:_MAX_FILE_BYTES]
+                    content = content[:max_file_bytes]
                     file_contents[path] = content
                     total += len(content)
                 except Exception:
                     continue
 
-        return tree_lines, file_contents
+        return file_contents
 
     def _is_sensitive(self, path: str) -> bool:
         basename = path.rsplit("/", 1)[-1].lower()
@@ -354,6 +410,29 @@ class AssessmentEngine:
                     add(item)
                 break
 
+        return selected
+
+    def _is_compliance_candidate(self, path: str) -> bool:
+        normalized = (path or "").replace("\\", "/")
+        lowered = normalized.lower()
+        parts = [part for part in lowered.split("/") if part]
+        basename = parts[-1] if parts else lowered
+        _, ext = os.path.splitext(basename)
+        if self._is_sensitive(normalized):
+            return False
+        if any(part in _COMPLIANCE_SKIP_DIRS for part in parts):
+            return False
+        if basename in _COMPLIANCE_SKIP_NAMES:
+            return False
+        return basename in _PRIORITY_NAMES or ext in _COMPLIANCE_TEXT_EXTENSIONS
+
+    def _select_compliance_files(self, all_blobs: list) -> list:
+        selected = []
+        for item in all_blobs:
+            if len(selected) >= _MAX_COMPLIANCE_FILES:
+                break
+            if self._is_compliance_candidate(item.get("path", "")):
+                selected.append(item)
         return selected
 
     # ------------------------------------------------------------------ #

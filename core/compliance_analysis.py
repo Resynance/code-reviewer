@@ -122,7 +122,7 @@ class ComplianceAnalysis:
         token = config_store.get_token_for(owner)
         if not token:
             raise ValueError("No GitHub token configured for this repo's owner")
-        return self._engine._fetch_repo_content(self.repo, token)
+        return self._engine._fetch_repo_content_for_compliance(self.repo, token)
 
     def _prior_assessment_files(self, assessments: list[dict]) -> dict[str, str] | None:
         """Return file contents from the most recent prior assessment, if any.
