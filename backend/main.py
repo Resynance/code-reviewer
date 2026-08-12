@@ -1507,18 +1507,54 @@ def _verify_github_signature(body: bytes, signature: Optional[str]) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
+def _diff_from_pr_files(files: list[dict]) -> str:
+    """Reconstruct a reviewable diff when GitHub refuses the raw diff media type."""
+    parts = []
+    for item in files:
+        name = item.get("filename", "?")
+        status = item.get("status")
+        header = f"diff --git a/{name} b/{name}"
+        if status:
+            header += f"  ({status})"
+        patch = item.get("patch")
+        parts.append(f"{header}\n{patch}" if patch else f"{header}\n(no textual diff available)")
+    return "\n\n".join(parts)
+
+
+async def _fetch_pr_files_for_diff(
+    client: httpx.AsyncClient,
+    repo: str,
+    pr_number: int,
+    max_pages: int = 20,
+) -> list[dict]:
+    files = []
+    url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}/files"
+    for page in range(1, max_pages + 1):
+        resp = await client.get(url, params={"per_page": 100, "page": page})
+        resp.raise_for_status()
+        batch = resp.json()
+        if not batch:
+            break
+        files.extend(batch)
+    return files
+
+
 async def _fetch_pr_diff(repo: str, pr_number: int) -> str:
     """Fetch a PR's unified diff from GitHub."""
     token = _token_for(repo)
     headers = {
-        "Accept": "application/vnd.github.v3.diff",
+        "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
     if token:
         headers["Authorization"] = f"Bearer {token}"
     url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}"
     async with httpx.AsyncClient(timeout=30.0, headers=headers) as client:
-        resp = await client.get(url)
+        resp = await client.get(url, headers={"Accept": "application/vnd.github.v3.diff"})
+        if resp.status_code == 406:
+            files = await _fetch_pr_files_for_diff(client, repo, pr_number)
+            if files:
+                return _diff_from_pr_files(files)
         resp.raise_for_status()
         return resp.text
 
