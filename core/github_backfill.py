@@ -176,6 +176,12 @@ def _diff_from_files(files: list) -> str:
     return "\n\n".join(parts)
 
 
+def _has_next_page(resp) -> bool:
+    headers = getattr(resp, "headers", {})
+    link = headers.get("link", "") or headers.get("Link", "")
+    return 'rel="next"' in link
+
+
 def fetch_pr(repo: str, number, token: str, max_file_pages: int = 20) -> dict:
     """Fetch one PR's metadata + unified diff + changed files, shaped for the
     review form. Raises ValueError / RuntimeError on the usual conditions.
@@ -196,19 +202,27 @@ def fetch_pr(repo: str, number, token: str, max_file_pages: int = 20) -> dict:
         # Changed files (paginated). Needed for files_changed and as the diff
         # fallback when the .diff endpoint refuses an oversize PR.
         files = []
+        files_truncated = False
         for page in range(1, max_file_pages + 1):
             fr = client.get(f"{base}/files", params={"per_page": PER_PAGE, "page": page})
             if fr.status_code != 200:
-                break
+                _raise_for_status(fr, repo)
             batch = fr.json()
             if not batch:
                 break
             files.extend(batch)
+            if page == max_file_pages and _has_next_page(fr):
+                files_truncated = True
 
         diff_resp = client.get(base, headers={"Accept": "application/vnd.github.v3.diff"})
         if diff_resp.status_code == 200:
             diff = diff_resp.text
         elif diff_resp.status_code == 406:
+            if files_truncated:
+                raise RuntimeError(
+                    "GitHub diff is too large and changed files exceeded the local "
+                    "pagination cap; refusing to review a partial diff."
+                )
             diff = _diff_from_files(files)  # too many files for the .diff endpoint
         else:
             _raise_for_status(diff_resp, repo)
