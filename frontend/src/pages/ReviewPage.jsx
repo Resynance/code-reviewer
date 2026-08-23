@@ -20,6 +20,20 @@ function historyToResult(r) {
   }
 }
 
+function resetLoadedPrFields(form, overrides = {}) {
+  return {
+    ...form,
+    pr_number: '',
+    title: '',
+    description: '',
+    diff: '',
+    author: '',
+    base_branch: '',
+    files_changed: [],
+    ...overrides,
+  }
+}
+
 export default function ReviewPage() {
   const isMobile = useMediaQuery('(max-width: 860px)')
   const [form, setForm] = useState({
@@ -52,21 +66,40 @@ export default function ReviewPage() {
   const [selectedAgentSources, setSelectedAgentSources] = useState([])
   // Tracks the in-flight review job so a superseded/unmounted poll stops.
   const jobRef = useRef(null)
-  useEffect(() => () => { jobRef.current = null }, [])
+  // Tracks PR loads so stale responses cannot repopulate a different repo/PR.
+  const prLoadRef = useRef(0)
+  const currentRepoRef = useRef('')
+  useEffect(() => () => {
+    jobRef.current = null
+    prLoadRef.current += 1
+  }, [])
   // When the shown result is the last *saved* review (vs. a fresh run), holds
   // its timestamp so the panel can say so.
   const [savedAt, setSavedAt] = useState(null)
 
-  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+  function selectRepo(repo) {
+    currentRepoRef.current = repo
+    prLoadRef.current += 1
+    setSelectedPr('')
+    setLoadingPr(false)
+    setPrError(null)
+    setForm(f => resetLoadedPrFields(f, { repo }))
+    setResult(null)
+    setSavedAt(null)
+    setError(null)
+  }
+
+  const set = (k, v) => {
+    if (k === 'repo') selectRepo(v)
+    else setForm(f => ({ ...f, [k]: v }))
+  }
 
   // Load configured repos and model slots on mount.
   useEffect(() => {
     api.listRepos().then(r => {
       const list = r.repos || []
       setRepos(list)
-      if (list.length) {
-        setForm(f => (f.repo ? f : { ...f, repo: list[0] }))
-      }
+      if (list.length && !currentRepoRef.current) selectRepo(list[0])
     }).catch(() => {})
 
     api.getSettings().then(s => {
@@ -92,10 +125,11 @@ export default function ReviewPage() {
 
   // Whenever the selected repo changes, load its PRs (open first) for the picker.
   useEffect(() => {
-    if (!form.repo || !repos.includes(form.repo)) { setPrList([]); return }
+    const repo = form.repo
+    if (!repo || !repos.includes(repo)) { setPrList([]); return }
     let active = true
-    setLoadingPrs(true); setPrError(null); setSelectedPr('')
-    api.repoPrs(form.repo)
+    setLoadingPrs(true); setPrError(null)
+    api.repoPrs(repo)
       .then(res => { if (active) setPrList(res.prs || []) })
       .catch(() => { if (active) { setPrList([]); setPrError('Could not load PRs — check the GitHub token in Settings.') } })
       .finally(() => active && setLoadingPrs(false))
@@ -104,34 +138,46 @@ export default function ReviewPage() {
 
   // Load a selected PR's metadata + diff into the form.
   async function loadPr(number) {
+    const repo = currentRepoRef.current || form.repo
+    const requestId = prLoadRef.current + 1
+    prLoadRef.current = requestId
     setSelectedPr(number)
+    setForm(f => resetLoadedPrFields(f, number ? { pr_number: Number(number) } : {}))
+    setResult(null)
+    setSavedAt(null)
+    setError(null)
     if (!number) return
     setLoadingPr(true); setPrError(null)
     try {
-      const data = await api.repoPr(form.repo, number)
-      setForm(f => ({
-        ...f,
-        pr_number: data.pr_number,
-        title: data.title,
-        description: data.description,
-        author: data.author,
-        base_branch: data.base_branch,
-        diff: data.diff,
-        files_changed: data.files_changed || [],
-      }))
+      const data = await api.repoPr(repo, number)
+      if (prLoadRef.current !== requestId) return
+      setForm(f => {
+        if (f.repo !== repo || prLoadRef.current !== requestId) return f
+        return {
+          ...f,
+          pr_number: data.pr_number,
+          title: data.title,
+          description: data.description,
+          author: data.author,
+          base_branch: data.base_branch,
+          diff: data.diff,
+          files_changed: data.files_changed || [],
+        }
+      })
       // Surface the most recent saved review for this PR, so it's not "lost"
       // after a refresh — a fresh run replaces it.
       try {
-        const hist = await api.reviews({ repo: form.repo, prNumber: number, limit: 1 })
+        const hist = await api.reviews({ repo, prNumber: number, limit: 1 })
+        if (prLoadRef.current !== requestId || currentRepoRef.current !== repo) return
         const last = (hist.reviews || [])[0]
         setResult(last ? historyToResult(last) : null)
         setSavedAt(last ? last.created_at : null)
         setError(null)
       } catch { /* history is best-effort */ }
     } catch (e) {
-      setPrError(e.message)
+      if (prLoadRef.current === requestId) setPrError(e.message)
     } finally {
-      setLoadingPr(false)
+      if (prLoadRef.current === requestId) setLoadingPr(false)
     }
   }
 
@@ -314,7 +360,7 @@ export default function ReviewPage() {
       )}
 
       <div style={{ display: 'flex', gap: 12, alignItems: isMobile ? 'stretch' : 'center', flexDirection: isMobile ? 'column' : 'row', marginBottom: 28 }}>
-        <button onClick={submit} disabled={loading || (executionMode === 'local_queue' && agenticReview && selectedAgentSources.length === 0)} style={btnStyle(loading || (executionMode === 'local_queue' && agenticReview && selectedAgentSources.length === 0))}>
+        <button onClick={submit} disabled={loading || loadingPr || (executionMode === 'local_queue' && agenticReview && selectedAgentSources.length === 0)} style={btnStyle(loading || loadingPr || (executionMode === 'local_queue' && agenticReview && selectedAgentSources.length === 0))}>
           {loading ? '⟳ Reviewing…' : '▶ Run Review'}
         </button>
         {error && <span style={{ color: 'var(--red)', fontSize: 13 }}>⚠ {error}</span>}
