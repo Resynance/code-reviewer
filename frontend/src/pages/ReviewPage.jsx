@@ -66,18 +66,27 @@ export default function ReviewPage() {
   const [selectedAgentSources, setSelectedAgentSources] = useState([])
   // Tracks the in-flight review job so a superseded/unmounted poll stops.
   const jobRef = useRef(null)
+  const reviewRunRef = useRef(0)
   // Tracks PR loads so stale responses cannot repopulate a different repo/PR.
   const prLoadRef = useRef(0)
   const currentRepoRef = useRef('')
   useEffect(() => () => {
     jobRef.current = null
+    reviewRunRef.current += 1
     prLoadRef.current += 1
   }, [])
   // When the shown result is the last *saved* review (vs. a fresh run), holds
   // its timestamp so the panel can say so.
   const [savedAt, setSavedAt] = useState(null)
 
+  function cancelActiveReview() {
+    jobRef.current = null
+    reviewRunRef.current += 1
+    setLoading(false)
+  }
+
   function selectRepo(repo) {
+    cancelActiveReview()
     currentRepoRef.current = repo
     prLoadRef.current += 1
     setSelectedPr('')
@@ -138,6 +147,7 @@ export default function ReviewPage() {
 
   // Load a selected PR's metadata + diff into the form.
   async function loadPr(number) {
+    cancelActiveReview()
     const repo = currentRepoRef.current || form.repo
     const requestId = prLoadRef.current + 1
     prLoadRef.current = requestId
@@ -182,6 +192,8 @@ export default function ReviewPage() {
   }
 
   async function submit() {
+    const runId = reviewRunRef.current + 1
+    reviewRunRef.current = runId
     setLoading(true)
     setResult(null)
     setSavedAt(null)
@@ -195,28 +207,30 @@ export default function ReviewPage() {
         agentic: executionMode === 'local_queue' && agenticReview,
         agent_sources: executionMode === 'local_queue' && agenticReview ? selectedAgentSources : [],
       })
-      jobRef.current = id
-      // Drive the work in the background; the result is read via polling, so a
-      // dropped run connection still recovers once the job finishes.
+      // Drive the work in the background; polling only updates the current run.
       if (executionMode === 'inline') api.runReview(id).catch(() => {})
-      poll(id)
+      if (reviewRunRef.current !== runId) return
+      jobRef.current = id
+      poll(id, runId)
     } catch (e) {
-      setError(e.message)
-      setLoading(false)
+      if (reviewRunRef.current === runId) {
+        setError(e.message)
+        setLoading(false)
+      }
     }
   }
 
   // Poll a review job until it finishes, ignoring results for superseded jobs.
-  async function poll(id) {
-    if (jobRef.current !== id) return
+  async function poll(id, runId) {
+    if (jobRef.current !== id || reviewRunRef.current !== runId) return
     let job
     try {
       job = await api.getReviewJob(id)
     } catch (e) {
-      if (jobRef.current === id) { setError(e.message); setLoading(false) }
+      if (jobRef.current === id && reviewRunRef.current === runId) { setError(e.message); setLoading(false) }
       return
     }
-    if (jobRef.current !== id) return
+    if (jobRef.current !== id || reviewRunRef.current !== runId) return
     if (job.status === 'done') {
       setResult(job.result)
       setLoading(false)
@@ -224,7 +238,7 @@ export default function ReviewPage() {
       setError(job.error || 'Review failed')
       setLoading(false)
     } else {
-      setTimeout(() => poll(id), 1500)
+      setTimeout(() => poll(id, runId), 1500)
     }
   }
 
