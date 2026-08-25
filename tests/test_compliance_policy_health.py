@@ -21,6 +21,21 @@ def test_detects_disallowed_and_unlisted_vendors():
     assert result["score"] < 100
 
 
+def test_detects_policy_disallowed_vendor_outside_builtin_list():
+    files = {
+        "package.json": '{"dependencies": {"stripe": "^16.0", "react": "^18.0"}}',
+    }
+    policy = {
+        "approved_vendors": [],
+        "disallowed_vendors": ["stripe"],
+    }
+    result = health.analyze_policy_health("acme/app", [], files, policy)
+
+    assert result["vendors"]["disallowed_hits"] == ["stripe"]
+    assert "react" not in result["vendors"]["observed"]
+    assert any(f["severity"] == "high" and "Disallowed vendor" in f["title"] for f in result["findings"])
+
+
 def test_detects_missing_required_signals():
     files = {
         "src/api.py": 'def create_patient(): pass',

@@ -36,6 +36,17 @@ def test_suggests_reviewing_unknown_vendor():
     assert any(s["type"] == "review_vendor" and s["value"] == "openai" for s in result)
 
 
+def test_suggests_reviewing_configured_disallowed_vendor_outside_builtin_list():
+    files = {"package.json": '{"dependencies": {"stripe": "^16.0"}}'}
+    policy = {"approved_vendors": [], "disallowed_vendors": ["stripe"]}
+    result = suggestions.suggest_policy_updates("acme/app", policy, files)
+
+    assert any(
+        s["type"] == "disallowed_vendor_present" and s["value"] == "stripe" and s["severity"] == "high"
+        for s in result
+    )
+
+
 def test_suggests_adding_phi_pattern():
     files = {"src/models.py": "date_of_birth = None"}
     policy = {"phi_field_patterns": []}
