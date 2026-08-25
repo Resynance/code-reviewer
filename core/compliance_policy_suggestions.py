@@ -163,7 +163,11 @@ class PolicySuggestionEngine:
         return suggestions
 
     def _observed_vendors(self, files: dict[str, str]) -> set[str]:
-        manifest = _health.extract_manifest_packages(files)
+        policy_vendors = {
+            *(str(v).lower() for v in (self.policy.get("approved_vendors") or [])),
+            *(str(v).lower() for v in (self.policy.get("disallowed_vendors") or [])),
+        }
+        manifest = _health.extract_manifest_packages(files, policy_vendors=policy_vendors)
         code = _health.extract_code_vendors(files)
         imports = set()
         for content in files.values():

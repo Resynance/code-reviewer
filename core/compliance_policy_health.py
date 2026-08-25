@@ -89,12 +89,13 @@ class PolicyHealthAnalyzer:
             files,
             include_test_docs_findings=bool(self.policy.get("include_test_docs_findings")),
         )
-        manifest_packages = self._extract_manifest_packages(files)
-        code_vendors = self._extract_code_vendors(scanned_files)
-        all_vendors = {*manifest_packages, *code_vendors}
-
         approved = {v.lower() for v in self.policy.get("approved_vendors") or []}
         disallowed = {v.lower() for v in self.policy.get("disallowed_vendors") or []}
+        policy_vendors = approved | disallowed
+
+        manifest_packages = self._extract_manifest_packages(files, policy_vendors=policy_vendors)
+        code_vendors = self._extract_code_vendors(scanned_files)
+        all_vendors = {*manifest_packages, *code_vendors}
 
         vendor_report = self._analyze_vendors(all_vendors, approved, disallowed)
         signal_report = self._analyze_signals(scanned_files)
@@ -167,8 +168,8 @@ class PolicyHealthAnalyzer:
             })
         return findings
 
-    def _extract_manifest_packages(self, files: dict[str, str]) -> set[str]:
-        return extract_manifest_packages(files)
+    def _extract_manifest_packages(self, files: dict[str, str], policy_vendors: Iterable[str] | None = None) -> set[str]:
+        return extract_manifest_packages(files, policy_vendors=policy_vendors)
 
     def _extract_code_vendors(self, files: dict[str, str]) -> set[str]:
         return extract_code_vendors(files)
@@ -447,7 +448,7 @@ def analyze_policy_health(
 # Shared extraction helpers (used by suggestion engine)
 # ---------------------------------------------------------------------- #
 
-def extract_manifest_packages(files: dict[str, str]) -> set[str]:
+def extract_manifest_packages(files: dict[str, str], policy_vendors: Iterable[str] | None = None) -> set[str]:
     """Return package names extracted from known dependency manifests."""
     packages: set[str] = set()
     for path, content in files.items():
@@ -474,7 +475,7 @@ def extract_manifest_packages(files: dict[str, str]) -> set[str]:
             continue
     vendors = set()
     for package in packages:
-        vendor = _normalize_package_vendor(package)
+        vendor = _normalize_package_vendor(package, policy_vendors=policy_vendors)
         if vendor:
             vendors.add(vendor)
     return vendors
@@ -510,7 +511,7 @@ def _bare_package_names(list_fragment: str) -> set[str]:
     return names
 
 
-def _normalize_package_vendor(package: str) -> str | None:
+def _normalize_package_vendor(package: str, policy_vendors: Iterable[str] | None = None) -> str | None:
     package = (package or "").strip().lower()
     if not package:
         return None
@@ -523,6 +524,17 @@ def _normalize_package_vendor(package: str) -> str | None:
     for known in _KNOWN_VENDORS:
         if package == known or package.startswith(f"{known}-") or package.endswith(f"-{known}"):
             return known
+    for vendor in {str(v or "").strip().lower() for v in (policy_vendors or [])}:
+        if not vendor or vendor == "none":
+            continue
+        if package == vendor:
+            return vendor
+        if vendor.startswith("@"):
+            if package.startswith(f"{vendor}/"):
+                return vendor
+            continue
+        if package.startswith(f"{vendor}-") or package.endswith(f"-{vendor}") or package.startswith(f"@{vendor}/"):
+            return vendor
     return None
 
 
