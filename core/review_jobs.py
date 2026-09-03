@@ -195,7 +195,7 @@ def _file_update(job_id, status, result, error, claimed_by):
                     job["error"] = error
                 if claimed_by is not None:
                     job["claimed_by"] = claimed_by or None
-                if status == "running" and not job.get("started_at"):
+                if status == "running":
                     job["started_at"] = _now()
                 if status in {"done", "error"}:
                     job["completed_at"] = _now()
@@ -379,7 +379,7 @@ def _pg_update(job_id, status, result, error, claimed_by):
         sets.append("claimed_by = %s")
         params.append(claimed_by or None)
     if status == "running":
-        sets.append("started_at = COALESCE(started_at, now())")
+        sets.append("started_at = now()")
     if status in {"done", "error"}:
         sets.append("completed_at = now()")
     sets.append("updated_at = now()")

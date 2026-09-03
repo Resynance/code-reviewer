@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from '../lib/api.js'
 import { useMediaQuery } from '../lib/useMediaQuery.js'
 
@@ -22,12 +22,33 @@ export default function CompliancePage() {
   const [issueUrl, setIssueUrl] = useState(null)
   const [followupJobId, setFollowupJobId] = useState(null)
   const [handoffAfterIssue, setHandoffAfterIssue] = useState(false)
+  const repoRef = useRef('')
+  const requestRef = useRef(0)
+
+  function selectRepo(repo) {
+    repoRef.current = repo
+    requestRef.current += 1
+    setSelectedRepo(repo)
+    setLoading(false)
+    setLoadingHistory(false)
+    setCreatingIssue(false)
+    setApplying(null)
+    setDashboard(null)
+    setCurrentAnalysisId(null)
+    setAnalyses([])
+    setError(null)
+    setApplyMsg(null)
+    setIssueMsg(null)
+    setIssueUrl(null)
+    setFollowupJobId(null)
+    setHandoffAfterIssue(false)
+  }
 
   useEffect(() => {
     api.listRepos().then(r => {
       const list = r.repos || []
       setRepos(list)
-      if (list.length > 0 && !selectedRepo) setSelectedRepo(list[0])
+      if (list.length > 0 && !repoRef.current) selectRepo(list[0])
     }).catch(() => {})
     api.getSettings().then(s => {
       setExecutionMode(s.llm_execution_mode || 'inline')
@@ -42,15 +63,17 @@ export default function CompliancePage() {
     setLoadingHistory(true)
     try {
       const data = await api.listComplianceAnalyses({ repo, limit: 20 })
+      if (repoRef.current !== repo) return
       setAnalyses(data.analyses || [])
     } catch (e) {
-      setAnalyses([])
+      if (repoRef.current === repo) setAnalyses([])
     } finally {
-      setLoadingHistory(false)
+      if (repoRef.current === repo) setLoadingHistory(false)
     }
   }, [])
 
   useEffect(() => {
+    repoRef.current = selectedRepo
     loadHistory(selectedRepo)
     setDashboard(null)
     setCurrentAnalysisId(null)
@@ -64,25 +87,32 @@ export default function CompliancePage() {
 
   async function runAnalysis() {
     if (!selectedRepo) return
+    const repo = selectedRepo
+    const requestId = requestRef.current
     setLoading(true)
     setError(null)
     setApplyMsg(null)
     setIssueMsg(null)
     try {
-      const data = await api.analyzeCompliance(selectedRepo)
+      const data = await api.analyzeCompliance(repo)
+      if (repoRef.current !== repo || requestRef.current !== requestId) return
       setDashboard(data)
       setCurrentAnalysisId(data.id)
-      await loadHistory(selectedRepo)
+      await loadHistory(repo)
     } catch (e) {
-      setError(e.message)
-      setDashboard(null)
-      setCurrentAnalysisId(null)
+      if (repoRef.current === repo && requestRef.current === requestId) {
+        setError(e.message)
+        setDashboard(null)
+        setCurrentAnalysisId(null)
+      }
     } finally {
-      setLoading(false)
+      if (repoRef.current === repo && requestRef.current === requestId) setLoading(false)
     }
   }
 
   async function loadAnalysis(id) {
+    const repo = selectedRepo
+    const requestId = requestRef.current
     setLoading(true)
     setError(null)
     setApplyMsg(null)
@@ -91,17 +121,20 @@ export default function CompliancePage() {
     setFollowupJobId(null)
     try {
       const data = await api.getComplianceAnalysis(id)
+      if (repoRef.current !== repo || requestRef.current !== requestId || data.repo !== repo) return
       setDashboard(data)
       setCurrentAnalysisId(data.id)
     } catch (e) {
-      setError(e.message)
+      if (repoRef.current === repo && requestRef.current === requestId) setError(e.message)
     } finally {
-      setLoading(false)
+      if (repoRef.current === repo && requestRef.current === requestId) setLoading(false)
     }
   }
 
   async function reanalyze() {
     if (!currentAnalysisId) return
+    const repo = dashboard?.repo || selectedRepo
+    const requestId = requestRef.current
     setLoading(true)
     setError(null)
     setApplyMsg(null)
@@ -110,21 +143,27 @@ export default function CompliancePage() {
     setFollowupJobId(null)
     try {
       const data = await api.reanalyzeCompliance(currentAnalysisId)
+      if (repoRef.current !== repo || requestRef.current !== requestId || data.repo !== repo) return
       setDashboard(data)
       setCurrentAnalysisId(data.id)
-      await loadHistory(selectedRepo)
+      await loadHistory(repo)
     } catch (e) {
-      setError(e.message)
+      if (repoRef.current === repo && requestRef.current === requestId) setError(e.message)
     } finally {
-      setLoading(false)
+      if (repoRef.current === repo && requestRef.current === requestId) setLoading(false)
     }
   }
 
   async function applySuggestion(suggestion) {
+    const repo = dashboard?.repo || selectedRepo
+    if (!repo || repo !== selectedRepo) {
+      setApplyMsg('Select the analysis repository before applying suggestions.')
+      return
+    }
     setApplying(suggestion.id)
     setApplyMsg(null)
     try {
-      await api.applyComplianceSuggestion(selectedRepo, suggestion)
+      await api.applyComplianceSuggestion(repo, suggestion)
       setApplyMsg('Applied ✓')
     } catch (e) {
       setApplyMsg(e.message)
@@ -176,7 +215,7 @@ export default function CompliancePage() {
                 <label style={labelStyle}>Repo</label>
                 <select
                   value={selectedRepo}
-                  onChange={e => setSelectedRepo(e.target.value)}
+                  onChange={e => selectRepo(e.target.value)}
                   style={inputStyle}
                 >
                   <option value="">Select a repo…</option>

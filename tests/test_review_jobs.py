@@ -42,6 +42,17 @@ def test_update_job_marks_completed(jobs):
     assert updated["completed_at"]
 
 
+def test_update_job_refreshes_running_started_at(jobs, monkeypatch):
+    job = jobs.create_job({"repo": "org/a"}, job_type="review", executor="inline")
+    first = jobs.update_job(job["id"], status="running")
+    assert first["started_at"]
+
+    monkeypatch.setattr(jobs, "_now", lambda: "2024-01-02T03:04:05+00:00")
+    retried = jobs.update_job(job["id"], status="running")
+
+    assert retried["started_at"] == "2024-01-02T03:04:05+00:00"
+
+
 def test_pg_create_auto_ensures_queue_schema(monkeypatch):
     monkeypatch.setenv("REVIEW_STORE_BACKEND", "postgres")
     monkeypatch.setattr(review_jobs, "_PG_SCHEMA_READY", False)

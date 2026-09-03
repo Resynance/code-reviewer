@@ -8,6 +8,7 @@ import time
 import jwt
 import config_store
 import rate_limit
+import review_jobs
 from review_engine import ReviewResult
 from assessment_engine import AssessmentResult
 
@@ -686,6 +687,33 @@ def test_review_is_saved_to_history(client, monkeypatch):
     r = hist["reviews"][0]
     assert r["pr_number"] == 7 and r["repo"] == "org/a" and r["source"] == "api"
     assert r["compliance_review"] == {"enabled": True}
+
+
+def test_stale_running_inline_review_can_be_retried(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    calls = {"review": 0}
+
+    class FakeEngine:
+        def review(self, req):
+            calls["review"] += 1
+            return ReviewResult(pr_number=req.pr_number, summary="retried", approved=True,
+                                confidence=0.9, issues=[], suggestions=[], past_decisions_applied=[],
+                                compliance_review={"enabled": False})
+
+    monkeypatch.setattr(main, "get_engine", lambda: FakeEngine())
+    job = tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+x"}).json()
+    review_jobs.update_job(job["id"], status="running")
+    rows = review_jobs._file_read()
+    rows[0]["started_at"] = "2000-01-01T00:00:00+00:00"
+    rows[0]["updated_at"] = "2000-01-01T00:00:00+00:00"
+    review_jobs._file_write(rows)
+
+    run = tc.post(f"/api/review/{job['id']}/run").json()
+
+    assert run["status"] == "done"
+    assert run["result"]["summary"] == "retried"
+    assert calls["review"] == 1
 
 
 # ----- backfill ----- #
