@@ -216,3 +216,43 @@ def test_compliance_followup_runner_falls_back_to_manual_summary(monkeypatch):
 
     assert result["status"] == "manual_followup"
     assert result["summary"] == "Manual follow-up needed"
+
+
+def test_worker_saves_completed_work_when_complete_fails(tmp_path, monkeypatch):
+    worker = local_worker.Worker.__new__(local_worker.Worker)
+    pending_path = tmp_path / "pending.json"
+    monkeypatch.setattr(local_worker, "PENDING_COMPLETIONS_PATH", pending_path)
+    monkeypatch.setattr(worker, "run_review", lambda job: {"summary": "done"})
+    monkeypatch.setattr(local_worker.time, "sleep", lambda delay: None)
+    monkeypatch.setattr(local_worker, "complete_job", lambda client, job_id, result: (_ for _ in ()).throw(RuntimeError("503")))
+    fail_calls = []
+    monkeypatch.setattr(local_worker, "fail_job", lambda client, job_id, error: fail_calls.append((job_id, error)))
+
+    worker.process(object(), {"id": "job-1", "job_type": "review", "request": {}})
+
+    assert fail_calls == []
+    assert local_worker._load_pending_completions() == {"job-1": {"summary": "done"}}
+
+
+def test_worker_marks_execution_errors_failed(monkeypatch):
+    worker = local_worker.Worker.__new__(local_worker.Worker)
+    monkeypatch.setattr(worker, "run_review", lambda job: (_ for _ in ()).throw(RuntimeError("model crashed")))
+    fail_calls = []
+    monkeypatch.setattr(local_worker, "fail_job", lambda client, job_id, error: fail_calls.append((job_id, error)))
+
+    worker.process(object(), {"id": "job-1", "job_type": "review", "request": {}})
+
+    assert fail_calls == [("job-1", "RuntimeError: model crashed")]
+
+
+def test_flush_pending_completions_removes_successful_retry(tmp_path, monkeypatch):
+    pending_path = tmp_path / "pending.json"
+    monkeypatch.setattr(local_worker, "PENDING_COMPLETIONS_PATH", pending_path)
+    local_worker._remember_pending_completion("job-1", {"summary": "done"})
+    submitted = []
+    monkeypatch.setattr(local_worker, "complete_job", lambda client, job_id, result: submitted.append((job_id, result)))
+
+    local_worker.flush_pending_completions(object())
+
+    assert submitted == [("job-1", {"summary": "done"})]
+    assert local_worker._load_pending_completions() == {}

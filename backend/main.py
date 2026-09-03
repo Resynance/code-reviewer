@@ -11,7 +11,7 @@ import hashlib
 import asyncio
 import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
@@ -343,6 +343,33 @@ def _require_local_queue_configured():
         raise HTTPException(status_code=400, detail="LLM worker secret not configured for local_queue mode")
 
 
+_INLINE_JOB_RETRY_GRACE_SECONDS = 60
+
+
+def _parse_job_time(value: Optional[str]):
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _inline_job_is_retryable(job: dict) -> bool:
+    """Permit retrying inline jobs only after their prior run must be dead."""
+    if job.get("status") != "running" or job.get("result"):
+        return False
+    started_at = _parse_job_time(job.get("started_at") or job.get("updated_at") or job.get("created_at"))
+    if not started_at:
+        return False
+    timeout = config_store.get_llm_timeout_seconds(config_store.get_llm_base_url())
+    stale_after = timeout + _INLINE_JOB_RETRY_GRACE_SECONDS
+    return (datetime.now(timezone.utc) - started_at).total_seconds() > stale_after
+
+
 def _normalize_result_payload(result_payload: dict) -> dict:
     payload = dict(result_payload or {})
     payload["compliance_review"] = payload.get("compliance_review") or {}
@@ -611,7 +638,8 @@ def run_review_job(job_id: str):
         raise HTTPException(status_code=404, detail="Review job not found")
     if job.get("executor") != "inline":
         return job
-    if job["status"] != "queued":
+    retry_stale = _inline_job_is_retryable(job)
+    if job["status"] != "queued" and not retry_stale:
         return job
     review_jobs.update_job(job_id, status="running")
     try:
@@ -688,7 +716,8 @@ def run_assessment_job(job_id: str):
         raise HTTPException(status_code=404, detail="Assessment job not found")
     if job.get("executor") != "inline":
         return job
-    if job["status"] != "queued":
+    retry_stale = _inline_job_is_retryable(job)
+    if job["status"] != "queued" and not retry_stale:
         return job
     req = job["request"]
     _token_for(req["repo"])

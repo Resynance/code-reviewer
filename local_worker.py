@@ -81,6 +81,10 @@ WORKER_ID = os.getenv("REVIEWBOT_WORKER_ID", "local-worker")
 POLL_INTERVAL = float(os.getenv("REVIEWBOT_POLL_INTERVAL", "1.0"))
 LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "")
 AGENT_TIMEOUT_SECONDS = int(os.getenv("REVIEWBOT_AGENT_TIMEOUT_SECONDS", "600"))
+COMPLETE_RETRY_DELAYS = (1.0, 2.0, 5.0)
+PENDING_COMPLETIONS_PATH = Path(
+    os.getenv("REVIEWBOT_PENDING_COMPLETIONS_PATH", str(ROOT / ".local" / "worker-completions.json"))
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -134,6 +138,56 @@ def fail_job(client: httpx.Client, job_id: str, error: str) -> None:
         resp.raise_for_status()
     except Exception as e:
         logger.error("Could not report job failure: %s", e)
+
+
+def _load_pending_completions() -> dict:
+    try:
+        data = json.loads(PENDING_COMPLETIONS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_pending_completions(data: dict) -> None:
+    PENDING_COMPLETIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = PENDING_COMPLETIONS_PATH.with_name(PENDING_COMPLETIONS_PATH.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(PENDING_COMPLETIONS_PATH)
+
+
+def _remember_pending_completion(job_id: str, result: dict) -> None:
+    pending = _load_pending_completions()
+    pending[job_id] = result
+    _save_pending_completions(pending)
+
+
+def _forget_pending_completion(job_id: str) -> None:
+    pending = _load_pending_completions()
+    if job_id not in pending:
+        return
+    pending.pop(job_id, None)
+    _save_pending_completions(pending)
+
+
+def submit_completed_job(client: httpx.Client, job_id: str, result: dict, *, retry: bool = True) -> bool:
+    delays = (0.0, *COMPLETE_RETRY_DELAYS) if retry else (0.0,)
+    for attempt, delay in enumerate(delays, start=1):
+        if delay:
+            time.sleep(delay)
+        try:
+            complete_job(client, job_id, result)
+            _forget_pending_completion(job_id)
+            return True
+        except Exception as e:
+            logger.warning("Could not submit completed job %s on attempt %s: %s", job_id, attempt, e)
+    return False
+
+
+def flush_pending_completions(client: httpx.Client) -> None:
+    pending = _load_pending_completions()
+    for job_id, result in list(pending.items()):
+        if isinstance(result, dict):
+            submit_completed_job(client, job_id, result, retry=False)
 
 
 # --------------------------------------------------------------------------- #
@@ -624,9 +678,13 @@ class Worker:
                 result = self.run_compliance_followup(job)
             else:
                 raise ValueError(f"Unknown job_type: {job_type}")
-            complete_job(client, job_id, result)
         except Exception as e:
             fail_job(client, job_id, f"{type(e).__name__}: {e}")
+            return
+
+        if not submit_completed_job(client, job_id, result):
+            _remember_pending_completion(job_id, result)
+            logger.error("Completed job %s locally but could not submit the result; saved it for retry.", job_id)
 
 
 # --------------------------------------------------------------------------- #
@@ -648,6 +706,7 @@ def main() -> int:
     with httpx.Client(timeout=30.0) as client:
         while True:
             try:
+                flush_pending_completions(client)
                 job = claim_job(client)
                 if job:
                     worker.process(client, job)

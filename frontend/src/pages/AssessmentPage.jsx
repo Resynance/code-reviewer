@@ -17,13 +17,24 @@ export default function AssessmentPage() {
   const [history, setHistory] = useState([])
   const [compliancePolicies, setCompliancePolicies] = useState({ default: {}, repos: {} })
   const jobRef = useRef(null)
+  const repoRef = useRef('')
   useEffect(() => () => { jobRef.current = null }, [])
+
+  function selectRepo(nextRepo) {
+    repoRef.current = nextRepo
+    jobRef.current = null
+    setRepo(nextRepo)
+    setLoading(false)
+    setError(null)
+    setResult(null)
+    setHistory([])
+  }
 
   useEffect(() => {
     api.listRepos().then(r => {
       const list = r.repos || []
       setRepos(list)
-      if (list.length) setRepo(r => r || list[0])
+      if (list.length && !repoRef.current) selectRepo(list[0])
     }).catch(() => {})
 
     api.getSettings().then(s => {
@@ -40,40 +51,50 @@ export default function AssessmentPage() {
   // Reload history whenever the selected repo changes.
   useEffect(() => {
     if (!repo) return
+    repoRef.current = repo
     api.listAssessments({ repo, limit: 10 })
-      .then(r => setHistory(r.assessments || []))
-      .catch(() => {})
+      .then(r => {
+        if (repoRef.current === repo) setHistory(r.assessments || [])
+      })
+      .catch(() => {
+        if (repoRef.current === repo) setHistory([])
+      })
   }, [repo])
 
   async function submit() {
     if (!repo) return
+    const assessmentRepo = repo
     setLoading(true); setError(null); setResult(null)
     try {
       const { id } = await api.createAssessment({
-        repo,
+        repo: assessmentRepo,
         model: selectedModel?.model || undefined,
         provider: selectedModel?.provider || undefined,
       })
+      if (repoRef.current !== assessmentRepo) return
       jobRef.current = id
       if (executionMode === 'inline') api.runAssessment(id).catch(() => {})
-      poll(id)
+      poll(id, assessmentRepo)
     } catch (e) {
-      setError(e.message)
-      setLoading(false)
+      if (repoRef.current === assessmentRepo) {
+        setError(e.message)
+        setLoading(false)
+      }
     }
   }
 
-  async function poll(id) {
-    if (jobRef.current !== id) return
+  async function poll(id, assessmentRepo) {
+    if (jobRef.current !== id || repoRef.current !== assessmentRepo) return
     let job
     try {
       job = await api.getAssessmentJob(id)
     } catch (e) {
-      if (jobRef.current === id) { setError(e.message); setLoading(false) }
+      if (jobRef.current === id && repoRef.current === assessmentRepo) { setError(e.message); setLoading(false) }
       return
     }
-    if (jobRef.current !== id) return
+    if (jobRef.current !== id || repoRef.current !== assessmentRepo) return
     if (job.status === 'done') {
+      if (job.result?.repo !== assessmentRepo) return
       setResult(job.result)
       setHistory(h => [job.result, ...h].slice(0, 10))
       setLoading(false)
@@ -81,7 +102,7 @@ export default function AssessmentPage() {
       setError(job.error || 'Assessment failed')
       setLoading(false)
     } else {
-      setTimeout(() => poll(id), 1500)
+      setTimeout(() => poll(id, assessmentRepo), 1500)
     }
   }
 
@@ -100,14 +121,14 @@ export default function AssessmentPage() {
             REPOSITORY
           </label>
           {repos.length > 0 ? (
-            <select value={repo} onChange={e => setRepo(e.target.value)} style={inputStyle}>
+            <select value={repo} onChange={e => selectRepo(e.target.value)} style={inputStyle}>
               {!repos.includes(repo) && <option value={repo}>{repo || 'Select a repo'}</option>}
               {repos.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
           ) : (
             <input
               value={repo}
-              onChange={e => setRepo(e.target.value)}
+              onChange={e => selectRepo(e.target.value)}
               placeholder="owner/repo"
               style={inputStyle}
             />
