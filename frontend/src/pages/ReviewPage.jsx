@@ -68,6 +68,7 @@ export default function ReviewPage() {
   const jobRef = useRef(null)
   // Tracks PR loads so stale responses cannot repopulate a different repo/PR.
   const prLoadRef = useRef(0)
+  const loadedPrRef = useRef({ repo: '', number: '' })
   const currentRepoRef = useRef('')
   useEffect(() => () => {
     jobRef.current = null
@@ -77,21 +78,61 @@ export default function ReviewPage() {
   // its timestamp so the panel can say so.
   const [savedAt, setSavedAt] = useState(null)
 
-  function selectRepo(repo) {
+  function selectRepo(repo, { resetFields = true, loadingPulls = repos.includes(repo) } = {}) {
     currentRepoRef.current = repo
     prLoadRef.current += 1
+    loadedPrRef.current = { repo: '', number: '' }
     setSelectedPr('')
+    setPrList([])
+    setLoadingPrs(Boolean(repo) && loadingPulls)
     setLoadingPr(false)
     setPrError(null)
-    setForm(f => resetLoadedPrFields(f, { repo }))
+    setForm(f => resetFields ? resetLoadedPrFields(f, { repo }) : { ...f, repo })
     setResult(null)
     setSavedAt(null)
     setError(null)
   }
 
   const set = (k, v) => {
-    if (k === 'repo') selectRepo(v)
-    else setForm(f => ({ ...f, [k]: v }))
+    setForm(f => ({ ...f, [k]: v }))
+  }
+
+  function editRepo(repo) {
+    currentRepoRef.current = repo
+    prLoadRef.current += 1
+    loadedPrRef.current = { repo: '', number: '' }
+    setSelectedPr('')
+    setPrList([])
+    setLoadingPrs(false)
+    setLoadingPr(false)
+    setPrError(null)
+    setForm(f => ({ ...f, repo }))
+    setResult(null)
+    setSavedAt(null)
+    setError(null)
+  }
+
+  function setPrNumber(rawValue) {
+    const prNumber = rawValue === '' ? '' : Number(rawValue)
+    const loaded = loadedPrRef.current
+    prLoadRef.current += 1
+    setSelectedPr('')
+    setLoadingPr(false)
+    setPrError(null)
+    setResult(null)
+    setSavedAt(null)
+    setError(null)
+    setForm(f => {
+      const changedLoadedPr =
+        loaded.repo &&
+        loaded.repo === f.repo &&
+        String(loaded.number) !== String(prNumber)
+      loadedPrRef.current = changedLoadedPr ? { repo: '', number: '' } : loaded
+      if (changedLoadedPr) {
+        return resetLoadedPrFields(f, { pr_number: prNumber })
+      }
+      return { ...f, pr_number: prNumber }
+    })
   }
 
   // Load configured repos and model slots on mount.
@@ -99,7 +140,11 @@ export default function ReviewPage() {
     api.listRepos().then(r => {
       const list = r.repos || []
       setRepos(list)
-      if (list.length && !currentRepoRef.current) selectRepo(list[0])
+      if (list.length && !currentRepoRef.current) {
+        const defaultRepo = list[0]
+        currentRepoRef.current = defaultRepo
+        setForm(f => (f.repo ? f : { ...f, repo: defaultRepo }))
+      }
     }).catch(() => {})
 
     api.getSettings().then(s => {
@@ -126,7 +171,7 @@ export default function ReviewPage() {
   // Whenever the selected repo changes, load its PRs (open first) for the picker.
   useEffect(() => {
     const repo = form.repo
-    if (!repo || !repos.includes(repo)) { setPrList([]); return }
+    if (!repo || !repos.includes(repo)) { setPrList([]); setLoadingPrs(false); return }
     let active = true
     setLoadingPrs(true); setPrError(null)
     api.repoPrs(repo)
@@ -141,6 +186,7 @@ export default function ReviewPage() {
     const repo = currentRepoRef.current || form.repo
     const requestId = prLoadRef.current + 1
     prLoadRef.current = requestId
+    loadedPrRef.current = { repo: '', number: '' }
     setSelectedPr(number)
     setForm(f => resetLoadedPrFields(f, number ? { pr_number: Number(number) } : {}))
     setResult(null)
@@ -151,6 +197,7 @@ export default function ReviewPage() {
     try {
       const data = await api.repoPr(repo, number)
       if (prLoadRef.current !== requestId) return
+      loadedPrRef.current = { repo, number: String(data.pr_number ?? number) }
       setForm(f => {
         if (f.repo !== repo || prLoadRef.current !== requestId) return f
         return {
@@ -239,16 +286,16 @@ export default function ReviewPage() {
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16, marginBottom: 16 }}>
         <Field label="Repository">
           {repos.length > 0 ? (
-            <select value={form.repo} onChange={e => set('repo', e.target.value)} style={inputStyle}>
+            <select value={form.repo} onChange={e => selectRepo(e.target.value)} style={inputStyle}>
               {!repos.includes(form.repo) && <option value={form.repo}>{form.repo || 'Select a repo'}</option>}
               {repos.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
           ) : (
-            <input value={form.repo} onChange={e => set('repo', e.target.value)} style={inputStyle} placeholder="owner/repo" />
+            <input value={form.repo} onChange={e => editRepo(e.target.value)} style={inputStyle} placeholder="owner/repo" />
           )}
         </Field>
         <Field label="PR Number" >
-          <input value={form.pr_number} onChange={e => set('pr_number', Number(e.target.value))}
+          <input value={form.pr_number} onChange={e => setPrNumber(e.target.value)}
             type="number" style={inputStyle} />
         </Field>
         {repos.length > 0 && (
