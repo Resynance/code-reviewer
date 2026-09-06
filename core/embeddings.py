@@ -4,8 +4,8 @@ embeddings.py — text embeddings via an OpenAI-compatible API.
 Defaults to OpenRouter (reusing OPENROUTER_API_KEY) so embeddings align with the
 review model. Everything is overridable:
 
-  EMBEDDINGS_BASE_URL  default https://openrouter.ai/api/v1
-  EMBEDDINGS_API_KEY   default falls back to OPENROUTER_API_KEY
+  EMBEDDINGS_BASE_URL  default falls back to configured LLM base URL
+  EMBEDDINGS_API_KEY   default falls back to configured LLM API key
   EMBEDDING_MODEL      configurable in Settings (config_store), else env, else default
   EMBEDDING_DIM        vector dimension; MUST match the pgvector column (default 1536)
 
@@ -20,20 +20,34 @@ DEFAULT_MODEL = "openai/text-embedding-3-small"
 DEFAULT_DIM = 1536
 
 _client = None
+_client_config = None
+
+
+def _resolve_client_config():
+    import config_store
+
+    base = (
+        os.getenv("EMBEDDINGS_BASE_URL")
+        or config_store.get_llm_base_url()
+        or DEFAULT_BASE_URL
+    ).strip().rstrip("/")
+    key = os.getenv("EMBEDDINGS_API_KEY") or config_store.get_llm_api_key() or None
+    referer = os.getenv("OPENROUTER_APP_URL", "http://localhost:1500")
+    return base, key, referer
 
 
 def _get_client():
-    global _client
-    if _client is None:
+    global _client, _client_config
+    client_config = _resolve_client_config()
+    if _client is None or _client_config != client_config:
         from openai import OpenAI
 
-        base = os.getenv("EMBEDDINGS_BASE_URL") or DEFAULT_BASE_URL
-        key = os.getenv("EMBEDDINGS_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+        base, key, referer = client_config
         _client = OpenAI(
             base_url=base,
             api_key=key,
             default_headers={
-                "HTTP-Referer": os.getenv("OPENROUTER_APP_URL", "http://localhost:1500"),
+                "HTTP-Referer": referer,
                 "X-Title": "ReviewBot",
             },
             # Context retrieval must never hang the whole review: fail fast and
@@ -41,6 +55,7 @@ def _get_client():
             timeout=30,
             max_retries=0,
         )
+        _client_config = client_config
     return _client
 
 
