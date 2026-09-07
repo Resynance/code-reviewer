@@ -8,7 +8,7 @@ import AssessmentPage from './pages/AssessmentPage.jsx'
 import CompliancePage from './pages/CompliancePage.jsx'
 import QueuePage from './pages/QueuePage.jsx'
 import LoginPage from './pages/LoginPage.jsx'
-import { authEnabled, supabase } from './lib/auth.js'
+import { authEnabled, supabase, setAccessToken } from './lib/auth.js'
 import { useMediaQuery } from './lib/useMediaQuery.js'
 
 export default function App() {
@@ -22,10 +22,14 @@ export default function App() {
   useEffect(() => {
     if (!authEnabled) return
     supabase.auth.getSession().then(({ data }) => {
+      setAccessToken(data.session?.access_token)
       setSession(data.session)
       setAuthReady(true)
     })
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s))
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
+      setAccessToken(s?.access_token)
+      setSession(s)
+    })
     return () => sub.subscription.unsubscribe()
   }, [])
 
