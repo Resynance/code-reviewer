@@ -3,12 +3,16 @@ import { supabase, authEnabled } from './supabase.js'
 // Keep the current access token in memory so api.js can attach it synchronously.
 let _token = null
 
+export function setAccessToken(token) {
+  _token = token || null
+}
+
 if (authEnabled) {
   supabase.auth.getSession().then(({ data }) => {
-    _token = data.session?.access_token || null
+    setAccessToken(data.session?.access_token)
   })
   supabase.auth.onAuthStateChange((_event, session) => {
-    _token = session?.access_token || null
+    setAccessToken(session?.access_token)
   })
 }
 

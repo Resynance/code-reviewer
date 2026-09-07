@@ -86,6 +86,19 @@ def test_successful_import_counts_and_stores(store, monkeypatch):
     assert refs == {"PR #1", "PR #2"}
 
 
+def test_backfill_omits_raw_pr_body_from_decision_reasoning(store, monkeypatch):
+    pr = _pr(1)
+    pr["body"] = "Incident fix used token AKIAABCDEFGHIJKLMNOP against patient export."
+    _patch_client(monkeypatch, {1: FakeResp(200, [pr]), 2: FakeResp(200, [])})
+
+    gb.backfill("org/repo", 2, token="t", store=store)
+
+    decision = store.retrieve("PR 1", k=1)[0]
+    assert "AKIAABCDEFGHIJKLMNOP" not in decision["reasoning"]
+    assert "patient export" not in decision["reasoning"]
+    assert "Original PR body omitted" in decision["reasoning"]
+
+
 def test_stops_on_empty_page(store, monkeypatch):
     # page 2 empty -> page 3 must never be requested
     seen = []

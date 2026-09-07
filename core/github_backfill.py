@@ -12,6 +12,10 @@ from datetime import datetime, timezone
 
 GITHUB_API = "https://api.github.com"
 PER_PAGE = 100
+_BACKFILL_BODY_OMITTED_REASON = (
+    "Backfilled from closed GitHub PR. Original PR body omitted to avoid storing "
+    "sensitive data in future review context."
+)
 
 
 def pr_doc_id(repo: str, number) -> str:
@@ -59,6 +63,13 @@ def _outcome_for(pr: dict) -> str:
     return "changes_requested"
 
 
+def _backfill_reasoning(pr: dict) -> str:
+    """Return safe reasoning text for a backfilled PR decision."""
+    if (pr.get("body") or "").strip():
+        return _BACKFILL_BODY_OMITTED_REASON
+    return ""
+
+
 def backfill(repo: str, pages: int, token: str, store, on_page=None) -> int:
     """Import up to `pages` pages of closed PRs from `repo` into `store`.
 
@@ -94,7 +105,7 @@ def backfill(repo: str, pages: int, token: str, store, on_page=None) -> int:
                     doc_id=pr_doc_id(repo, number),
                     ref=f"PR #{number}",
                     summary=pr.get("title", "") or f"PR #{number}",
-                    reasoning=(pr.get("body") or "").strip(),
+                    reasoning=_backfill_reasoning(pr),
                     outcome=_outcome_for(pr),
                     date=date,
                     metadata={
