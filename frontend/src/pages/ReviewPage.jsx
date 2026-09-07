@@ -140,6 +140,7 @@ export default function ReviewPage() {
   async function loadPr(number) {
     const repo = currentRepoRef.current || form.repo
     const requestId = prLoadRef.current + 1
+    const reviewActiveAtLoad = loading || Boolean(jobRef.current)
     prLoadRef.current = requestId
     setSelectedPr(number)
     setForm(f => resetLoadedPrFields(f, number ? { pr_number: Number(number) } : {}))
@@ -169,6 +170,7 @@ export default function ReviewPage() {
       try {
         const hist = await api.reviews({ repo, prNumber: number, limit: 1 })
         if (prLoadRef.current !== requestId || currentRepoRef.current !== repo) return
+        if (reviewActiveAtLoad) return
         const last = (hist.reviews || [])[0]
         setResult(last ? historyToResult(last) : null)
         setSavedAt(last ? last.created_at : null)
@@ -213,14 +215,20 @@ export default function ReviewPage() {
     try {
       job = await api.getReviewJob(id)
     } catch (e) {
-      if (jobRef.current === id) { setError(e.message); setLoading(false) }
+      if (jobRef.current === id) {
+        jobRef.current = null
+        setError(e.message)
+        setLoading(false)
+      }
       return
     }
     if (jobRef.current !== id) return
     if (job.status === 'done') {
+      jobRef.current = null
       setResult(job.result)
       setLoading(false)
     } else if (job.status === 'error') {
+      jobRef.current = null
       setError(job.error || 'Review failed')
       setLoading(false)
     } else {
@@ -254,7 +262,7 @@ export default function ReviewPage() {
         {repos.length > 0 && (
           <Field label="Load a pull request" style={{ gridColumn: '1 / -1' }}>
             <div style={{ display: 'flex', gap: 8, flexDirection: isMobile ? 'column' : 'row' }}>
-              <select value={selectedPr} onChange={e => loadPr(e.target.value)} style={{ ...inputStyle, flex: 1 }} disabled={loadingPrs || loadingPr}>
+              <select value={selectedPr} onChange={e => loadPr(e.target.value)} style={{ ...inputStyle, flex: 1 }} disabled={loadingPrs || loadingPr || loading}>
                 <option value="">
                   {loadingPrs ? 'Loading pull requests…' : loadingPr ? 'Loading PR…' : 'Select a pull request…'}
                 </option>
@@ -267,12 +275,12 @@ export default function ReviewPage() {
               {selectedPr && (
                 <button
                   onClick={() => loadPr(selectedPr)}
-                  disabled={loadingPr}
+                  disabled={loadingPr || loading}
                   title="Re-fetch this PR from GitHub"
                   style={{
                     background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8,
-                    padding: '0 14px', fontSize: 13, color: loadingPr ? 'var(--text-3)' : 'var(--text)',
-                    cursor: loadingPr ? 'default' : 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
+                    padding: '0 14px', fontSize: 13, color: (loadingPr || loading) ? 'var(--text-3)' : 'var(--text)',
+                    cursor: (loadingPr || loading) ? 'default' : 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
                   }}
                 >
                   {loadingPr ? '⟳' : '↻ Refresh PR'}
