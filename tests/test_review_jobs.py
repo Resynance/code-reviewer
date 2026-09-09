@@ -30,6 +30,7 @@ def test_claim_next_job_marks_running(jobs):
     assert claimed["id"] == first["id"]
     assert claimed["status"] == "running"
     assert claimed["claimed_by"] == "mac"
+    assert claimed["claim_token"]
     assert claimed["started_at"]
 
 
@@ -66,6 +67,7 @@ def test_pg_create_auto_ensures_queue_schema(monkeypatch):
                 "inline",
                 "queued",
                 {"repo": "org/a"},
+                None,
                 None,
                 None,
                 None,

@@ -8,6 +8,13 @@ from review_engine import ReviewRequest, ReviewResult
 import local_worker
 
 
+class FakeResponse:
+    status_code = 200
+
+    def raise_for_status(self):
+        return None
+
+
 class FakeEngine:
     def _retrieve_context(self, request):
         return [{"ref": "ADR-1", "summary": "Use JWT", "reasoning": "stateless"}]
@@ -26,6 +33,24 @@ class FakeEngine:
             past_decisions_applied=payload.get("past_decisions_applied", []) or [],
             compliance_review=payload.get("compliance_review", {}) or {},
         )
+
+
+def test_worker_completion_helpers_send_claim_token(monkeypatch):
+    calls = []
+
+    class FakeClient:
+        def post(self, url, headers=None, json=None, timeout=None):
+            calls.append({"url": url, "headers": headers or {}, "json": json, "timeout": timeout})
+            return FakeResponse()
+
+    monkeypatch.setattr(local_worker, "WORKER_SECRET", "worker-secret")
+    job = {"id": "job-1", "claim_token": "claim-secret"}
+
+    local_worker.complete_job(FakeClient(), job, {"summary": "ok"})
+    local_worker.fail_job(FakeClient(), job, "boom")
+
+    assert calls[0]["headers"] == {"X-Worker-Secret": "worker-secret", "X-Claim-Token": "claim-secret"}
+    assert calls[1]["headers"] == {"X-Worker-Secret": "worker-secret", "X-Claim-Token": "claim-secret"}
 
 
 def test_agentic_runner_merges_multiple_sources(monkeypatch):

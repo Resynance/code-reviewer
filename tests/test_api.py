@@ -406,6 +406,20 @@ def test_review_enqueues_and_runs(client, monkeypatch):
     assert polled["status"] == "done" and polled["result"]["pr_number"] == 7
 
 
+def _worker_review_result(summary="queued ok"):
+    return {
+        "pr_number": 7,
+        "summary": summary,
+        "approved": True,
+        "confidence": 0.75,
+        "issues": [],
+        "suggestions": [],
+        "past_decisions_applied": [],
+        "compliance_review": {"enabled": False},
+        "model": "local/model",
+    }
+
+
 def test_review_local_queue_skips_inline_run_and_can_complete_via_worker(client, monkeypatch):
     tc, main = client
     tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
@@ -426,21 +440,15 @@ def test_review_local_queue_skips_inline_run_and_can_complete_via_worker(client,
     assert claimed["executor"] == "local_queue"
     assert claimed["job_type"] == "review"
     assert claimed["claimed_by"] == "mac-mini"
+    assert claimed["claim_token"]
+
+    polled_running = tc.get(f"/api/review/{job['id']}").json()
+    assert "claim_token" not in polled_running
 
     done = tc.post(
         f"/worker/llm/{job['id']}/complete",
-        headers={"X-Worker-Secret": "secret"},
-        json={"result": {
-            "pr_number": 7,
-            "summary": "queued ok",
-            "approved": True,
-            "confidence": 0.75,
-            "issues": [],
-            "suggestions": [],
-            "past_decisions_applied": [],
-            "compliance_review": {"enabled": False},
-            "model": "local/model",
-        }},
+        headers={"X-Worker-Secret": "secret", "X-Claim-Token": claimed["claim_token"]},
+        json={"result": _worker_review_result()},
     ).json()
     assert done["status"] == "done"
     assert done["result"]["summary"] == "queued ok"
@@ -448,6 +456,50 @@ def test_review_local_queue_skips_inline_run_and_can_complete_via_worker(client,
     hist = tc.get("/api/reviews", params={"repo": "org/a"}).json()
     assert hist["count"] == 1
     assert hist["reviews"][0]["source"] == "local_worker"
+
+
+def test_worker_completion_requires_matching_claim_token(client):
+    tc, _ = client
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+    job = tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+x"}).json()
+    claimed = tc.post(
+        "/worker/llm/claim",
+        headers={"X-Worker-Secret": "secret"},
+        json={"worker_id": "worker-a"},
+    ).json()
+
+    missing_token_complete = tc.post(
+        f"/worker/llm/{job['id']}/complete",
+        headers={"X-Worker-Secret": "secret"},
+        json={"result": _worker_review_result("tokenless")},
+    )
+    assert missing_token_complete.status_code == 409
+
+    forged_complete = tc.post(
+        f"/worker/llm/{job['id']}/complete",
+        headers={"X-Worker-Secret": "secret", "X-Claim-Token": "wrong-token"},
+        json={"result": _worker_review_result("forged")},
+    )
+    assert forged_complete.status_code == 409
+    assert tc.get(f"/api/review/{job['id']}").json()["status"] == "running"
+    assert tc.get("/api/reviews", params={"repo": "org/a"}).json()["count"] == 0
+
+    forged_error = tc.post(
+        f"/worker/llm/{job['id']}/error",
+        headers={"X-Worker-Secret": "secret", "X-Claim-Token": "wrong-token"},
+        json={"error": "cancel it"},
+    )
+    assert forged_error.status_code == 409
+    assert tc.get(f"/api/review/{job['id']}").json()["status"] == "running"
+
+    done = tc.post(
+        f"/worker/llm/{job['id']}/complete",
+        headers={"X-Worker-Secret": "secret", "X-Claim-Token": claimed["claim_token"]},
+        json={"result": _worker_review_result("claimed")},
+    )
+    assert done.status_code == 200
+    assert done.json()["status"] == "done"
+    assert done.json()["result"]["summary"] == "claimed"
 
 
 def test_review_rejects_agentic_mode_when_not_local_queue(client, monkeypatch):
@@ -557,21 +609,15 @@ def test_queue_filters_by_status_and_job_type(client):
     })
     review = tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+x"}).json()
     assessment = tc.post("/api/assessments", json={"repo": "org/a"}).json()
-    tc.post("/worker/llm/claim", headers={"X-Worker-Secret": "secret"}, json={"worker_id": "mac-mini", "job_types": ["review"]})
+    claimed = tc.post(
+        "/worker/llm/claim",
+        headers={"X-Worker-Secret": "secret"},
+        json={"worker_id": "mac-mini", "job_types": ["review"]},
+    ).json()
     tc.post(
         f"/worker/llm/{review['id']}/complete",
-        headers={"X-Worker-Secret": "secret"},
-        json={"result": {
-            "pr_number": 7,
-            "summary": "done",
-            "approved": True,
-            "confidence": 0.75,
-            "issues": [],
-            "suggestions": [],
-            "past_decisions_applied": [],
-            "compliance_review": {"enabled": False},
-            "model": "local/model",
-        }},
+        headers={"X-Worker-Secret": "secret", "X-Claim-Token": claimed["claim_token"]},
+        json={"result": _worker_review_result("done")},
     )
     queued = tc.get("/api/queue", params={"status": "queued"}).json()
     assert queued["count"] == 1
@@ -927,7 +973,7 @@ def test_assessment_local_queue_can_be_claimed_by_type_and_saved(client):
 
     done = tc.post(
         f"/worker/llm/{job['id']}/complete",
-        headers={"X-Worker-Secret": "secret"},
+        headers={"X-Worker-Secret": "secret", "X-Claim-Token": claimed["claim_token"]},
         json={"result": {
             "repo": "org/a",
             "summary": "assessed",
