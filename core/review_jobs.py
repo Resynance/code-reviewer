@@ -16,6 +16,7 @@ A job moves: queued → running → (done | error).
 import os
 import json
 import uuid
+import secrets
 import threading
 from pathlib import Path
 from datetime import datetime, timezone
@@ -28,7 +29,7 @@ _PG_SCHEMA_READY = False
 # Columns mirror the postgres table; the file backend stores the same shape.
 _FIELDS = (
     "id", "job_type", "executor", "status", "request", "result", "error",
-    "claimed_by", "started_at", "completed_at", "created_at", "updated_at",
+    "claimed_by", "claim_token", "started_at", "completed_at", "created_at", "updated_at",
 )
 
 
@@ -114,6 +115,7 @@ def _file_create(request, job_type, executor):
             "result": None,
             "error": None,
             "claimed_by": None,
+            "claim_token": None,
             "started_at": None,
             "completed_at": None,
             "created_at": _now(),
@@ -157,6 +159,7 @@ def _file_claim_next(job_types, executor, worker_id):
                 continue
             job["status"] = "running"
             job["claimed_by"] = worker_id or None
+            job["claim_token"] = secrets.token_urlsafe(32)
             job["started_at"] = _now()
             job["updated_at"] = _now()
             _file_write(jobs)
@@ -175,6 +178,7 @@ def _file_claim_next_agentic_review(executor, worker_id):
                 continue
             job["status"] = "running"
             job["claimed_by"] = worker_id or None
+            job["claim_token"] = secrets.token_urlsafe(32)
             job["started_at"] = _now()
             job["updated_at"] = _now()
             _file_write(jobs)
@@ -209,7 +213,7 @@ def _file_update(job_id, status, result, error, claimed_by):
 
 _SELECT = (
     "SELECT id, job_type, executor, status, request, result, error, "
-    "claimed_by, started_at, completed_at, created_at, updated_at "
+    "claimed_by, claim_token, started_at, completed_at, created_at, updated_at "
     "FROM review_jobs"
 )
 
@@ -250,6 +254,7 @@ def _pg_ensure_schema():
                 "ADD COLUMN IF NOT EXISTS job_type text NOT NULL DEFAULT 'review', "
                 "ADD COLUMN IF NOT EXISTS executor text NOT NULL DEFAULT 'inline', "
                 "ADD COLUMN IF NOT EXISTS claimed_by text, "
+                "ADD COLUMN IF NOT EXISTS claim_token text, "
                 "ADD COLUMN IF NOT EXISTS started_at timestamptz, "
                 "ADD COLUMN IF NOT EXISTS completed_at timestamptz"
             )
@@ -268,7 +273,7 @@ def _pg_create(request, job_type, executor):
         cur.execute(
             "INSERT INTO review_jobs (job_type, executor, request) VALUES (%s, %s, %s) "
             "RETURNING id, job_type, executor, status, request, result, error, "
-            "claimed_by, started_at, completed_at, created_at, updated_at",
+            "claimed_by, claim_token, started_at, completed_at, created_at, updated_at",
             (job_type, executor, json.dumps(request)),
         )
         return _row_to_job(cur.fetchone())
@@ -314,12 +319,14 @@ def _pg_claim_next(job_types, executor, worker_id):
     import db
 
     _pg_ensure_schema()
+    claim_token = secrets.token_urlsafe(32)
     where = ["status = 'queued'", "executor = %s"]
     params = [executor]
     if job_types:
         where.append("job_type = ANY(%s)")
         params.append(list(job_types))
     params.append(worker_id or None)
+    params.append(claim_token)
     with db.connect() as conn, conn.cursor() as cur:
         cur.execute(
             "WITH next_job AS ("
@@ -327,10 +334,10 @@ def _pg_claim_next(job_types, executor, worker_id):
             "  ORDER BY created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
             ") "
             "UPDATE review_jobs j SET status = 'running', claimed_by = %s, "
-            "started_at = COALESCE(j.started_at, now()), updated_at = now() "
+            "claim_token = %s, started_at = COALESCE(j.started_at, now()), updated_at = now() "
             "FROM next_job WHERE j.id = next_job.id "
             "RETURNING id, job_type, executor, status, request, result, error, "
-            "claimed_by, started_at, completed_at, created_at, updated_at",
+            "claimed_by, claim_token, started_at, completed_at, created_at, updated_at",
             params,
         )
         row = cur.fetchone()
@@ -341,7 +348,8 @@ def _pg_claim_next_agentic_review(executor, worker_id):
     import db
 
     _pg_ensure_schema()
-    params = [executor, worker_id or None]
+    claim_token = secrets.token_urlsafe(32)
+    params = [executor, worker_id or None, claim_token]
     with db.connect() as conn, conn.cursor() as cur:
         cur.execute(
             "WITH next_job AS ("
@@ -351,10 +359,10 @@ def _pg_claim_next_agentic_review(executor, worker_id):
             "  ORDER BY created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
             ") "
             "UPDATE review_jobs j SET status = 'running', claimed_by = %s, "
-            "started_at = COALESCE(j.started_at, now()), updated_at = now() "
+            "claim_token = %s, started_at = COALESCE(j.started_at, now()), updated_at = now() "
             "FROM next_job WHERE j.id = next_job.id "
             "RETURNING id, job_type, executor, status, request, result, error, "
-            "claimed_by, started_at, completed_at, created_at, updated_at",
+            "claimed_by, claim_token, started_at, completed_at, created_at, updated_at",
             params,
         )
         row = cur.fetchone()
@@ -388,7 +396,7 @@ def _pg_update(job_id, status, result, error, claimed_by):
         cur.execute(
             "UPDATE review_jobs SET " + ", ".join(sets) + " WHERE id = %s "
             "RETURNING id, job_type, executor, status, request, result, error, "
-            "claimed_by, started_at, completed_at, created_at, updated_at",
+            "claimed_by, claim_token, started_at, completed_at, created_at, updated_at",
             params,
         )
         row = cur.fetchone()

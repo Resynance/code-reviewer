@@ -305,7 +305,9 @@ Claims the oldest queued local LLM job and marks it `running`.
 ```json
 { "worker_id": "mac-mini", "job_types": ["review", "assessment", "compliance_followup"] }
 ```
-Returns `204 No Content` when no job is waiting, otherwise the full job record.
+Returns `204 No Content` when no job is waiting, otherwise the full job record
+including a private `claim_token`. The claiming worker must send that token in
+`X-Claim-Token` when completing or failing the job.
 
 ### `POST /worker/llm/{id}/complete`
 Stores the worker result and marks the job `done`.
@@ -319,13 +321,16 @@ Stores the worker result and marks the job `done`.
 For review jobs, `result` should match the normal review payload; for assessment
 jobs, it should match the normal assessment payload. For `compliance_followup`
 jobs, `result` is stored as-is. Finished jobs are also saved to history with
-source `local_worker` for reviews.
+source `local_worker` for reviews. Newly claimed jobs require both
+`X-Worker-Secret` and the `X-Claim-Token` returned by `/worker/llm/claim`.
 
 ### `POST /worker/llm/{id}/error`
 Marks the job failed.
 ```json
 { "error": "model timed out" }
 ```
+Newly claimed jobs require both `X-Worker-Secret` and the `X-Claim-Token`
+returned by `/worker/llm/claim`.
 
 ## Queue viewer
 

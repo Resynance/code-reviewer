@@ -91,6 +91,14 @@ def _worker_headers() -> dict:
     return {"X-Worker-Secret": WORKER_SECRET} if WORKER_SECRET else {}
 
 
+def _worker_job_headers(job: dict) -> dict:
+    headers = _worker_headers()
+    claim_token = (job or {}).get("claim_token")
+    if claim_token:
+        headers["X-Claim-Token"] = claim_token
+    return headers
+
+
 def claim_job(client: httpx.Client) -> dict | None:
     try:
         resp = client.post(
@@ -111,10 +119,11 @@ def claim_job(client: httpx.Client) -> dict | None:
     return resp.json()
 
 
-def complete_job(client: httpx.Client, job_id: str, result: dict) -> None:
+def complete_job(client: httpx.Client, job: dict, result: dict) -> None:
+    job_id = job["id"]
     resp = client.post(
         f"{API_URL}/worker/llm/{job_id}/complete",
-        headers=_worker_headers(),
+        headers=_worker_job_headers(job),
         json={"result": result},
         timeout=10.0,
     )
@@ -122,12 +131,13 @@ def complete_job(client: httpx.Client, job_id: str, result: dict) -> None:
     logger.info("Completed job %s", job_id)
 
 
-def fail_job(client: httpx.Client, job_id: str, error: str) -> None:
+def fail_job(client: httpx.Client, job: dict, error: str) -> None:
+    job_id = job["id"]
     logger.warning("Failing job %s: %s", job_id, error)
     try:
         resp = client.post(
             f"{API_URL}/worker/llm/{job_id}/error",
-            headers=_worker_headers(),
+            headers=_worker_job_headers(job),
             json={"error": error},
             timeout=10.0,
         )
@@ -624,9 +634,9 @@ class Worker:
                 result = self.run_compliance_followup(job)
             else:
                 raise ValueError(f"Unknown job_type: {job_type}")
-            complete_job(client, job_id, result)
+            complete_job(client, job, result)
         except Exception as e:
-            fail_job(client, job_id, f"{type(e).__name__}: {e}")
+            fail_job(client, job, f"{type(e).__name__}: {e}")
 
 
 # --------------------------------------------------------------------------- #

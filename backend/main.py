@@ -351,6 +351,19 @@ def _normalize_result_payload(result_payload: dict) -> dict:
     return payload
 
 
+def _public_job(job: dict) -> dict:
+    payload = dict(job or {})
+    payload.pop("claim_token", None)
+    return payload
+
+
+def _require_claim_token(job: dict, provided: Optional[str]):
+    expected = job.get("claim_token")
+    # Older already-running jobs do not have claim tokens; allow them to drain.
+    if expected and (not provided or not hmac.compare_digest(provided, expected)):
+        raise HTTPException(status_code=409, detail="Job is claimed by another worker")
+
+
 def _summarize_job(job: dict) -> dict:
     req = dict((job or {}).get("request") or {})
     diff = req.pop("diff", "")
@@ -610,15 +623,15 @@ def run_review_job(job_id: str):
     if job.get("job_type") != "review":
         raise HTTPException(status_code=404, detail="Review job not found")
     if job.get("executor") != "inline":
-        return job
+        return _public_job(job)
     if job["status"] != "queued":
-        return job
+        return _public_job(job)
     review_jobs.update_job(job_id, status="running")
     try:
         result = _execute_review(ReviewRequestBody(**job["request"]), source="api")
-        return review_jobs.update_job(job_id, status="done", result=result)
+        return _public_job(review_jobs.update_job(job_id, status="done", result=result))
     except Exception as e:
-        return review_jobs.update_job(job_id, status="error", error=str(e))
+        return _public_job(review_jobs.update_job(job_id, status="error", error=str(e)))
 
 
 @app.get("/api/review/{job_id}")
@@ -630,7 +643,7 @@ def get_review_job(job_id: str):
     if job.get("result"):
         job = dict(job)
         job["result"] = _normalize_result_payload(job["result"])
-    return job
+    return _public_job(job)
 
 
 def _save_review(request, result, source):
@@ -687,9 +700,9 @@ def run_assessment_job(job_id: str):
     if job.get("job_type") != "assessment":
         raise HTTPException(status_code=404, detail="Assessment job not found")
     if job.get("executor") != "inline":
-        return job
+        return _public_job(job)
     if job["status"] != "queued":
-        return job
+        return _public_job(job)
     req = job["request"]
     _token_for(req["repo"])
     review_jobs.update_job(job_id, status="running")
@@ -700,9 +713,9 @@ def run_assessment_job(job_id: str):
             provider=req.get("provider"),
             compliance=req.get("compliance", False),
         ))
-        return review_jobs.update_job(job_id, status="done", result=result)
+        return _public_job(review_jobs.update_job(job_id, status="done", result=result))
     except Exception as e:
-        return review_jobs.update_job(job_id, status="error", error=str(e))
+        return _public_job(review_jobs.update_job(job_id, status="error", error=str(e)))
 
 
 @app.get("/api/assessments/{job_id}")
@@ -714,7 +727,7 @@ def get_assessment_job(job_id: str):
     if job.get("result"):
         job = dict(job)
         job["result"] = _normalize_result_payload(job["result"])
-    return job
+    return _public_job(job)
 
 
 @app.get("/api/assessments")
@@ -1144,6 +1157,7 @@ def complete_llm_job(
     job_id: str,
     body: WorkerCompleteBody,
     x_worker_secret: Optional[str] = Header(default=None, alias="X-Worker-Secret"),
+    x_claim_token: Optional[str] = Header(default=None, alias="X-Claim-Token"),
 ):
     """Store a local worker result and mark the job done."""
     job = review_jobs.get_job(job_id)
@@ -1152,6 +1166,7 @@ def complete_llm_job(
     if job.get("executor") != "local_queue":
         raise HTTPException(status_code=400, detail="Job is not configured for local queue execution")
     _require_worker_secret(x_worker_secret)
+    _require_claim_token(job, x_claim_token)
     if job.get("job_type") == "compliance_followup":
         return review_jobs.update_job(job_id, status="done", result=body.result)
     normalized = _normalize_result_payload(body.result)
@@ -1164,6 +1179,7 @@ def fail_llm_job(
     job_id: str,
     body: WorkerErrorBody,
     x_worker_secret: Optional[str] = Header(default=None, alias="X-Worker-Secret"),
+    x_claim_token: Optional[str] = Header(default=None, alias="X-Claim-Token"),
 ):
     """Store a local worker failure and mark the job errored."""
     job = review_jobs.get_job(job_id)
@@ -1172,6 +1188,7 @@ def fail_llm_job(
     if job.get("executor") != "local_queue":
         raise HTTPException(status_code=400, detail="Job is not configured for local queue execution")
     _require_worker_secret(x_worker_secret)
+    _require_claim_token(job, x_claim_token)
     return review_jobs.update_job(job_id, status="error", error=body.error)
 
 
