@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from '../lib/api.js'
 import { useMediaQuery } from '../lib/useMediaQuery.js'
 
@@ -12,34 +12,54 @@ export default function DecisionsPage() {
   const [deleteId, setDeleteId] = useState(null)
   const [repos, setRepos] = useState([])
   const [repoFilter, setRepoFilter] = useState('')
+  const requestRef = useRef(0)
 
   useEffect(() => {
     api.listRepos().then(r => setRepos(r.repos || [])).catch(() => {})
   }, [])
 
   const load = useCallback(async () => {
+    const requestId = requestRef.current + 1
+    requestRef.current = requestId
+    const repo = repoFilter
     setLoading(true)
     try {
-      const res = await api.listDecisions(30, repoFilter)
+      const res = await api.listDecisions(30, repo)
+      if (requestRef.current !== requestId) return
       setDecisions(res.decisions || [])
     } catch (e) {
-      console.error(e)
+      if (requestRef.current === requestId) console.error(e)
     } finally {
-      setLoading(false)
+      if (requestRef.current === requestId) setLoading(false)
     }
   }, [repoFilter])
 
   // Reloads whenever the repo filter changes (load identity depends on it).
   useEffect(() => { load() }, [load])
+  useEffect(() => { setDeleteId(null) }, [repoFilter, searchQuery])
+
+  function invalidatePendingRequests() {
+    requestRef.current += 1
+    setDeleteId(null)
+    setLoading(false)
+    setSearching(false)
+  }
 
   async function search() {
     if (!searchQuery.trim()) return load()
+    const requestId = requestRef.current + 1
+    requestRef.current = requestId
+    const query = searchQuery.trim()
+    const repo = repoFilter
     setSearching(true)
     try {
-      const res = await api.searchDecisions(searchQuery, 15, repoFilter)
+      const res = await api.searchDecisions(query, 15, repo)
+      if (requestRef.current !== requestId) return
       setDecisions(res.results || [])
+    } catch (e) {
+      if (requestRef.current === requestId) console.error(e)
     } finally {
-      setSearching(false)
+      if (requestRef.current === requestId) setSearching(false)
     }
   }
 
@@ -64,14 +84,14 @@ export default function DecisionsPage() {
 
       {/* Search */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexDirection: isMobile ? 'column' : 'row' }}>
-        <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+        <input value={searchQuery} onChange={e => { invalidatePendingRequests(); setSearchQuery(e.target.value) }}
           onKeyDown={e => e.key === 'Enter' && search()}
           placeholder="Search decisions by topic, file, or concept…"
           style={{
             flex: 1, background: 'var(--surface)', border: '1px solid var(--border)',
             borderRadius: 8, padding: '9px 14px', color: 'var(--text)', fontSize: 13, outline: 'none',
           }} />
-        <select value={repoFilter} onChange={e => setRepoFilter(e.target.value)} style={{
+        <select value={repoFilter} onChange={e => { invalidatePendingRequests(); setRepoFilter(e.target.value) }} style={{
           background: 'var(--surface)', border: '1px solid var(--border)',
           color: 'var(--text)', borderRadius: 8, padding: '9px 12px', fontSize: 13, outline: 'none',
         }}>
@@ -84,7 +104,7 @@ export default function DecisionsPage() {
           color: 'var(--text)', borderRadius: 8, padding: '9px 16px', fontSize: 13,
         }}>{searching ? '⟳' : 'Search'}</button>
         {searchQuery && (
-          <button onClick={() => { setSearchQuery(''); load() }} style={{
+          <button onClick={() => { invalidatePendingRequests(); setSearchQuery(''); load() }} style={{
             background: 'transparent', border: '1px solid var(--border)',
             color: 'var(--text-2)', borderRadius: 8, padding: '9px 12px', fontSize: 13,
           }}>✕</button>

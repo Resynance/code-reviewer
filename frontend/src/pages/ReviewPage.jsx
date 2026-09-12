@@ -142,7 +142,10 @@ export default function ReviewPage() {
     const requestId = prLoadRef.current + 1
     prLoadRef.current = requestId
     setSelectedPr(number)
-    setForm(f => resetLoadedPrFields(f, number ? { pr_number: Number(number) } : {}))
+    setForm(f => resetLoadedPrFields(f, {
+      repo,
+      ...(number ? { pr_number: Number(number) } : {}),
+    }))
     setResult(null)
     setSavedAt(null)
     setError(null)
