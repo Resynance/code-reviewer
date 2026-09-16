@@ -104,7 +104,7 @@ def test_ignores_docs_and_tests_when_policy_excludes_them():
     assert any(f["category"] == "signal_policy" for f in result["findings"])
 
 
-def test_generic_auth_audit_and_transport_markers_satisfy_example_signals():
+def test_generic_history_does_not_satisfy_specific_auth_or_audit_signals():
     files = {
         "backend/main.py": (
             "Authorization: Bearer token\n"
@@ -120,8 +120,24 @@ def test_generic_auth_audit_and_transport_markers_satisfy_example_signals():
     }
     result = health.analyze_policy_health("acme/app", [], files, policy)
     missing = set(result["signals"]["required_signals_not_observed"])
-    assert "require_user" not in missing
-    assert "@login_required" not in missing
-    assert "audit_log" not in missing
+    assert {"require_user", "@login_required", "audit_log"}.issubset(missing)
     assert "in_transit" not in missing
     assert "at_rest" in missing
+
+
+def test_hl7_specific_signals_require_the_listed_marker():
+    files = {
+        "src/hl7.py": "def validate_message(msg): return schema.validate(msg)  # tls transport",
+    }
+    policy = {
+        "required_auth_signals": [],
+        "required_audit_signals": [],
+        "required_encryption": [],
+        "required_hl7_validation_signals": ["schema", "ack", "message_control_id"],
+        "required_hl7_transport_signals": ["tls", "mllps"],
+    }
+    result = health.analyze_policy_health("acme/app", [], files, policy)
+    missing = set(result["signals"]["required_signals_not_observed"])
+    assert "schema" not in missing
+    assert "tls" not in missing
+    assert {"ack", "message_control_id", "mllps"}.issubset(missing)

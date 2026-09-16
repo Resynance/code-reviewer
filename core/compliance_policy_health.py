@@ -285,34 +285,27 @@ class PolicyHealthAnalyzer:
     def _analyze_signals(self, files: dict[str, str]) -> dict:
         all_text = "\n".join(files.values())
         lower_text = all_text.lower()
-        auth_category_present = bool(compliance._AUTH_RE.search(lower_text))
-        audit_category_present = bool(compliance._AUDIT_RE.search(lower_text))
         encryption_at_rest_present = bool(re.search(r"\b(encrypt|encrypted|kms|fernet|aes)\b", lower_text, re.IGNORECASE))
         encryption_in_transit_present = bool(
             re.search(r"\b(ssl|tls|https)\b", lower_text, re.IGNORECASE) or "https://" in lower_text
         )
-        hl7_validation_category_present = bool(compliance._HL7_VALIDATION_RE.search(lower_text))
-        hl7_transport_category_present = bool(
-            compliance._HL7_TRANSPORT_RE.search(lower_text)
-            and re.search(r"\b(tls|ssl|https|mllps|vpn|ssh)\b", lower_text, re.IGNORECASE)
-        )
+
+        def literal_present(signal: str) -> bool:
+            if re.match(r"^[a-z0-9_]+$", signal):
+                pattern = rf"(?<![a-z0-9_]){re.escape(signal)}(?![a-z0-9_])"
+                return bool(re.search(pattern, lower_text))
+            return signal in lower_text
 
         def signal_present(signal: str) -> bool:
-            normalized = signal.lower()
-            if normalized in lower_text:
+            normalized = (signal or "").strip().lower()
+            if not normalized:
+                return False
+            if literal_present(normalized):
                 return True
-            if normalized in {"require_user", "depends(require_user)", "@login_required"}:
-                return auth_category_present
-            if normalized in {"audit", "audit_log", "audit trail", "access_log"}:
-                return audit_category_present
             if normalized == "at_rest":
                 return encryption_at_rest_present
             if normalized == "in_transit":
                 return encryption_in_transit_present
-            if normalized in {"schema", "validate", "ack", "nack", "message_control_id"}:
-                return hl7_validation_category_present
-            if normalized in {"tls", "ssl", "https", "sftp", "vpn", "mllps"}:
-                return hl7_transport_category_present or normalized in lower_text
             return False
 
         def observed(signals: list[str]) -> list[str]:
