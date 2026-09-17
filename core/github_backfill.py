@@ -198,8 +198,7 @@ def fetch_pr(repo: str, number, token: str, max_file_pages: int = 20) -> dict:
         files = []
         for page in range(1, max_file_pages + 1):
             fr = client.get(f"{base}/files", params={"per_page": PER_PAGE, "page": page})
-            if fr.status_code != 200:
-                break
+            _raise_for_status(fr, repo)
             batch = fr.json()
             if not batch:
                 break

@@ -214,6 +214,20 @@ def test_fetch_pr_builds_diff_from_files_on_406(monkeypatch):
     assert data["files_changed"] == ["a.py", "big.bin"]
 
 
+def test_fetch_pr_raises_when_files_page_errors(monkeypatch):
+    meta = FakeResp(200, {"number": 1, "title": "big", "body": "",
+                          "user": {"login": "d"}, "base": {"ref": "main"}})
+    diff = FakeResp(200, None, "DIFF-TEXT")
+    files = {
+        1: FakeResp(200, [{"filename": "a.py"}]),
+        2: FakeResp(500, {}, "temporary failure"),
+    }
+    monkeypatch.setattr(httpx, "Client", lambda **kw: RouteClient(meta, diff, files))
+
+    with pytest.raises(RuntimeError, match="GitHub returned 500"):
+        gb.fetch_pr("org/repo", 1, token="t")
+
+
 def test_fetch_pr_missing_token():
     with pytest.raises(ValueError, match="token"):
         gb.fetch_pr("org/repo", 1, token="")
