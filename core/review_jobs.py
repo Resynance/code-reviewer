@@ -24,6 +24,7 @@ _FILE_PATH = Path(__file__).parent.parent / "review_jobs.json"
 _LOCK = threading.Lock()
 _PG_SCHEMA_LOCK = threading.Lock()
 _PG_SCHEMA_READY = False
+_TERMINAL_STATUSES = {"done", "error"}
 
 # Columns mirror the postgres table; the file backend stores the same shape.
 _FIELDS = (
@@ -81,6 +82,13 @@ def update_job(job_id: str, status=None, result=None, error=None, claimed_by=Non
     if _backend() == "postgres":
         return _pg_update(job_id, status, result, error, claimed_by)
     return _file_update(job_id, status, result, error, claimed_by)
+
+
+def fail_job(job_id: str, error: str):
+    """Mark a job errored unless another worker already completed it."""
+    if _backend() == "postgres":
+        return _pg_fail_job(job_id, error)
+    return _file_fail_job(job_id, error)
 
 
 # ----- file backend ----- #
@@ -199,6 +207,22 @@ def _file_update(job_id, status, result, error, claimed_by):
                     job["started_at"] = _now()
                 if status in {"done", "error"}:
                     job["completed_at"] = _now()
+                job["updated_at"] = _now()
+                _file_write(jobs)
+                return job
+    return None
+
+
+def _file_fail_job(job_id, error):
+    with _LOCK:
+        jobs = _file_read()
+        for job in jobs:
+            if job.get("id") == job_id:
+                if job.get("status") in _TERMINAL_STATUSES:
+                    return job
+                job["status"] = "error"
+                job["error"] = error
+                job["completed_at"] = _now()
                 job["updated_at"] = _now()
                 _file_write(jobs)
                 return job
@@ -393,3 +417,19 @@ def _pg_update(job_id, status, result, error, claimed_by):
         )
         row = cur.fetchone()
     return _row_to_job(row) if row else None
+
+
+def _pg_fail_job(job_id, error):
+    import db
+
+    _pg_ensure_schema()
+    with db.connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE review_jobs SET status = 'error', error = %s, completed_at = now(), updated_at = now() "
+            "WHERE id = %s AND status NOT IN ('done', 'error') "
+            "RETURNING id, job_type, executor, status, request, result, error, "
+            "claimed_by, started_at, completed_at, created_at, updated_at",
+            (error, job_id),
+        )
+        row = cur.fetchone()
+    return _row_to_job(row) if row else _pg_get(job_id)

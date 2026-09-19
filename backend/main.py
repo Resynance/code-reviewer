@@ -618,7 +618,7 @@ def run_review_job(job_id: str):
         result = _execute_review(ReviewRequestBody(**job["request"]), source="api")
         return review_jobs.update_job(job_id, status="done", result=result)
     except Exception as e:
-        return review_jobs.update_job(job_id, status="error", error=str(e))
+        return review_jobs.fail_job(job_id, str(e))
 
 
 @app.get("/api/review/{job_id}")
@@ -702,7 +702,7 @@ def run_assessment_job(job_id: str):
         ))
         return review_jobs.update_job(job_id, status="done", result=result)
     except Exception as e:
-        return review_jobs.update_job(job_id, status="error", error=str(e))
+        return review_jobs.fail_job(job_id, str(e))
 
 
 @app.get("/api/assessments/{job_id}")
@@ -1172,7 +1172,7 @@ def fail_llm_job(
     if job.get("executor") != "local_queue":
         raise HTTPException(status_code=400, detail="Job is not configured for local queue execution")
     _require_worker_secret(x_worker_secret)
-    return review_jobs.update_job(job_id, status="error", error=body.error)
+    return review_jobs.fail_job(job_id, body.error)
 
 
 @app.get("/api/repos")

@@ -445,6 +445,15 @@ def test_review_local_queue_skips_inline_run_and_can_complete_via_worker(client,
     assert done["status"] == "done"
     assert done["result"]["summary"] == "queued ok"
 
+    errored = tc.post(
+        f"/worker/llm/{job['id']}/error",
+        headers={"X-Worker-Secret": "secret"},
+        json={"error": "TimeoutException: response timed out"},
+    ).json()
+    assert errored["status"] == "done"
+    assert errored["result"]["summary"] == "queued ok"
+    assert errored["error"] is None
+
     hist = tc.get("/api/reviews", params={"repo": "org/a"}).json()
     assert hist["count"] == 1
     assert hist["reviews"][0]["source"] == "local_worker"
