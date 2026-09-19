@@ -1543,11 +1543,13 @@ async def github_webhook(request: Request):
     pr = payload["pull_request"]
     repo = payload["repository"]["full_name"]
     pr_number = pr["number"]
+    executor = _llm_execution_mode()
+    if executor == "local_queue":
+        _require_local_queue_configured()
 
     diff = await _fetch_pr_diff(repo, pr_number)
 
-    engine = get_engine()
-    request_obj = ReviewRequest(
+    request_body = ReviewRequestBody(
         pr_number=pr_number,
         repo=repo,
         title=pr.get("title", ""),
@@ -1558,6 +1560,13 @@ async def github_webhook(request: Request):
         files_changed=[],
         compliance=_repo_compliance_enabled(repo),
     )
+
+    if executor == "local_queue":
+        job = review_jobs.create_job(request_body.model_dump(), job_type="review", executor=executor)
+        return {"status": job["status"], "job_id": job["id"], "pr_number": pr_number}
+
+    engine = get_engine()
+    request_obj = ReviewRequest(**request_body.model_dump())
     result = engine.review(request_obj)
     _save_review(request_obj, result, source="webhook")
     return {

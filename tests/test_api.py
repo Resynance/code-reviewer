@@ -853,6 +853,63 @@ def test_webhook_rejects_unconfigured_repo(client):
     assert "not configured" in resp.json()["detail"]
 
 
+def test_webhook_local_queue_enqueues_review_without_inline_engine(client, monkeypatch):
+    tc, main = client
+    config_store.save_config({
+        "webhook_secret": "s",
+        "github_token": "ghp_test",
+        "repos": ["org/a"],
+        "llm_execution_mode": "local_queue",
+        "llm_worker_secret": "secret",
+    })
+
+    async def fake_fetch_diff(repo, pr_number):
+        assert repo == "org/a"
+        assert pr_number == 42
+        return "diff --git a/app.py b/app.py\n+x"
+
+    class ExplodingEngine:
+        def review(self, req):
+            raise AssertionError("webhook must not run inline in local_queue mode")
+
+    monkeypatch.setattr(main, "_fetch_pr_diff", fake_fetch_diff)
+    monkeypatch.setattr(main, "get_engine", lambda: ExplodingEngine())
+
+    payload = {
+        "action": "opened",
+        "pull_request": {
+            "number": 42,
+            "title": "Test PR",
+            "body": "desc",
+            "user": {"login": "dev"},
+            "base": {"ref": "main"},
+        },
+        "repository": {"full_name": "org/a"},
+    }
+    body = json.dumps(payload).encode()
+    resp = tc.post("/webhook/github", content=body, headers={
+        "X-GitHub-Event": "pull_request",
+        "X-Hub-Signature-256": _sign(b"s", body),
+    })
+
+    assert resp.status_code == 200
+    queued = resp.json()
+    assert queued["status"] == "queued"
+    assert queued["pr_number"] == 42
+
+    claimed = tc.post(
+        "/worker/llm/claim",
+        headers={"X-Worker-Secret": "secret"},
+        json={"worker_id": "mac-mini", "job_types": ["review"]},
+    ).json()
+    assert claimed["id"] == queued["job_id"]
+    assert claimed["executor"] == "local_queue"
+    assert claimed["job_type"] == "review"
+    assert claimed["request"]["repo"] == "org/a"
+    assert claimed["request"]["pr_number"] == 42
+    assert claimed["request"]["diff"] == "diff --git a/app.py b/app.py\n+x"
+
+
 # ----- assessments ----- #
 
 def _fake_assessment_engine():
