@@ -133,7 +133,7 @@ Semantic search.
 exceeded). Returns `{ "results": [...], "count": N }`.
 
 ### `POST /api/decisions`
-Manually add a decision (e.g. an ADR).
+Manually add a decision (e.g. an ADR). Requires admin access when auth is enabled.
 ```json
 { "ref": "ADR-007", "summary": "Use JWT", "reasoning": "Stateless",
   "outcome": "approved_and_merged", "metadata": { "repo": "*" } }
@@ -142,7 +142,7 @@ Set `metadata.repo` to a repo name, or `*` for a global decision. Returns
 `{ "doc_id": "…", "ref": "ADR-007" }`.
 
 ### `DELETE /api/decisions/{doc_id}`
-Removes a decision. Returns `{ "deleted": "<doc_id>" }`.
+Removes a decision. Requires admin access when auth is enabled. Returns `{ "deleted": "<doc_id>" }`.
 
 ## Assessments
 
