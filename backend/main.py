@@ -1153,10 +1153,13 @@ def complete_llm_job(
         raise HTTPException(status_code=400, detail="Job is not configured for local queue execution")
     _require_worker_secret(x_worker_secret)
     if job.get("job_type") == "compliance_followup":
-        return review_jobs.update_job(job_id, status="done", result=body.result)
+        updated, _ = review_jobs.complete_job(job_id, result=body.result)
+        return updated
     normalized = _normalize_result_payload(body.result)
-    _persist_local_job_result(job, normalized)
-    return review_jobs.update_job(job_id, status="done", result=normalized)
+    updated, changed = review_jobs.complete_job(job_id, result=normalized)
+    if changed:
+        _persist_local_job_result(job, normalized)
+    return updated
 
 
 @app.post("/worker/llm/{job_id}/error")

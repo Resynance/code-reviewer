@@ -42,6 +42,78 @@ def test_update_job_marks_completed(jobs):
     assert updated["completed_at"]
 
 
+def test_complete_job_does_not_overwrite_terminal_job(jobs):
+    job = jobs.create_job({"repo": "org/a"}, job_type="review", executor="local_queue")
+    jobs.claim_next_job(executor="local_queue", worker_id="mac")
+    completed, changed = jobs.complete_job(job["id"], result={"summary": "first"})
+    assert changed is True
+    assert completed["status"] == "done"
+    assert completed["result"]["summary"] == "first"
+
+    retried, changed = jobs.complete_job(job["id"], result={"summary": "second"})
+    assert changed is False
+    assert retried["status"] == "done"
+    assert retried["result"]["summary"] == "first"
+
+
+def test_pg_complete_job_uses_terminal_status_guard(monkeypatch):
+    monkeypatch.setenv("REVIEW_STORE_BACKEND", "postgres")
+    monkeypatch.setattr(review_jobs, "_PG_SCHEMA_READY", True)
+
+    now = datetime.now(timezone.utc)
+    calls = []
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql, params=None):
+            calls.append((sql, params))
+
+        def fetchone(self):
+            return (
+                "123",
+                "review",
+                "local_queue",
+                "done",
+                {"repo": "org/a"},
+                {"summary": "ok"},
+                None,
+                "mac",
+                now,
+                now,
+                now,
+                now,
+            )
+
+    class FakeConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    class FakeDb:
+        @staticmethod
+        def connect():
+            return FakeConn()
+
+    monkeypatch.setitem(sys.modules, "db", FakeDb)
+
+    completed, changed = review_jobs.complete_job("123", result={"summary": "ok"})
+
+    assert changed is True
+    assert completed["status"] == "done"
+    assert "status not in ('done', 'error')" in calls[0][0].lower()
+    assert calls[0][1] == ['{"summary": "ok"}', "123"]
+
+
 def test_pg_create_auto_ensures_queue_schema(monkeypatch):
     monkeypatch.setenv("REVIEW_STORE_BACKEND", "postgres")
     monkeypatch.setattr(review_jobs, "_PG_SCHEMA_READY", False)

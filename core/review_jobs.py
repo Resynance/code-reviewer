@@ -83,6 +83,17 @@ def update_job(job_id: str, status=None, result=None, error=None, claimed_by=Non
     return _file_update(job_id, status, result, error, claimed_by)
 
 
+def complete_job(job_id: str, result=None):
+    """Mark an active job done.
+
+    Returns (job, changed). Terminal jobs are returned unchanged so retried or
+    stale worker completions cannot replace a finished result.
+    """
+    if _backend() == "postgres":
+        return _pg_complete(job_id, result)
+    return _file_complete(job_id, result)
+
+
 # ----- file backend ----- #
 
 def _file_read():
@@ -203,6 +214,23 @@ def _file_update(job_id, status, result, error, claimed_by):
                 _file_write(jobs)
                 return job
     return None
+
+
+def _file_complete(job_id, result):
+    with _LOCK:
+        jobs = _file_read()
+        for job in jobs:
+            if job.get("id") == job_id:
+                if job.get("status") in {"done", "error"}:
+                    return job, False
+                job["status"] = "done"
+                if result is not None:
+                    job["result"] = result
+                job["completed_at"] = _now()
+                job["updated_at"] = _now()
+                _file_write(jobs)
+                return job, True
+    return None, False
 
 
 # ----- postgres backend ----- #
@@ -393,3 +421,28 @@ def _pg_update(job_id, status, result, error, claimed_by):
         )
         row = cur.fetchone()
     return _row_to_job(row) if row else None
+
+
+def _pg_complete(job_id, result):
+    import db
+
+    _pg_ensure_schema()
+    params = []
+    sets = ["status = 'done'", "completed_at = now()", "updated_at = now()"]
+    if result is not None:
+        sets.insert(1, "result = %s")
+        params.append(json.dumps(result))
+    params.append(job_id)
+    with db.connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE review_jobs SET " + ", ".join(sets) + " "
+            "WHERE id = %s AND status NOT IN ('done', 'error') "
+            "RETURNING id, job_type, executor, status, request, result, error, "
+            "claimed_by, started_at, completed_at, created_at, updated_at",
+            params,
+        )
+        row = cur.fetchone()
+    if row:
+        return _row_to_job(row), True
+    existing = _pg_get(job_id)
+    return existing, False
