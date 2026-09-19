@@ -21,6 +21,20 @@ def test_detects_disallowed_and_unlisted_vendors():
     assert result["score"] < 100
 
 
+def test_detects_disallowed_vendor_in_npm_dev_dependencies():
+    files = {
+        "package.json": '{"dependencies": {"react": "^18.0"}, "devDependencies": {"sentry": "^7.0"}}',
+    }
+    policy = {
+        "approved_vendors": [],
+        "disallowed_vendors": ["sentry"],
+    }
+    result = health.analyze_policy_health("acme/app", [], files, policy)
+
+    assert result["vendors"]["disallowed_hits"] == ["sentry"]
+    assert any(f["severity"] == "high" and "Disallowed vendor" in f["title"] for f in result["findings"])
+
+
 def test_detects_missing_required_signals():
     files = {
         "src/api.py": 'def create_patient(): pass',
