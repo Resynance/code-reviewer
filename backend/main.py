@@ -802,7 +802,7 @@ def analyze_compliance(body: ComplianceAnalyzeBody):
         raise HTTPException(status_code=502, detail=str(e))
 
 
-@app.post("/api/compliance/analyses/{analysis_id}/issue")
+@app.post("/api/compliance/analyses/{analysis_id}/issue", dependencies=[Depends(require_admin)])
 def create_compliance_issue(analysis_id: int, body: ComplianceIssueBody):
     """Create a GitHub issue from a saved compliance analysis, optionally enqueueing local agentic follow-up."""
     analysis = compliance_analysis_store.get_analysis(analysis_id)
@@ -953,7 +953,7 @@ def _execute_assessment(body: AssessmentRequestBody) -> dict:
     }
 
 
-@app.post("/api/pr-comment")
+@app.post("/api/pr-comment", dependencies=[Depends(require_admin)])
 def pr_comment(body: PrCommentBody):
     """Post selected review findings as a comment on the PR."""
     token = _token_for(body.repo)
@@ -966,7 +966,7 @@ def pr_comment(body: PrCommentBody):
     return {"html_url": url}
 
 
-@app.post("/api/issue")
+@app.post("/api/issue", dependencies=[Depends(require_admin)])
 def open_issue(body: CreateIssueBody):
     """Open a new GitHub issue from selected review findings."""
     token = _token_for(body.repo)

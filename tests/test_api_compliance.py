@@ -1,6 +1,21 @@
 """API tests for the new /api/compliance/* endpoints."""
 
+import time
+
+import jwt
 import pytest
+
+
+AUTH_SECRET = "test-secret"
+
+
+def _auth_headers(email: str) -> dict:
+    token = jwt.encode(
+        {"aud": "authenticated", "exp": int(time.time()) + 3600, "email": email},
+        AUTH_SECRET,
+        algorithm="HS256",
+    )
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture
@@ -276,6 +291,46 @@ def test_create_compliance_issue(configured_repo):
     assert seen["repo"] == "acme/app"
     assert "Compliance follow-up for acme/app" in seen["title"]
     assert "Policy Health Findings" in seen["body"]
+
+
+def test_create_compliance_issue_requires_admin_when_auth_enabled(configured_repo, monkeypatch):
+    test_client, main, _ = configured_repo
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", AUTH_SECRET)
+    monkeypatch.setenv("ALLOWED_EMAILS", "admin@co.com,user@co.com")
+    monkeypatch.setattr(
+        main.compliance_analysis_store, "get_analysis",
+        lambda analysis_id: {
+            "id": analysis_id,
+            "repo": "acme/app",
+            "health": {"score": 85},
+            "coverage": {"coverage_score": 70},
+            "suggestions": [],
+            "created_at": "2024-01-01T00:00:00Z",
+        },
+    )
+    calls = {"issue": 0}
+
+    def fake_create_issue(repo, title, body, token):
+        calls["issue"] += 1
+        return "https://github.com/acme/app/issues/12"
+
+    monkeypatch.setattr(main, "create_issue", fake_create_issue)
+
+    user = test_client.post(
+        "/api/compliance/analyses/12/issue",
+        headers=_auth_headers("user@co.com"),
+        json={},
+    )
+    assert user.status_code == 403
+    assert calls == {"issue": 0}
+
+    admin = test_client.post(
+        "/api/compliance/analyses/12/issue",
+        headers=_auth_headers("admin@co.com"),
+        json={},
+    )
+    assert admin.status_code == 200
+    assert calls == {"issue": 1}
 
 
 def test_create_compliance_issue_enqueues_local_followup(configured_repo):
