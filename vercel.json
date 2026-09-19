@@ -13,6 +13,7 @@
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index" },
     { "source": "/webhook/(.*)", "destination": "/api/index" },
-    { "source": "/((?!api/|webhook/|assets/).*)", "destination": "/index.html" }
+    { "source": "/worker/(.*)", "destination": "/api/index" },
+    { "source": "/((?!api/|webhook/|worker/|assets/).*)", "destination": "/index.html" }
   ]
 }
