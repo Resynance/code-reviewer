@@ -21,6 +21,11 @@ Environment variables:
     LOCAL_LLM_MODEL        Optional model name override for every job
     GITHUB_TOKEN           GitHub token for assessments; falls back to config.json/GITHUB_TOKEN
 
+Compliance follow-up jobs run remediation commands from the target repository
+checkout. Configure each local_agentic_targets entry with working_directory
+(supports {repo}, {repo_owner}, and {repo_name}) or start the worker from the
+matching checkout.
+
 Usage:
     export REVIEWBOT_WORKER_SECRET="your-secret-from-settings"
     export LOCAL_LLM_MODEL="llama3.1:8b"
@@ -172,12 +177,74 @@ def _normalize_agent(agent: dict) -> dict | None:
         return None
     label = str(agent.get("label") or agent_id).strip() or agent_id
     command = [str(v).strip() for v in (agent.get("command") or []) if str(v).strip()]
-    return {
+    normalized = {
         "id": agent_id,
         "label": label,
         "enabled": bool(agent.get("enabled", True)),
         "command": command,
     }
+    working_directory = agent.get("working_directory", agent.get("cwd"))
+    if isinstance(working_directory, str):
+        normalized["working_directory"] = working_directory.strip()
+    return normalized
+
+
+def _repo_parts(repo: str) -> tuple[str, str]:
+    owner, _, name = (repo or "").partition("/")
+    return owner, name
+
+
+def _format_repo_template(value: str, repo: str) -> str:
+    owner, name = _repo_parts(repo)
+    return value.format(
+        repo=repo,
+        repo_owner=owner,
+        repo_name=name,
+        owner=owner,
+        name=name,
+    )
+
+
+def _workdir_matches_repo(path: Path, repo: str) -> bool:
+    if not repo:
+        return False
+    try:
+        proc = subprocess.run(
+            ["git", "config", "--get", "remote.origin.url"],
+            text=True,
+            capture_output=True,
+            cwd=str(path),
+            timeout=5,
+        )
+    except Exception:
+        return False
+    if proc.returncode != 0:
+        return False
+    remote = (proc.stdout or "").strip().lower()
+    expected = (repo or "").strip().strip("/").removesuffix(".git").lower()
+    if not remote or "/" not in expected:
+        return False
+    remote = remote.removesuffix(".git").replace(":", "/")
+    return remote.endswith(f"/{expected}")
+
+
+def _resolve_target_working_directory(target: dict, repo: str) -> Path:
+    raw = (target.get("working_directory") or target.get("cwd") or "").strip()
+    if raw:
+        path = Path(_format_repo_template(raw, repo)).expanduser()
+        if not path.is_absolute():
+            path = (Path.cwd() / path).resolve()
+        if not path.is_dir():
+            raise RuntimeError(f"{target['label']} working_directory does not exist: {path}")
+        return path
+
+    cwd = Path.cwd()
+    if _workdir_matches_repo(cwd, repo):
+        return cwd
+    raise RuntimeError(
+        f"{target['label']} needs working_directory for repo '{repo}' "
+        "or the worker must be started from that repository checkout"
+    )
 
 
 def _parse_json_payload(candidate: str) -> dict:
@@ -484,7 +551,7 @@ class ComplianceFollowupRunner:
                 return target
         raise RuntimeError(f"No enabled local agentic target is configured for '{requested}'")
 
-    def _build_prompt(self, req: dict) -> str:
+    def _build_prompt(self, req: dict, workdir: Path) -> str:
         analysis = req.get("analysis") or {}
         repo = req.get("repo") or ""
         issue_url = req.get("issue_url") or ""
@@ -496,7 +563,7 @@ class ComplianceFollowupRunner:
             "Goals:\n"
             "1. Review the compliance analysis and the created issue.\n"
             "2. Decide whether safe code or documentation changes can be made automatically.\n"
-            "3. If yes, implement the changes in this local checkout, create a branch, commit, push, and open a PR linked to the issue.\n"
+            f"3. If yes, implement the changes in this local checkout ({workdir}), create a branch, commit, push, and open a PR linked to the issue.\n"
             "4. If no safe automated fix is possible, explain what manual follow-up is needed.\n\n"
             "When finished, return JSON with these fields:\n"
             f'{{"status":"completed|manual_followup|no_changes","summary":"short summary","branch":"optional branch name","pr_url":"optional PR URL","issue_url":"{issue_url}"}}\n\n'
@@ -507,7 +574,7 @@ class ComplianceFollowupRunner:
             f"{json.dumps(analysis, indent=2)}\n"
         )
 
-    def _run_target(self, target: dict, prompt: str) -> str:
+    def _run_target(self, target: dict, prompt: str, repo: str, workdir: Path) -> str:
         command = list(target.get("command") or [])
         if not command:
             raise RuntimeError(f"{target['label']} has no command configured")
@@ -524,6 +591,11 @@ class ComplianceFollowupRunner:
                     output_path=str(output_path),
                     prompt_path=str(prompt_path),
                     prompt=prompt,
+                    working_directory=str(workdir),
+                    workdir=str(workdir),
+                    repo=repo,
+                    repo_owner=_repo_parts(repo)[0],
+                    repo_name=_repo_parts(repo)[1],
                     schema_path="",
                 )
                 for part in command
@@ -535,7 +607,7 @@ class ComplianceFollowupRunner:
                     input=prompt if use_stdin else None,
                     text=True,
                     capture_output=True,
-                    cwd=str(ROOT),
+                    cwd=str(workdir),
                     timeout=AGENT_TIMEOUT_SECONDS,
                 )
             except subprocess.TimeoutExpired as e:
@@ -549,8 +621,10 @@ class ComplianceFollowupRunner:
 
     def run(self, req: dict) -> dict:
         target = self._selected_target(req.get("target_id", ""))
-        prompt = self._build_prompt(req)
-        output = self._run_target(target, prompt)
+        repo = req.get("repo") or ""
+        workdir = _resolve_target_working_directory(target, repo)
+        prompt = self._build_prompt(req, workdir)
+        output = self._run_target(target, prompt, repo, workdir)
         if not output:
             raise RuntimeError(f"{target['label']} returned no output")
         try:

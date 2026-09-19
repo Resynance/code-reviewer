@@ -242,7 +242,7 @@ Secrets are reported as booleans, never echoed.
     { "id": "kimi", "label": "Kimi", "enabled": true, "command": ["kimi", "-p", "{prompt}", "--output-format", "stream-json"] }
   ],
   "local_agentic_targets": [
-    { "id": "codex", "label": "Codex", "enabled": true, "command": ["codex", "exec", "--output-last-message", "{output_path}", "-"] }
+    { "id": "codex", "label": "Codex", "enabled": true, "working_directory": "/src/{repo_name}", "command": ["codex", "exec", "--output-last-message", "{output_path}", "-"] }
   ],
   "compliance_policies": {
     "default": { "enabled": false, "notes": "" },
@@ -259,7 +259,9 @@ Secrets are reported as booleans, never echoed.
 `openrouter_models` is the canonical model list used by the Review and Assessment
 pages. `openrouter_model`/`openrouter_provider` reflect the first slot for backward
 compatibility. `local_agentic_targets` configure agents that may be handed
-compliance follow-up jobs to open remediation PRs.
+compliance follow-up jobs to open remediation PRs. Set `working_directory` to
+the local checkout for the target repo; it supports `{repo}`, `{repo_owner}`,
+and `{repo_name}` placeholders.
 
 ### `PUT /api/settings`
 Admin-only. Update settings. **Only provided (non-null) fields change**; send
@@ -275,7 +277,7 @@ Admin-only. Update settings. **Only provided (non-null) fields change**; send
     { "id": "kimi", "label": "Kimi", "enabled": false, "command": ["kimi", "-p", "{prompt}", "--output-format", "stream-json"] }
   ],
   "local_agentic_targets": [
-    { "id": "codex", "label": "Codex", "enabled": true, "command": ["codex", "exec", "--output-last-message", "{output_path}", "-"] }
+    { "id": "codex", "label": "Codex", "enabled": true, "working_directory": "/src/{repo_name}", "command": ["codex", "exec", "--output-last-message", "{output_path}", "-"] }
   ],
   "compliance_policies": {
     "default": { "enabled": false },
