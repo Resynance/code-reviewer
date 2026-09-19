@@ -187,15 +187,17 @@ export default function SettingsPage() {
         setSavingLlm(false)
         return
       }
-      const s = await api.saveSettings({
+      const payload = {
         llm_execution_mode: llmExecutionMode,
-        llm_worker_secret: workerSecret,
         llm_base_url: llmBaseUrl,
-        llm_api_key: llmApiKey,
         llm_timeout_seconds: llmTimeoutSeconds,
         local_review_agents: parsedAgents,
         local_agentic_targets: parsedTargets,
-      })
+      }
+      if (workerSecret.trim()) payload.llm_worker_secret = workerSecret.trim()
+      if (llmApiKey.trim()) payload.llm_api_key = llmApiKey.trim()
+
+      const s = await api.saveSettings(payload)
       setSettings(s)
       setLlmExecutionMode(s.llm_execution_mode || 'inline')
       setLlmBaseUrl(s.llm_base_url || '')
@@ -217,10 +219,12 @@ export default function SettingsPage() {
     setTestingLlm(true)
     setLlmTestMsg(null)
     try {
-      const res = await api.testLlmEndpoint({
+      const payload = {
         llm_base_url: llmBaseUrl,
-        llm_api_key: llmApiKey,
-      })
+      }
+      if (llmApiKey.trim()) payload.llm_api_key = llmApiKey.trim()
+
+      const res = await api.testLlmEndpoint(payload)
       if (res.ok) {
         const count = typeof res.model_count === 'number' ? ` (${res.model_count} models)` : ''
         setLlmTestMsg(`Connected to ${res.base_url}${count}`)
@@ -420,7 +424,7 @@ export default function SettingsPage() {
             value={llmApiKey}
             onChange={e => setLlmApiKey(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && saveLlmSettings()}
-            placeholder={settings?.llm_api_key_set ? 'Leave blank to clear or replace' : 'API key for the selected LLM endpoint'}
+            placeholder={settings?.llm_api_key_set ? 'Leave blank to keep current key, or type a replacement' : 'API key for the selected LLM endpoint'}
             style={inputStyle}
           />
         </div>
@@ -449,7 +453,7 @@ export default function SettingsPage() {
             value={workerSecret}
             onChange={e => setWorkerSecret(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && saveLlmSettings()}
-            placeholder={settings?.llm_worker_secret_set ? 'Leave blank to clear or replace' : 'Shared secret for /worker/llm/*'}
+            placeholder={settings?.llm_worker_secret_set ? 'Leave blank to keep current secret, or type a replacement' : 'Shared secret for /worker/llm/*'}
             style={inputStyle}
           />
           <div style={{ color: 'var(--text-3)', fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>

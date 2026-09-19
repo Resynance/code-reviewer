@@ -96,6 +96,18 @@ def test_settings_put_partial_keeps_other_fields(client):
     assert body["openrouter_model"] == "m/x"
 
 
+def test_settings_put_partial_keeps_llm_secrets(client):
+    tc, _ = client
+    tc.put("/api/settings", json={
+        "llm_api_key": "local-llm",
+        "llm_worker_secret": "worker-secret",
+    })
+    tc.put("/api/settings", json={"llm_base_url": "http://192.168.0.197:8080/v1"})
+    body = tc.get("/api/settings").json()
+    assert body["llm_api_key_set"] is True
+    assert body["llm_worker_secret_set"] is True
+
+
 def test_settings_put_rejects_bad_llm_mode(client):
     tc, _ = client
     assert tc.put("/api/settings", json={"llm_execution_mode": "sidecar"}).status_code == 400
@@ -293,6 +305,39 @@ def test_llm_test_endpoint_does_not_send_stored_key_to_custom_url(client, monkey
     resp = tc.post("/api/llm/test", json={"llm_base_url": "https://attacker.example/v1"})
     assert resp.status_code == 200
     assert "Authorization" not in captured["headers"]
+
+
+def test_llm_test_endpoint_uses_stored_key_for_configured_url(client, monkeypatch):
+    tc, main = client
+    base_url = "http://192.168.0.197:8080/v1"
+    tc.put("/api/settings", json={"llm_base_url": base_url, "llm_api_key": "stored-secret"})
+    captured = {}
+
+    class FakeResp:
+        status_code = 200
+        text = '{"data":[]}'
+
+        def json(self):
+            return {"data": []}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            captured["headers"] = kwargs.get("headers") or {}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url):
+            return FakeResp()
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", FakeClient)
+
+    resp = tc.post("/api/llm/test", json={"llm_base_url": base_url})
+    assert resp.status_code == 200
+    assert captured["headers"]["Authorization"] == "Bearer stored-secret"
 
 
 def test_llm_test_endpoint_suggests_v1_when_missing(client, monkeypatch):
