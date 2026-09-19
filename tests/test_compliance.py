@@ -20,6 +20,50 @@ def test_review_findings_detect_phi_logging_and_vendor_policy():
     assert result["requires_manual_compliance_review"] is True
 
 
+def test_review_findings_extract_paths_from_unified_diff():
+    result = compliance.review_findings(
+        'diff --git a/api/patient.py b/api/patient.py\n'
+        '--- a/api/patient.py\n'
+        '+++ b/api/patient.py\n'
+        '+ logger.info("patient_ssn=%s", patient_ssn)',
+        [],
+        compliance._normalize_policy({}),
+    )
+    finding = next(f for f in result["hipaa_findings"] if f["category"] == "phi_logging")
+    assert finding["file"] == "api/patient.py"
+
+
+def test_review_findings_keep_fileless_manual_review_fallback():
+    result = compliance.review_findings(
+        '+ patient_profile = request.json["patient"]',
+        [],
+        compliance._normalize_policy({}),
+    )
+    assert result["hipaa_relevant"] is True
+    assert result["requires_manual_compliance_review"] is True
+    assert any(f["category"] == "manual_review" and f["file"] == "" for f in result["hipaa_findings"])
+
+
+def test_review_findings_do_not_fallback_on_path_only_phi_terms():
+    result = compliance.review_findings(
+        '+x',
+        ["api/patient.py"],
+        compliance._normalize_policy({}),
+    )
+    assert not result["hipaa_findings"]
+
+
+def test_assessment_findings_keep_fileless_manual_review_fallback():
+    result = compliance.assessment_findings(
+        ["api/patient.py"],
+        {"api/patient.py": "patient_profile = load_patient_profile()"},
+        compliance._normalize_policy({}),
+    )
+    assert result["hipaa_relevant"] is True
+    assert result["requires_manual_compliance_review"] is True
+    assert any(f["category"] == "manual_review" and f["file"] == "api/patient.py" for f in result["hipaa_findings"])
+
+
 def test_review_findings_detect_hl7_logging_transport_and_validation_gaps():
     policy = compliance._normalize_policy({
         "approved_hl7_versions": ["2.5.1"],

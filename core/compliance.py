@@ -112,10 +112,31 @@ def policy_for_repo(policies: dict, repo: str) -> dict:
     return _normalize_policy(merged)
 
 
+def _review_paths(diff: str, files_changed: Iterable[str]) -> list:
+    paths = []
+    seen = set()
+
+    def add(path):
+        path = (path or "").strip()
+        if not path or path == "/dev/null" or path in seen:
+            return
+        seen.add(path)
+        paths.append(path)
+
+    for path in files_changed or []:
+        add(path)
+
+    for line in (diff or "").splitlines():
+        if line.startswith("+++ b/"):
+            add(line[len("+++ b/"):].split("\t", 1)[0])
+    return paths
+
+
 def review_findings(diff: str, files_changed: Iterable[str], policy: dict) -> dict:
-    path_lines = [f"+++ b/{p}" for p in (files_changed or [])]
+    paths = _review_paths(diff, files_changed)
+    path_lines = [f"+++ b/{p}" for p in paths]
     text = "\n".join(path_lines + [diff or ""])
-    return _scan_text(text, files_changed or [], policy, mode="review")
+    return _scan_text(text, paths, policy, mode="review")
 
 
 def assessment_findings(tree_lines: list, files: dict, policy: dict) -> dict:
@@ -382,6 +403,10 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
     }
     paths = list(file_paths or [])
     lower_text = text.lower()
+    content_lower_text = "\n".join(
+        line for line in text.splitlines()
+        if not line.startswith(("+++ ", "--- ", "diff --git ", "index "))
+    ).lower()
     all_phi_terms = list(dict.fromkeys([*_PHI_TERMS, *(t.lower() for t in policy.get("phi_field_patterns") or [])]))
     all_hl7_terms = list(dict.fromkeys([*_HL7_TERMS, *(t.lower() for t in policy.get("approved_hl7_versions") or [])]))
 
@@ -411,6 +436,15 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
             if any(p in path.lower() for p in patterns):
                 return path
         return ""
+
+    def fallback_file():
+        for path in paths:
+            if not _should_skip_for_review(path, paths, mode, policy):
+                return path
+        return ""
+
+    def allow_fileless_fallback():
+        return mode != "review" or not paths
 
     for line in text.splitlines():
         ll = line.lower()
@@ -495,25 +529,29 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
                 bucket="hl7_message_integrity_gaps",
             )
 
-    if any(term in lower_text for term in all_phi_terms) and not findings:
+    if any(term in content_lower_text for term in all_phi_terms) and not findings:
         add(
             "manual_review",
             "medium",
             "HIPAA-relevant data appears in scope",
             "The code references healthcare or patient-data concepts, but deterministic checks did not prove a direct violation.",
             "Run a manual compliance review for data classification, retention, and operational controls.",
+            file=fallback_file(),
             manual_review=True,
             bucket="minimum_necessary_gaps",
+            allow_empty_file=allow_fileless_fallback(),
         )
-    elif any(term in lower_text for term in all_hl7_terms) and not findings:
+    elif any(term in content_lower_text for term in all_hl7_terms) and not findings:
         add(
             "hl7_manual_review",
             "medium",
             "HL7-relevant integration appears in scope",
             "The code references HL7/FHIR integration concepts, but deterministic checks did not prove a direct interface-control violation.",
             "Run a manual interface review for message mapping, partner contracts, ACK behavior, retry/idempotency, and operational monitoring.",
+            file=fallback_file(),
             manual_review=True,
             bucket="hl7_interface_gaps",
+            allow_empty_file=allow_fileless_fallback(),
         )
 
     for match in _EXTERNAL_VENDOR_RE.finditer(text):
