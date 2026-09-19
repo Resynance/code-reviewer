@@ -158,6 +158,7 @@ def _add_decision(tc, ref, summary, repo):
 
 def test_decisions_add_list_delete(client):
     tc, _ = client
+    tc.put("/api/settings", json={"github_token": "t", "repos": ["org/a"]})
     r = _add_decision(tc, "PR #1", "auth", "org/a").json()
     doc_id = r["doc_id"]
     assert tc.get("/api/decisions").json()["count"] == 1
@@ -167,21 +168,39 @@ def test_decisions_add_list_delete(client):
 
 def test_decisions_repo_and_global_filter(client):
     tc, _ = client
+    tc.put("/api/settings", json={"github_token": "t", "repos": ["org/a"]})
     _add_decision(tc, "PR #1", "auth a", "org/a")
     _add_decision(tc, "PR #2", "web b", "org/b")
     _add_decision(tc, "ADR-1", "policy", "*")
-    assert tc.get("/api/decisions").json()["count"] == 3
+    unscoped = tc.get("/api/decisions").json()
+    assert unscoped["count"] == 2
+    assert {d["ref"] for d in unscoped["decisions"]} == {"PR #1", "ADR-1"}
     only_a = tc.get("/api/decisions", params={"repo": "org/a"}).json()
     assert [d["ref"] for d in only_a["decisions"]] == ["PR #1"]
+    assert tc.get("/api/decisions", params={"repo": "org/b"}).status_code == 403
     only_global = tc.get("/api/decisions", params={"repo": "*"}).json()
     assert [d["ref"] for d in only_global["decisions"]] == ["ADR-1"]
 
 
 def test_decisions_search(client):
     tc, _ = client
+    tc.put("/api/settings", json={"github_token": "t", "repos": ["org/a"]})
     _add_decision(tc, "PR #1", "authentication middleware", "org/a")
     res = tc.post("/api/decisions/search", json={"query": "auth", "k": 5}).json()
     assert res["count"] == 1
+
+
+def test_decisions_search_filters_unconfigured_repos(client):
+    tc, _ = client
+    tc.put("/api/settings", json={"github_token": "t", "repos": ["org/a"]})
+    _add_decision(tc, "PR #1", "auth configured", "org/a")
+    _add_decision(tc, "PR #2", "auth private", "org/private")
+    _add_decision(tc, "ADR-1", "auth global", "*")
+
+    res = tc.post("/api/decisions/search", json={"query": "auth", "k": 5}).json()
+    assert res["count"] == 2
+    assert {d["ref"] for d in res["results"]} == {"PR #1", "ADR-1"}
+    assert tc.post("/api/decisions/search", json={"query": "auth", "repo": "org/private"}).status_code == 403
 
 
 def test_decisions_list_k_cap(client):
@@ -526,7 +545,12 @@ def test_worker_endpoints_require_secret(client):
 
 def test_queue_lists_local_jobs_with_compact_summary(client):
     tc, _ = client
-    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+    tc.put("/api/settings", json={
+        "github_token": "t",
+        "repos": ["org/a"],
+        "llm_execution_mode": "local_queue",
+        "llm_worker_secret": "secret",
+    })
     tc.post("/api/review", json={
         "pr_number": 9,
         "repo": "org/a",
@@ -545,6 +569,23 @@ def test_queue_lists_local_jobs_with_compact_summary(client):
     assert job["request"]["files_changed_count"] == 2
     assert job["request"]["diff_lines"] == 2
     assert "diff" not in job["request"]
+
+
+def test_queue_filters_unconfigured_repos(client):
+    tc, _ = client
+    tc.put("/api/settings", json={
+        "github_token": "t",
+        "repos": ["org/a"],
+        "llm_execution_mode": "local_queue",
+        "llm_worker_secret": "secret",
+    })
+    visible = tc.post("/api/review", json={"pr_number": 9, "repo": "org/a", "title": "visible", "diff": "+x"}).json()
+    tc.post("/api/review", json={"pr_number": 10, "repo": "org/private", "title": "hidden", "diff": "+x"})
+
+    body = tc.get("/api/queue").json()
+    assert body["count"] == 1
+    assert body["jobs"][0]["id"] == visible["id"]
+    assert body["jobs"][0]["request"]["repo"] == "org/a"
 
 
 def test_queue_filters_by_status_and_job_type(client):
