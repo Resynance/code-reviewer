@@ -292,6 +292,7 @@ class AssessmentEngine:
         total = 0
 
         with httpx.Client(timeout=30.0, headers=headers) as client:
+            failed_paths = []
             for item in selected:
                 if total >= _MAX_TOTAL_BYTES:
                     break
@@ -306,8 +307,13 @@ class AssessmentEngine:
                     content = content[:_MAX_FILE_BYTES]
                     file_contents[path] = content
                     total += len(content)
-                except Exception:
-                    continue
+                except Exception as exc:
+                    failed_paths.append(f"{path}: {exc}")
+
+            if failed_paths:
+                preview = "; ".join(failed_paths[:5])
+                more = f" (+{len(failed_paths) - 5} more)" if len(failed_paths) > 5 else ""
+                raise RuntimeError(f"Failed to fetch selected repository files: {preview}{more}")
 
         return tree_lines, file_contents
 
