@@ -42,6 +42,15 @@ def test_update_job_marks_completed(jobs):
     assert updated["completed_at"]
 
 
+def test_corrupt_file_is_not_overwritten(jobs):
+    jobs._FILE_PATH.write_text("{not valid json")
+
+    with pytest.raises(RuntimeError):
+        jobs.create_job({"repo": "org/a"}, job_type="review", executor="local_queue")
+
+    assert jobs._FILE_PATH.read_text() == "{not valid json"
+
+
 def test_pg_create_auto_ensures_queue_schema(monkeypatch):
     monkeypatch.setenv("REVIEW_STORE_BACKEND", "postgres")
     monkeypatch.setattr(review_jobs, "_PG_SCHEMA_READY", False)

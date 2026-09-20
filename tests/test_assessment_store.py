@@ -23,6 +23,15 @@ def test_save_and_list_newest_first(store):
     assert [item["summary"] for item in out] == ["second", "first"]
 
 
+def test_corrupt_file_is_not_overwritten(store):
+    store._FILE_PATH.write_text("{not valid json")
+
+    with pytest.raises(RuntimeError):
+        store.save_assessment({"repo": "org/a", "summary": "new"})
+
+    assert store._FILE_PATH.read_text() == "{not valid json"
+
+
 def test_postgres_backend_auto_ensures_schema(store, monkeypatch):
     monkeypatch.setenv("REVIEW_STORE_BACKEND", "postgres")
 

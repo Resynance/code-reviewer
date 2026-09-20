@@ -61,6 +61,15 @@ def test_history_is_append_only(rs):
     assert len(out) == 2  # both runs kept, not overwritten
 
 
+def test_corrupt_file_is_not_overwritten(rs):
+    rs._FILE_PATH.write_text("{not valid json")
+
+    with pytest.raises(RuntimeError):
+        rs.save_review(_rec())
+
+    assert rs._FILE_PATH.read_text() == "{not valid json"
+
+
 def test_postgres_backend_dispatch(rs, monkeypatch):
     monkeypatch.setenv("REVIEW_STORE_BACKEND", "postgres")
     monkeypatch.setattr(review_store, "_pg_save", lambda rec: {**rec, "id": 1})

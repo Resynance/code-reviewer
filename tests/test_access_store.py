@@ -27,6 +27,15 @@ def test_blank_email_ignored(acc):
     assert acc.add_email("  ") == []
 
 
+def test_corrupt_file_is_not_overwritten(acc):
+    acc._FILE_PATH.write_text("{not valid json")
+
+    with pytest.raises(RuntimeError):
+        acc.add_email("admin@example.com")
+
+    assert acc._FILE_PATH.read_text() == "{not valid json"
+
+
 def test_cache_and_invalidation(acc):
     acc.add_email("x@b.com")
     assert acc.allowed_emails_cached() == {"x@b.com"}

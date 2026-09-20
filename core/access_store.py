@@ -13,6 +13,8 @@ import time
 import threading
 from pathlib import Path
 
+from json_store import read_json_file
+
 _FILE_PATH = Path(__file__).parent.parent / "access.json"
 _LOCK = threading.Lock()
 _CACHE = {"emails": None, "ts": 0.0}
@@ -58,13 +60,7 @@ def allowed_emails_cached() -> set:
 # ----- file backend ----- #
 
 def _file_read():
-    if not _FILE_PATH.exists():
-        return []
-    try:
-        with open(_FILE_PATH) as f:
-            return json.load(f)
-    except (ValueError, OSError):
-        return []
+    return read_json_file(_FILE_PATH, [], expected_type=list)
 
 
 def _file_write(emails):
