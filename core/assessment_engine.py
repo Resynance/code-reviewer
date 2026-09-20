@@ -25,7 +25,7 @@ _PRIORITY_NAMES = frozenset({
     "readme.md", "readme.rst", "readme.txt", "readme",
     "package.json", "requirements.txt", "pyproject.toml",
     "cargo.toml", "go.mod", "composer.json", "gemfile",
-    "dockerfile", "docker-compose.yml", ".env.example",
+    "dockerfile",
     "vercel.json", "vercel.ts",
 })
 
@@ -45,6 +45,9 @@ _SENSITIVE_NAMES = frozenset({
 _SENSITIVE_EXTENSIONS = frozenset({
     ".pem", ".key", ".p12", ".pfx", ".cer", ".crt", ".der",
 })
+_SENSITIVE_PATH_PREFIXES = (
+    ".github/workflows/",
+)
 
 
 @dataclass
@@ -312,9 +315,19 @@ class AssessmentEngine:
         return tree_lines, file_contents
 
     def _is_sensitive(self, path: str) -> bool:
+        normalized = path.lower()
         basename = path.rsplit("/", 1)[-1].lower()
         _, ext = os.path.splitext(basename)
-        return basename in _SENSITIVE_NAMES or ext in _SENSITIVE_EXTENSIONS
+        return (
+            basename in _SENSITIVE_NAMES
+            or basename.startswith(".env.")
+            or basename.endswith(".env")
+            or basename.startswith("docker-compose.")
+            or basename.startswith("docker-compose-")
+            or basename in {"compose.yml", "compose.yaml"}
+            or ext in _SENSITIVE_EXTENSIONS
+            or any(normalized.startswith(prefix) for prefix in _SENSITIVE_PATH_PREFIXES)
+        )
 
     def _select_files(self, all_blobs: list) -> list:
         selected = []
