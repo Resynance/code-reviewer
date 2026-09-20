@@ -450,6 +450,48 @@ def test_review_local_queue_skips_inline_run_and_can_complete_via_worker(client,
     assert hist["reviews"][0]["source"] == "local_worker"
 
 
+def test_worker_complete_rejects_unclaimed_local_queue_job(client):
+    tc, _ = client
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+
+    job = tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+x"}).json()
+    resp = tc.post(
+        f"/worker/llm/{job['id']}/complete",
+        headers={"X-Worker-Secret": "secret"},
+        json={"result": {
+            "pr_number": 7,
+            "summary": "forged",
+            "approved": True,
+            "confidence": 1.0,
+            "issues": [],
+            "suggestions": [],
+            "past_decisions_applied": [],
+            "compliance_review": {"enabled": False},
+        }},
+    )
+
+    assert resp.status_code == 409
+    assert tc.get(f"/api/review/{job['id']}").json()["status"] == "queued"
+    assert tc.get("/api/reviews", params={"repo": "org/a"}).json()["count"] == 0
+
+
+def test_worker_error_rejects_unclaimed_local_queue_job(client):
+    tc, _ = client
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+
+    job = tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+x"}).json()
+    resp = tc.post(
+        f"/worker/llm/{job['id']}/error",
+        headers={"X-Worker-Secret": "secret"},
+        json={"error": "worker failed before claim"},
+    )
+
+    assert resp.status_code == 409
+    polled = tc.get(f"/api/review/{job['id']}").json()
+    assert polled["status"] == "queued"
+    assert polled["error"] is None
+
+
 def test_review_rejects_agentic_mode_when_not_local_queue(client, monkeypatch):
     tc, _ = client
     monkeypatch.setenv("OPENROUTER_API_KEY", "key")
