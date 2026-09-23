@@ -803,7 +803,7 @@ def analyze_compliance(body: ComplianceAnalyzeBody):
 
 
 @app.post("/api/compliance/analyses/{analysis_id}/issue")
-def create_compliance_issue(analysis_id: int, body: ComplianceIssueBody):
+async def create_compliance_issue(analysis_id: int, body: ComplianceIssueBody, request: Request):
     """Create a GitHub issue from a saved compliance analysis, optionally enqueueing local agentic follow-up."""
     analysis = compliance_analysis_store.get_analysis(analysis_id)
     if not analysis:
@@ -814,6 +814,7 @@ def create_compliance_issue(analysis_id: int, body: ComplianceIssueBody):
     token = _token_for(repo)
     target_id = (body.agentic_target or "").strip().lower()
     if target_id:
+        await require_admin(request)
         if _llm_execution_mode() != "local_queue":
             raise HTTPException(status_code=400, detail="Agentic follow-up is available only in local_queue mode")
         _require_local_queue_configured()

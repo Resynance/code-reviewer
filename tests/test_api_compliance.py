@@ -1,6 +1,21 @@
 """API tests for the new /api/compliance/* endpoints."""
 
+import time
+
+import jwt
 import pytest
+
+
+AUTH_SECRET = "test-secret"
+
+
+def _auth_headers(email: str) -> dict:
+    token = jwt.encode(
+        {"aud": "authenticated", "exp": int(time.time()) + 3600, "email": email},
+        AUTH_SECRET,
+        algorithm="HS256",
+    )
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture
@@ -307,6 +322,50 @@ def test_create_compliance_issue_enqueues_local_followup(configured_repo):
     body = resp.json()
     assert body["job_id"] == "job-1"
     assert body["job_status"] == "queued"
+
+
+def test_create_compliance_issue_agentic_followup_requires_admin_when_auth_enabled(configured_repo):
+    test_client, main, monkeypatch = configured_repo
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", AUTH_SECRET)
+    monkeypatch.setenv("ALLOWED_EMAILS", "admin@co.com,user@co.com")
+    test_client.put(
+        "/api/settings",
+        headers=_auth_headers("admin@co.com"),
+        json={
+            "llm_execution_mode": "local_queue",
+            "llm_worker_secret": "worker-secret",
+            "local_agentic_targets": [{"id": "codex", "label": "Codex", "enabled": True, "command": ["codex", "exec", "-"]}],
+        },
+    )
+    monkeypatch.setattr(
+        main.compliance_analysis_store, "get_analysis",
+        lambda analysis_id: {
+            "id": analysis_id,
+            "repo": "acme/app",
+            "health": {"score": 85},
+            "coverage": {"coverage_score": 70},
+            "suggestions": [],
+            "created_at": "2024-01-01T00:00:00Z",
+        },
+    )
+    monkeypatch.setattr(
+        main,
+        "create_issue",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("issue should not be created")),
+    )
+    monkeypatch.setattr(
+        main.review_jobs,
+        "create_job",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("follow-up job should not be queued")),
+    )
+
+    resp = test_client.post(
+        "/api/compliance/analyses/12/issue",
+        headers=_auth_headers("user@co.com"),
+        json={"agentic_target": "codex", "body": "please run the local agent"},
+    )
+    assert resp.status_code == 403
+    assert "Admin access required" in resp.json()["detail"]
 
 
 def test_create_compliance_issue_missing_analysis_returns_404(configured_repo):
