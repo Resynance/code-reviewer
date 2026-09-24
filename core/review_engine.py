@@ -580,6 +580,23 @@ class CodeReviewEngine:
         """Some policy findings are real review items even without a precise file anchor."""
         return category in {"third_party_baa"}
 
+    @staticmethod
+    def _normalize_issue_severity(value) -> str:
+        severity = str(value or "").strip().lower()
+        if severity in {"critical", "high", "medium", "low"}:
+            return severity
+        return "high"
+
+    def _normalize_issues(self, issues: list) -> list:
+        normalized = []
+        for issue in issues or []:
+            if not isinstance(issue, dict):
+                continue
+            item = dict(issue)
+            item["severity"] = self._normalize_issue_severity(item.get("severity"))
+            normalized.append(item)
+        return normalized
+
     def _clean_compliance_overlays(self, overlays: list, files_changed: list) -> list:
         """Keep only valid, non-duplicate compliance overlays."""
         cleaned = []
@@ -635,9 +652,9 @@ class CodeReviewEngine:
             deterministic_compliance,
             enabled=request.compliance,
         )
-        issues = payload.get("issues", []) or []
+        issues = self._normalize_issues(payload.get("issues", []) or [])
         overlays = compliance.review_issue_overlays(compliance_review, enabled=request.compliance)
-        issues.extend(self._clean_compliance_overlays(overlays, request.files_changed))
+        issues.extend(self._normalize_issues(self._clean_compliance_overlays(overlays, request.files_changed)))
         deduped_issues = []
         seen_issues = set()
         for issue in issues:
