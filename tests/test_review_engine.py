@@ -178,6 +178,19 @@ def test_review_maps_structured_result(store, cfg, monkeypatch):
     assert result.suggestions[0]["type"] == "security"
 
 
+def test_raw_json_blocking_severity_is_normalized_before_approval(store, cfg, monkeypatch):
+    payload = review_payload(
+        approved=True,
+        issues=[{"severity": "HIGH", "file": "a.py", "description": "auth bypass", "suggestion": "require auth"}],
+    )
+    eng = make_engine(store, payload, monkeypatch, no_tool=True, content=json.dumps(payload))
+
+    result = eng.review(make_req(model="local/no-tools"))
+
+    assert result.issues[0]["severity"] == "high"
+    assert result.approved is False
+
+
 @pytest.mark.parametrize("raw,expected", [(1.5, 1.0), (-0.2, 0.0), (0.42, 0.42)])
 def test_confidence_clamped(store, cfg, monkeypatch, raw, expected):
     eng = make_engine(store, review_payload(confidence=raw), monkeypatch)
