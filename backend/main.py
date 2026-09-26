@@ -613,9 +613,11 @@ def run_review_job(job_id: str):
         return job
     if job["status"] != "queued":
         return job
-    review_jobs.update_job(job_id, status="running")
+    claimed = review_jobs.claim_job(job_id, job_type="review", executor="inline")
+    if not claimed:
+        return review_jobs.get_job(job_id) or job
     try:
-        result = _execute_review(ReviewRequestBody(**job["request"]), source="api")
+        result = _execute_review(ReviewRequestBody(**claimed["request"]), source="api")
         return review_jobs.update_job(job_id, status="done", result=result)
     except Exception as e:
         return review_jobs.update_job(job_id, status="error", error=str(e))
@@ -692,7 +694,10 @@ def run_assessment_job(job_id: str):
         return job
     req = job["request"]
     _token_for(req["repo"])
-    review_jobs.update_job(job_id, status="running")
+    claimed = review_jobs.claim_job(job_id, job_type="assessment", executor="inline")
+    if not claimed:
+        return review_jobs.get_job(job_id) or job
+    req = claimed["request"]
     try:
         result = _execute_assessment(AssessmentRequestBody(
             repo=req["repo"],
