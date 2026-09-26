@@ -606,6 +606,27 @@ def test_review_job_not_found(client):
     assert tc.post("/api/review/nope/run").status_code == 404
 
 
+def test_review_run_does_not_execute_when_atomic_claim_loses(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    job = tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+x"}).json()
+
+    class FailingEngine:
+        def review(self, req):
+            raise AssertionError("duplicate runner should not execute the review")
+
+    def lose_claim(job_id, job_type="", executor="", worker_id=""):
+        main.review_jobs.update_job(job_id, status="running")
+        return None
+
+    monkeypatch.setattr(main, "get_engine", lambda: FailingEngine())
+    monkeypatch.setattr(main.review_jobs, "claim_job", lose_claim)
+
+    resp = tc.post(f"/api/review/{job['id']}/run")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "running"
+
+
 def test_github_token_add_remove(client, monkeypatch):
     tc, main = client
     monkeypatch.setattr(main, "list_owners", lambda token: [
@@ -894,6 +915,28 @@ def test_assessment_enqueues_and_runs(client, monkeypatch):
 
     polled = tc.get(f"/api/assessments/{job['id']}").json()
     assert polled["status"] == "done" and polled["result"]["repo"] == "org/a"
+
+
+def test_assessment_run_does_not_execute_when_atomic_claim_loses(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    config_store.save_config({"github_token": "t", "repos": ["org/a"]})
+    job = tc.post("/api/assessments", json={"repo": "org/a"}).json()
+
+    class FailingAssessmentEngine:
+        def assess(self, req):
+            raise AssertionError("duplicate runner should not execute the assessment")
+
+    def lose_claim(job_id, job_type="", executor="", worker_id=""):
+        main.review_jobs.update_job(job_id, status="running")
+        return None
+
+    monkeypatch.setattr(main, "AssessmentEngine", FailingAssessmentEngine)
+    monkeypatch.setattr(main.review_jobs, "claim_job", lose_claim)
+
+    resp = tc.post(f"/api/assessments/{job['id']}/run")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "running"
 
 
 def test_assessment_rejects_unconfigured_repo(client, monkeypatch):

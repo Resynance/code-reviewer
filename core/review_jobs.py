@@ -69,6 +69,13 @@ def claim_next_job(job_types=None, executor: str = "local_queue", worker_id: str
     return _file_claim_next(job_types, executor, worker_id)
 
 
+def claim_job(job_id: str, job_type: str = "", executor: str = "", worker_id: str = ""):
+    """Atomically mark one queued job running, or return None if already claimed."""
+    if _backend() == "postgres":
+        return _pg_claim_job(job_id, job_type, executor, worker_id)
+    return _file_claim_job(job_id, job_type, executor, worker_id)
+
+
 def claim_next_agentic_review_job(executor: str = "local_queue", worker_id: str = ""):
     """Claim the next queued agentic local job, or None if none exist."""
     if _backend() == "postgres":
@@ -155,6 +162,27 @@ def _file_claim_next(job_types, executor, worker_id):
                 continue
             if job_types and job.get("job_type") not in job_types:
                 continue
+            job["status"] = "running"
+            job["claimed_by"] = worker_id or None
+            job["started_at"] = _now()
+            job["updated_at"] = _now()
+            _file_write(jobs)
+            return job
+    return None
+
+
+def _file_claim_job(job_id, job_type, executor, worker_id):
+    with _LOCK:
+        jobs = _file_read()
+        for job in jobs:
+            if job.get("id") != job_id:
+                continue
+            if job.get("status") != "queued":
+                return None
+            if job_type and job.get("job_type") != job_type:
+                return None
+            if executor and job.get("executor") != executor:
+                return None
             job["status"] = "running"
             job["claimed_by"] = worker_id or None
             job["started_at"] = _now()
@@ -329,6 +357,32 @@ def _pg_claim_next(job_types, executor, worker_id):
             "UPDATE review_jobs j SET status = 'running', claimed_by = %s, "
             "started_at = COALESCE(j.started_at, now()), updated_at = now() "
             "FROM next_job WHERE j.id = next_job.id "
+            "RETURNING id, job_type, executor, status, request, result, error, "
+            "claimed_by, started_at, completed_at, created_at, updated_at",
+            params,
+        )
+        row = cur.fetchone()
+    return _row_to_job(row) if row else None
+
+
+def _pg_claim_job(job_id, job_type, executor, worker_id):
+    import db
+
+    _pg_ensure_schema()
+    where = ["id = %s", "status = 'queued'"]
+    where_params = [job_id]
+    if job_type:
+        where.append("job_type = %s")
+        where_params.append(job_type)
+    if executor:
+        where.append("executor = %s")
+        where_params.append(executor)
+    params = [worker_id or None, *where_params]
+    with db.connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE review_jobs SET status = 'running', claimed_by = %s, "
+            "started_at = COALESCE(started_at, now()), updated_at = now() "
+            "WHERE " + " AND ".join(where) + " "
             "RETURNING id, job_type, executor, status, request, result, error, "
             "claimed_by, started_at, completed_at, created_at, updated_at",
             params,

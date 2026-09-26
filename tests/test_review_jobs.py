@@ -33,6 +33,16 @@ def test_claim_next_job_marks_running(jobs):
     assert claimed["started_at"]
 
 
+def test_claim_job_only_claims_queued_matching_job(jobs):
+    job = jobs.create_job({"repo": "org/a"}, job_type="review", executor="inline")
+    claimed = jobs.claim_job(job["id"], job_type="review", executor="inline")
+
+    assert claimed["id"] == job["id"]
+    assert claimed["status"] == "running"
+    assert claimed["started_at"]
+    assert jobs.claim_job(job["id"], job_type="review", executor="inline") is None
+
+
 def test_update_job_marks_completed(jobs):
     job = jobs.create_job({"repo": "org/a"}, job_type="review", executor="local_queue")
     jobs.claim_next_job(executor="local_queue", worker_id="mac")
@@ -99,3 +109,63 @@ def test_pg_create_auto_ensures_queue_schema(monkeypatch):
     assert "alter table public.review_jobs" in calls[1][0].lower()
     assert "create index if not exists review_jobs_queue_idx" in calls[2][0].lower()
     assert "insert into review_jobs (job_type, executor, request)" in calls[3][0].lower()
+
+
+def test_pg_claim_job_updates_only_queued_matching_job(monkeypatch):
+    monkeypatch.setenv("REVIEW_STORE_BACKEND", "postgres")
+    monkeypatch.setattr(review_jobs, "_PG_SCHEMA_READY", True)
+
+    now = datetime.now(timezone.utc)
+    calls = []
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql, params=None):
+            calls.append((sql, params))
+
+        def fetchone(self):
+            return (
+                "123",
+                "review",
+                "inline",
+                "running",
+                {"repo": "org/a"},
+                None,
+                None,
+                None,
+                now,
+                None,
+                now,
+                now,
+            )
+
+    class FakeConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    class FakeDb:
+        @staticmethod
+        def connect():
+            return FakeConn()
+
+    monkeypatch.setitem(sys.modules, "db", FakeDb)
+
+    job = review_jobs.claim_job("123", job_type="review", executor="inline")
+
+    assert job["status"] == "running"
+    sql, params = calls[0]
+    assert "status = 'queued'" in sql
+    assert "job_type = %s" in sql
+    assert "executor = %s" in sql
+    assert params == [None, "123", "review", "inline"]
