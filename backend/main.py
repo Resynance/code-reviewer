@@ -98,6 +98,20 @@ async def require_assessment_quota(request: Request):
         )
 
 
+async def require_embedding_quota(request: Request):
+    key = _rate_limit_key(request)
+    try:
+        allowed, retry_after = _rate_limit.check(f"embed:{key}")
+    except Exception:
+        return  # fail open — a limiter bug must not take down the API
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Try again in {retry_after}s.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+
 # ------------------------------------------------------------------ #
 # App setup
 # ------------------------------------------------------------------ #
@@ -979,7 +993,7 @@ def open_issue(body: CreateIssueBody):
     return {"html_url": url}
 
 
-@app.post("/api/decisions/search")
+@app.post("/api/decisions/search", dependencies=[Depends(require_embedding_quota)])
 def search_decisions(body: SearchBody):
     """Search the decision store by semantic query, optionally scoped to a repo."""
     store = get_store()
@@ -987,7 +1001,7 @@ def search_decisions(body: SearchBody):
     return {"results": results, "count": len(results)}
 
 
-@app.get("/api/decisions")
+@app.get("/api/decisions", dependencies=[Depends(require_embedding_quota)])
 def list_decisions(k: int = Query(default=20, ge=1, le=200), repo: Optional[str] = None):
     """List recent decisions from the store, optionally scoped to a repo."""
     store = get_store()
@@ -1020,7 +1034,7 @@ def delete_decision(doc_id: str):
     return {"deleted": doc_id}
 
 
-@app.get("/api/stats")
+@app.get("/api/stats", dependencies=[Depends(require_embedding_quota)])
 def get_stats():
     """Return basic stats about the decision store."""
     store = get_store()

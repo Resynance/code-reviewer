@@ -194,6 +194,25 @@ def test_decisions_search_k_cap(client):
     assert tc.post("/api/decisions/search", json={"query": "x", "k": 101}).status_code == 422
 
 
+def test_decision_embedding_reads_are_rate_limited(client, monkeypatch):
+    tc, _ = client
+    monkeypatch.setenv("RATE_LIMIT_REQUESTS", "1")
+    monkeypatch.setenv("RATE_LIMIT_WINDOW", "60")
+
+    assert tc.get("/api/decisions").status_code == 200
+    blocked = tc.get("/api/decisions")
+    assert blocked.status_code == 429
+    assert "Retry-After" in blocked.headers
+
+    rate_limit._windows.clear()
+    assert tc.post("/api/decisions/search", json={"query": "auth"}).status_code == 200
+    assert tc.post("/api/decisions/search", json={"query": "auth"}).status_code == 429
+
+    rate_limit._windows.clear()
+    assert tc.get("/api/stats").status_code == 200
+    assert tc.get("/api/stats").status_code == 429
+
+
 def test_review_history_limit_cap(client):
     tc, _ = client
     assert tc.get("/api/reviews", params={"limit": 501}).status_code == 422
