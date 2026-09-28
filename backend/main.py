@@ -1282,7 +1282,7 @@ def github_owner_repos(owner: str, type: str = "org"):
         raise HTTPException(status_code=502, detail=str(e))
 
 
-@app.post("/api/backfill")
+@app.post("/api/backfill", dependencies=[Depends(require_admin)])
 def backfill_repo(body: BackfillBody):
     """Import a repo's closed PRs into the decision store, server-side."""
     token = _token_for(body.repo)
