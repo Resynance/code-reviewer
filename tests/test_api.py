@@ -703,6 +703,38 @@ def test_backfill_invokes_importer(client, monkeypatch):
     assert resp.json() == {"repo": "org/a", "imported": 5}
 
 
+def test_backfill_requires_admin_when_auth_enabled(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", AUTH_SECRET)
+    monkeypatch.setenv("ALLOWED_EMAILS", "admin@co.com,user@co.com")
+    config_store.save_config({"github_token": "t", "repos": ["org/a"]})
+
+    calls = []
+
+    def fake_backfill(repo, pages, token, store):
+        calls.append((repo, pages, token))
+        return 5
+
+    monkeypatch.setattr(main, "run_backfill", fake_backfill)
+
+    user = tc.post(
+        "/api/backfill",
+        headers=_auth_headers("user@co.com"),
+        json={"repo": "org/a", "pages": 2},
+    )
+    assert user.status_code == 403
+    assert calls == []
+
+    admin = tc.post(
+        "/api/backfill",
+        headers=_auth_headers("admin@co.com"),
+        json={"repo": "org/a", "pages": 2},
+    )
+    assert admin.status_code == 200
+    assert admin.json() == {"repo": "org/a", "imported": 5}
+    assert calls == [("org/a", 2, "t")]
+
+
 # ----- open PRs ----- #
 
 def test_github_owners_requires_token(client):
