@@ -312,28 +312,30 @@ class AgenticReviewRunner:
         exe = command[0]
         if shutil.which(exe) is None:
             raise RuntimeError(f"{agent['label']} command not found: {exe}")
-        use_stdin = not any("{prompt}" in str(part) for part in command)
 
         with tempfile.TemporaryDirectory(prefix=f"reviewbot-{agent['id']}-") as tmpdir:
+            prompt_path = Path(tmpdir) / "prompt.txt"
             schema_path = Path(tmpdir) / "schema.json"
             output_path = Path(tmpdir) / "output.json"
+            prompt_path.write_text(prompt, encoding="utf-8")
             schema_path.write_text(json.dumps(_REVIEW_SCHEMA), encoding="utf-8")
             rendered = [
                 part.format(
                     schema_path=str(schema_path),
                     output_path=str(output_path),
-                    prompt_path="",
+                    prompt_path=str(prompt_path),
                     prompt=prompt,
                 )
                 for part in command
             ]
+            use_stdin = not any("{prompt}" in str(part) or "{prompt_path}" in str(part) for part in command)
             try:
                 proc = subprocess.run(
                     rendered,
                     input=prompt if use_stdin else None,
                     text=True,
                     capture_output=True,
-                    cwd=str(ROOT),
+                    cwd=tmpdir,
                     timeout=AGENT_TIMEOUT_SECONDS,
                 )
             except subprocess.TimeoutExpired as e:
