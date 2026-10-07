@@ -1,6 +1,8 @@
 """Tests for local_worker.py agentic review orchestration."""
 
 import subprocess
+from pathlib import Path
+
 import pytest
 
 from review_engine import ReviewRequest, ReviewResult
@@ -179,6 +181,57 @@ def test_run_command_agent_reports_timeout_without_prompt_dump(monkeypatch):
             {"id": "kimi", "label": "Kimi", "enabled": True, "command": ["kimi", "-p", "{prompt}", "--output-format", "stream-json"]},
             "very long prompt",
         )
+
+
+def test_run_command_agent_uses_temp_workspace_for_prompt_file(monkeypatch):
+    runner = local_worker.AgenticReviewRunner(FakeEngine())
+    monkeypatch.setattr(local_worker.shutil, "which", lambda exe: f"/usr/bin/{exe}")
+    captured = {}
+
+    def fake_run(rendered, **kwargs):
+        cwd = Path(kwargs["cwd"])
+        captured["cwd"] = cwd
+        captured["input"] = kwargs["input"]
+        assert cwd != local_worker.ROOT
+        assert cwd.name.startswith("reviewbot-kimi-")
+
+        prompt_path = Path(rendered[rendered.index("--prompt-file") + 1])
+        schema_path = Path(rendered[rendered.index("--schema") + 1])
+        output_path = Path(rendered[rendered.index("--out") + 1])
+        assert prompt_path.parent == cwd
+        assert schema_path.parent == cwd
+        assert output_path.parent == cwd
+        assert prompt_path.read_text(encoding="utf-8") == "diff prompt"
+
+        output_path.write_text(
+            '{"summary":"Kimi review","approved":true,"confidence":0.8,'
+            '"issues":[],"suggestions":[],"past_decisions_applied":[],"compliance_review":{}}',
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(rendered, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(local_worker.subprocess, "run", fake_run)
+
+    payload = runner._run_command_agent(
+        {
+            "id": "kimi",
+            "label": "Kimi",
+            "enabled": True,
+            "command": [
+                "kimi",
+                "--prompt-file",
+                "{prompt_path}",
+                "--schema",
+                "{schema_path}",
+                "--out",
+                "{output_path}",
+            ],
+        },
+        "diff prompt",
+    )
+
+    assert captured["input"] is None
+    assert payload["summary"] == "Kimi review"
 
 
 def test_compliance_followup_runner_returns_structured_result(monkeypatch):
