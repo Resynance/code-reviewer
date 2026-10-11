@@ -606,6 +606,16 @@ class CodeReviewEngine:
             cleaned.append(normalized)
         return cleaned
 
+    @staticmethod
+    def _has_blocking_compliance_findings(compliance_review: dict) -> bool:
+        for item in [
+            *((compliance_review or {}).get("hipaa_findings") or []),
+            *((compliance_review or {}).get("hl7_findings") or []),
+        ]:
+            if isinstance(item, dict) and item.get("severity") in {"critical", "high"}:
+                return True
+        return False
+
     def _to_result(self, request: ReviewRequest, payload: dict, decisions) -> ReviewResult:
         # Enrich applied decisions with the stored summary when the model omitted it.
         by_ref = {d.get("ref"): d for d in decisions if d.get("ref")}
@@ -649,8 +659,10 @@ class CodeReviewEngine:
         return ReviewResult(
             pr_number=request.pr_number,
             summary=payload.get("summary", ""),
-            approved=bool(payload.get("approved", False)) and not any(
-                i.get("severity") in {"critical", "high"} for i in deduped_issues
+            approved=(
+                bool(payload.get("approved", False))
+                and not any(i.get("severity") in {"critical", "high"} for i in deduped_issues)
+                and not (request.compliance and self._has_blocking_compliance_findings(compliance_review))
             ),
             confidence=confidence,
             issues=deduped_issues,

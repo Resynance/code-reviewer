@@ -279,6 +279,32 @@ def test_compliance_overlays_filtered_to_touched_files(store, cfg, monkeypatch):
     assert "api/untouched.py" not in files
 
 
+def test_blocking_compliance_findings_veto_approval_even_when_overlay_filtered(store, cfg, monkeypatch):
+    payload = review_payload(
+        approved=True,
+        compliance_review={
+            "enabled": True,
+            "hipaa_relevant": True,
+            "hipaa_findings": [
+                {
+                    "category": "phi_logging",
+                    "severity": "critical",
+                    "title": "Potential PHI in logs",
+                    "evidence": "logger.info(patient_ssn)",
+                    "recommendation": "Remove PHI from logs.",
+                    "file": "api/untouched.py",
+                },
+            ],
+        },
+    )
+    eng = make_engine(store, payload, monkeypatch)
+    result = eng.review(make_req(compliance=True, files_changed=["api/patient.py"]))
+
+    assert result.approved is False
+    assert result.issues == []
+    assert result.compliance_review["hipaa_findings"][0]["title"] == "Potential PHI in logs"
+
+
 def test_compliance_overlays_skip_malformed_file_labels(store, cfg, monkeypatch):
     payload = review_payload(
         compliance_review={
