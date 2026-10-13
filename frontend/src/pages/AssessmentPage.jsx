@@ -17,6 +17,7 @@ export default function AssessmentPage() {
   const [history, setHistory] = useState([])
   const [compliancePolicies, setCompliancePolicies] = useState({ default: {}, repos: {} })
   const jobRef = useRef(null)
+  const inlineRunErrorRef = useRef(null)
   useEffect(() => () => { jobRef.current = null }, [])
 
   useEffect(() => {
@@ -48,6 +49,7 @@ export default function AssessmentPage() {
   async function submit() {
     if (!repo) return
     setLoading(true); setError(null); setResult(null)
+    inlineRunErrorRef.current = null
     try {
       const { id } = await api.createAssessment({
         repo,
@@ -55,7 +57,11 @@ export default function AssessmentPage() {
         provider: selectedModel?.provider || undefined,
       })
       jobRef.current = id
-      if (executionMode === 'inline') api.runAssessment(id).catch(() => {})
+      if (executionMode === 'inline') {
+        api.runAssessment(id).catch(e => {
+          if (jobRef.current === id) inlineRunErrorRef.current = e
+        })
+      }
       poll(id)
     } catch (e) {
       setError(e.message)
@@ -79,6 +85,9 @@ export default function AssessmentPage() {
       setLoading(false)
     } else if (job.status === 'error') {
       setError(job.error || 'Assessment failed')
+      setLoading(false)
+    } else if (job.status === 'queued' && inlineRunErrorRef.current) {
+      setError(`Could not start assessment: ${inlineRunErrorRef.current.message}`)
       setLoading(false)
     } else {
       setTimeout(() => poll(id), 1500)

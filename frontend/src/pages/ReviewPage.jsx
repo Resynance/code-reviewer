@@ -66,6 +66,7 @@ export default function ReviewPage() {
   const [selectedAgentSources, setSelectedAgentSources] = useState([])
   // Tracks the in-flight review job so a superseded/unmounted poll stops.
   const jobRef = useRef(null)
+  const inlineRunErrorRef = useRef(null)
   // Tracks PR loads so stale responses cannot repopulate a different repo/PR.
   const prLoadRef = useRef(0)
   const currentRepoRef = useRef('')
@@ -186,6 +187,7 @@ export default function ReviewPage() {
     setResult(null)
     setSavedAt(null)
     setError(null)
+    inlineRunErrorRef.current = null
     try {
       const { id } = await api.createReview({
         ...form,
@@ -198,7 +200,11 @@ export default function ReviewPage() {
       jobRef.current = id
       // Drive the work in the background; the result is read via polling, so a
       // dropped run connection still recovers once the job finishes.
-      if (executionMode === 'inline') api.runReview(id).catch(() => {})
+      if (executionMode === 'inline') {
+        api.runReview(id).catch(e => {
+          if (jobRef.current === id) inlineRunErrorRef.current = e
+        })
+      }
       poll(id)
     } catch (e) {
       setError(e.message)
@@ -222,6 +228,9 @@ export default function ReviewPage() {
       setLoading(false)
     } else if (job.status === 'error') {
       setError(job.error || 'Review failed')
+      setLoading(false)
+    } else if (job.status === 'queued' && inlineRunErrorRef.current) {
+      setError(`Could not start review: ${inlineRunErrorRef.current.message}`)
       setLoading(false)
     } else {
       setTimeout(() => poll(id), 1500)
