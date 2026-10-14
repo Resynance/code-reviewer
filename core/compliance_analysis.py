@@ -80,7 +80,7 @@ class ComplianceAnalysis:
         policy = config_store.get_compliance_policy(self.repo)
         assessments = assessment_store.list_assessments(repo=self.repo, limit=1)
         latest_assessment_at = assessments[0].get("created_at", "") if assessments else ""
-        assessment_count = len(assessment_store.list_assessments(repo=self.repo, limit=10000))
+        assessment_count = assessment_store.count_assessments(repo=self.repo)
         return compliance_policy_health.analyze_policy_health(
             repo=self.repo,
             tree_lines=tree_lines,

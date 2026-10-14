@@ -56,6 +56,12 @@ def list_assessments(repo: "str | None" = None, limit: int = 20) -> list:
     return _file_list(repo, limit)
 
 
+def count_assessments(repo: "str | None" = None) -> int:
+    if _backend() == "postgres":
+        return _pg_count(repo)
+    return _file_count(repo)
+
+
 # ----- file backend ----- #
 
 def _file_read():
@@ -93,6 +99,13 @@ def _file_list(repo, limit):
     if repo:
         data = [r for r in data if r.get("repo") == repo]
     return list(reversed(data))[:limit]
+
+
+def _file_count(repo):
+    data = _file_read()
+    if repo:
+        return sum(1 for r in data if r.get("repo") == repo)
+    return len(data)
 
 
 # ----- postgres backend ----- #
@@ -208,3 +221,19 @@ def _pg_list(repo, limit):
             d["created_at"] = d["created_at"].isoformat()
         out.append(d)
     return out
+
+
+def _pg_count(repo):
+    import db
+
+    _pg_ensure_schema()
+    where, params = [], []
+    if repo:
+        where.append("repo = %s")
+        params.append(repo)
+    clause = ("WHERE " + " AND ".join(where)) if where else ""
+
+    with db.connect() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT COUNT(*) FROM assessments {clause}", params)
+        row = cur.fetchone()
+    return int(row[0] if row else 0)
