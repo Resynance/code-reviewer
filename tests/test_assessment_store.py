@@ -23,6 +23,16 @@ def test_save_and_list_newest_first(store):
     assert [item["summary"] for item in out] == ["second", "first"]
 
 
+def test_count_assessments_file_backend(store):
+    store.save_assessment({"repo": "org/a", "summary": "first"})
+    store.save_assessment({"repo": "org/a", "summary": "second"})
+    store.save_assessment({"repo": "org/b", "summary": "third"})
+
+    assert store.count_assessments() == 3
+    assert store.count_assessments("org/a") == 2
+    assert store.count_assessments("org/missing") == 0
+
+
 def test_postgres_backend_auto_ensures_schema(store, monkeypatch):
     monkeypatch.setenv("REVIEW_STORE_BACKEND", "postgres")
 
@@ -75,3 +85,44 @@ def test_postgres_backend_auto_ensures_schema(store, monkeypatch):
     assert "alter table public.assessments" in calls[2][0].lower()
     assert "create index if not exists assessments_repo_idx" in calls[3][0].lower()
     assert "insert into assessments" in calls[5][0].lower()
+
+
+def test_postgres_count_uses_count_query(store, monkeypatch):
+    monkeypatch.setenv("REVIEW_STORE_BACKEND", "postgres")
+
+    calls = []
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql, params=None):
+            calls.append((sql, params))
+
+        def fetchone(self):
+            return (42,)
+
+    class FakeConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    class FakeDb:
+        @staticmethod
+        def connect():
+            return FakeConn()
+
+    monkeypatch.setitem(sys.modules, "db", FakeDb)
+
+    assert store.count_assessments("org/a") == 42
+    sql, params = calls[-1]
+    assert "select count(*) from assessments where repo = %s" in sql.lower()
+    assert params == ["org/a"]
