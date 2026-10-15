@@ -159,15 +159,15 @@ def apply_suggestion(repo: str, suggestion: dict) -> dict:
 
     Returns the updated compliance_policies object.
     """
-    policies = config_store.get_compliance_policies()
-    repo_policy = compliance.policy_for_repo(policies, repo)
-    updated_repo_policy = compliance_policy_suggestions.apply_suggestion(repo_policy, suggestion)
+    def update(policies: dict) -> dict:
+        repo_policy = compliance.policy_for_repo(policies, repo)
+        updated_repo_policy = compliance_policy_suggestions.apply_suggestion(repo_policy, suggestion)
 
-    # Merge the updated repo policy back into the full policies object.
-    next_policies = copy.deepcopy(policies)
-    if "repos" not in next_policies or not isinstance(next_policies["repos"], dict):
-        next_policies["repos"] = {}
-    next_policies["repos"][repo] = updated_repo_policy
+        # Merge the updated repo policy back into the full policies object.
+        next_policies = copy.deepcopy(policies)
+        if "repos" not in next_policies or not isinstance(next_policies["repos"], dict):
+            next_policies["repos"] = {}
+        next_policies["repos"][repo] = updated_repo_policy
+        return next_policies
 
-    config_store.save_config({"compliance_policies": next_policies})
-    return config_store.get_compliance_policies()
+    return config_store.update_compliance_policies(update)
