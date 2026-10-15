@@ -1242,7 +1242,7 @@ def remove_github_token(username: str):
     return {"github_tokens": [{"username": t["username"], "orgs": t.get("orgs", [])} for t in tokens]}
 
 
-@app.get("/api/github/owners")
+@app.get("/api/github/owners", dependencies=[Depends(require_admin)])
 def github_owners():
     """List owner accounts across all configured tokens for repo discovery."""
     tokens = config_store.get_github_tokens()
@@ -1268,7 +1268,7 @@ def github_owners():
     return {"owners": list(seen.values())}
 
 
-@app.get("/api/github/repos")
+@app.get("/api/github/repos", dependencies=[Depends(require_admin)])
 def github_owner_repos(owner: str, type: str = "org"):
     """List repos under an owner using the token that has access to that owner."""
     token = config_store.get_token_for(owner)
