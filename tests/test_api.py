@@ -24,6 +24,10 @@ def _auth_headers(email: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _configure_repo(tc, repo: str = "org/a"):
+    return tc.put("/api/settings", json={"github_token": "t", "repos": [repo]})
+
+
 def test_health(client):
     tc, _ = client
     assert tc.get("/api/health").json()["status"] == "ok"
@@ -216,7 +220,7 @@ def test_balance_unconfigured(client):
 
 def test_review_inline_accepts_saved_llm_api_key(client, monkeypatch):
     tc, main = client
-    tc.put("/api/settings", json={"llm_api_key": "local-llm"})
+    tc.put("/api/settings", json={"github_token": "t", "repos": ["org/a"], "llm_api_key": "local-llm"})
 
     class FakeEngine:
         def review(self, req):
@@ -373,6 +377,7 @@ def test_llm_test_endpoint_suggests_removing_v1_when_extra(client, monkeypatch):
 
 def test_review_requires_api_key(client):
     tc, _ = client
+    _configure_repo(tc)
     resp = tc.post("/api/review", json={"pr_number": 1, "repo": "org/a", "title": "t", "diff": "+x"})
     assert resp.status_code == 400
 
@@ -381,6 +386,7 @@ def test_review_enqueues_and_runs(client, monkeypatch):
     tc, main = client
     monkeypatch.setenv("OPENROUTER_API_KEY", "key")
     tc.put("/api/settings", json={"compliance_policies": {"default": {"enabled": False}, "repos": {"org/a": {"enabled": True}}}})
+    _configure_repo(tc)
 
     class FakeEngine:
         def review(self, req):
@@ -406,9 +412,82 @@ def test_review_enqueues_and_runs(client, monkeypatch):
     assert polled["status"] == "done" and polled["result"]["pr_number"] == 7
 
 
+def test_review_rejects_unconfigured_repo(client, monkeypatch):
+    tc, _ = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    _configure_repo(tc)
+
+    resp = tc.post("/api/review", json={"pr_number": 7, "repo": "org/private", "title": "t", "diff": "+secret"})
+    assert resp.status_code == 403
+    assert "not configured" in resp.json()["detail"]
+
+
+def test_review_run_and_poll_recheck_repo_configuration(client, monkeypatch):
+    tc, _ = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    _configure_repo(tc)
+    job = tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+secret"}).json()
+
+    tc.put("/api/settings", json={"repos": ["org/other"]})
+
+    run = tc.post(f"/api/review/{job['id']}/run")
+    poll = tc.get(f"/api/review/{job['id']}")
+    assert run.status_code == 403
+    assert poll.status_code == 403
+    assert "secret" not in poll.text
+
+
+def test_review_history_filters_to_configured_repos(client):
+    tc, main = client
+    _configure_repo(tc)
+    main.review_store.save_review({
+        "repo": "org/a",
+        "pr_number": 1,
+        "title": "allowed",
+        "author": "dev",
+        "approved": True,
+        "confidence": 0.8,
+        "summary": "ok",
+        "issues": [],
+        "suggestions": [],
+        "past_decisions": [],
+        "compliance_review": {},
+        "source": "api",
+        "model": "m",
+    })
+    main.review_store.save_review({
+        "repo": "org/private",
+        "pr_number": 2,
+        "title": "blocked",
+        "author": "dev",
+        "approved": False,
+        "confidence": 0.4,
+        "summary": "secret",
+        "issues": [],
+        "suggestions": [],
+        "past_decisions": [],
+        "compliance_review": {},
+        "source": "api",
+        "model": "m",
+    })
+
+    all_reviews = tc.get("/api/reviews").json()
+    assert all_reviews["count"] == 1
+    assert all_reviews["reviews"][0]["repo"] == "org/a"
+    assert "secret" not in json.dumps(all_reviews)
+
+    blocked = tc.get("/api/reviews", params={"repo": "org/private"})
+    assert blocked.status_code == 403
+
+
 def test_review_local_queue_skips_inline_run_and_can_complete_via_worker(client, monkeypatch):
     tc, main = client
-    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+    tc.put("/api/settings", json={
+        "github_token": "t",
+        "repos": ["org/a"],
+        "llm_execution_mode": "local_queue",
+        "llm_worker_secret": "secret",
+    })
 
     class ExplodingEngine:
         def review(self, req):
@@ -453,6 +532,7 @@ def test_review_local_queue_skips_inline_run_and_can_complete_via_worker(client,
 def test_review_rejects_agentic_mode_when_not_local_queue(client, monkeypatch):
     tc, _ = client
     monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    _configure_repo(tc)
     resp = tc.post("/api/review", json={
         "pr_number": 1,
         "repo": "org/a",
@@ -467,7 +547,12 @@ def test_review_rejects_agentic_mode_when_not_local_queue(client, monkeypatch):
 
 def test_review_rejects_local_queue_when_worker_secret_missing(client):
     tc, _ = client
-    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": ""})
+    tc.put("/api/settings", json={
+        "github_token": "t",
+        "repos": ["org/a"],
+        "llm_execution_mode": "local_queue",
+        "llm_worker_secret": "",
+    })
     resp = tc.post("/api/review", json={
         "pr_number": 1,
         "repo": "org/a",
@@ -480,7 +565,12 @@ def test_review_rejects_local_queue_when_worker_secret_missing(client):
 
 def test_agentic_review_local_queue_requires_worker_secret(client):
     tc, _ = client
-    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": ""})
+    tc.put("/api/settings", json={
+        "github_token": "t",
+        "repos": ["org/a"],
+        "llm_execution_mode": "local_queue",
+        "llm_worker_secret": "",
+    })
     resp = tc.post("/api/review", json={
         "pr_number": 7,
         "repo": "org/a",
@@ -495,7 +585,12 @@ def test_agentic_review_local_queue_requires_worker_secret(client):
 
 def test_review_local_queue_preserves_agentic_request_fields(client):
     tc, _ = client
-    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+    tc.put("/api/settings", json={
+        "github_token": "t",
+        "repos": ["org/a"],
+        "llm_execution_mode": "local_queue",
+        "llm_worker_secret": "secret",
+    })
     job = tc.post("/api/review", json={
         "pr_number": 7,
         "repo": "org/a",
@@ -526,7 +621,12 @@ def test_worker_endpoints_require_secret(client):
 
 def test_queue_lists_local_jobs_with_compact_summary(client):
     tc, _ = client
-    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+    tc.put("/api/settings", json={
+        "github_token": "t",
+        "repos": ["org/a"],
+        "llm_execution_mode": "local_queue",
+        "llm_worker_secret": "secret",
+    })
     tc.post("/api/review", json={
         "pr_number": 9,
         "repo": "org/a",
@@ -590,7 +690,12 @@ def test_worker_claim_requires_configured_secret(client):
 
 def test_worker_cannot_complete_when_secret_is_cleared(client):
     tc, _ = client
-    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+    tc.put("/api/settings", json={
+        "github_token": "t",
+        "repos": ["org/a"],
+        "llm_execution_mode": "local_queue",
+        "llm_worker_secret": "secret",
+    })
     job = tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+x"}).json()
     tc.put("/api/settings", json={"llm_worker_secret": ""})
     resp = tc.post(
@@ -670,6 +775,7 @@ def test_review_is_saved_to_history(client, monkeypatch):
     tc, main = client
     monkeypatch.setenv("OPENROUTER_API_KEY", "key")
     tc.put("/api/settings", json={"compliance_policies": {"default": {"enabled": False}, "repos": {"org/a": {"enabled": True}}}})
+    _configure_repo(tc)
 
     class FakeEngine:
         def review(self, req):
@@ -1036,6 +1142,7 @@ def test_rate_limit_review_blocks_after_limit(client, monkeypatch):
     monkeypatch.setenv("RATE_LIMIT_REQUESTS", "2")
     monkeypatch.setenv("RATE_LIMIT_WINDOW", "60")
     _reset_rate_limit()
+    _configure_repo(tc)
 
     class FakeEngine:
         def review(self, req):
@@ -1070,6 +1177,7 @@ def test_rate_limit_disabled_when_zero(client, monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "key")
     monkeypatch.setenv("RATE_LIMIT_REQUESTS", "0")
     _reset_rate_limit()
+    _configure_repo(tc)
 
     body = {"pr_number": 1, "repo": "org/a", "title": "t", "diff": "+x"}
     for _ in range(5):

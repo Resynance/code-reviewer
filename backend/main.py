@@ -591,6 +591,7 @@ def create_review(body: ReviewRequestBody):
         _require_local_queue_configured()
     if executor == "inline" and not config_store.get_llm_api_key():
         raise HTTPException(status_code=400, detail="LLM API key not set")
+    _token_for(body.repo)
     effective = _review_body_with_repo_defaults(body)
     job = review_jobs.create_job(effective.model_dump(), job_type="review", executor=executor)
     return {"id": job["id"], "status": job["status"]}
@@ -609,13 +610,15 @@ def run_review_job(job_id: str):
         raise HTTPException(status_code=404, detail="Review job not found")
     if job.get("job_type") != "review":
         raise HTTPException(status_code=404, detail="Review job not found")
+    req = job.get("request") or {}
+    _token_for(req.get("repo", ""))
     if job.get("executor") != "inline":
         return job
     if job["status"] != "queued":
         return job
     review_jobs.update_job(job_id, status="running")
     try:
-        result = _execute_review(ReviewRequestBody(**job["request"]), source="api")
+        result = _execute_review(ReviewRequestBody(**req), source="api")
         return review_jobs.update_job(job_id, status="done", result=result)
     except Exception as e:
         return review_jobs.update_job(job_id, status="error", error=str(e))
@@ -627,6 +630,8 @@ def get_review_job(job_id: str):
     job = review_jobs.get_job(job_id)
     if not job or job.get("job_type") != "review":
         raise HTTPException(status_code=404, detail="Review job not found")
+    req = job.get("request") or {}
+    _token_for(req.get("repo", ""))
     if job.get("result"):
         job = dict(job)
         job["result"] = _normalize_result_payload(job["result"])
@@ -658,7 +663,21 @@ def _save_review(request, result, source):
 @app.get("/api/reviews")
 def list_review_history(repo: Optional[str] = None, pr_number: Optional[int] = None, limit: int = Query(default=50, ge=1, le=500)):
     """Return saved review runs (full history), newest first."""
+    if repo:
+        _token_for(repo)
     reviews = review_store.list_reviews(repo=repo, pr_number=pr_number, limit=limit)
+    if not repo:
+        allowed = []
+        for review in reviews:
+            review_repo = review.get("repo")
+            if not review_repo:
+                continue
+            try:
+                _token_for(review_repo)
+            except HTTPException:
+                continue
+            allowed.append(review)
+        reviews = allowed
     return {"reviews": [_normalize_result_payload(review) for review in reviews], "count": len(reviews)}
 
 
