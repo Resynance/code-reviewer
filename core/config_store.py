@@ -165,6 +165,34 @@ def _pg_write(data):
         )
 
 
+def _normalize_config_for_save(data: dict) -> dict:
+    data["repos"] = [r for r in (data.get("repos") or []) if isinstance(r, str)]
+    data["compliance_policies"] = compliance.normalize_policies(data.get("compliance_policies"))
+    data["local_review_agents"] = _normalize_local_review_agents(data.get("local_review_agents"))
+    data["local_agentic_targets"] = _normalize_local_agentic_targets(data.get("local_agentic_targets"))
+    return data
+
+
+def _pg_save_config(update: dict) -> dict:
+    import db
+
+    with db.connect() as conn:
+        # db.connect() uses autocommit for short operations; start an explicit
+        # transaction so SELECT ... FOR UPDATE protects the read/merge/write.
+        with conn.transaction(), conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO app_settings (id, data) VALUES (1, '{}'::jsonb) "
+                "ON CONFLICT (id) DO NOTHING"
+            )
+            cur.execute("SELECT data FROM app_settings WHERE id = 1 FOR UPDATE")
+            row = cur.fetchone()
+            current = _merge(row[0] if row and row[0] else {})
+            current.update(update)
+            current = _normalize_config_for_save(current)
+            cur.execute("UPDATE app_settings SET data = %s WHERE id = 1", (json.dumps(current),))
+            return current
+
+
 def load_config():
     if _is_postgres():
         return _pg_read()
@@ -176,21 +204,11 @@ def save_config(update: dict):
     """Merge `update` into the stored config and persist. Returns the new config."""
     update = dict(update or {})
     if _is_postgres():
-        current = _pg_read()
-        current.update(update)
-        current["repos"] = [r for r in (current.get("repos") or []) if isinstance(r, str)]
-        current["compliance_policies"] = compliance.normalize_policies(current.get("compliance_policies"))
-        current["local_review_agents"] = _normalize_local_review_agents(current.get("local_review_agents"))
-        current["local_agentic_targets"] = _normalize_local_agentic_targets(current.get("local_agentic_targets"))
-        _pg_write(current)
-        return current
+        return _pg_save_config(update)
     with _LOCK:
         current = _read()
         current.update(update)
-        current["repos"] = [r for r in (current.get("repos") or []) if isinstance(r, str)]
-        current["compliance_policies"] = compliance.normalize_policies(current.get("compliance_policies"))
-        current["local_review_agents"] = _normalize_local_review_agents(current.get("local_review_agents"))
-        current["local_agentic_targets"] = _normalize_local_agentic_targets(current.get("local_agentic_targets"))
+        current = _normalize_config_for_save(current)
         _write(current)
         return current
 

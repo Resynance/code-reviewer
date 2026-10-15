@@ -1,6 +1,8 @@
 """Tests for core/config_store.py — persistence, env fallback, repo management."""
 
+import json
 import os
+import sys
 
 
 def test_defaults_when_no_file(cfg):
@@ -78,7 +80,15 @@ def test_postgres_backend_dispatch(cfg, monkeypatch):
     store = {"data": {}}
     monkeypatch.setenv("CONFIG_STORE_BACKEND", "postgres")
     monkeypatch.setattr(config_store, "_pg_read", lambda: config_store._merge(store["data"]))
-    monkeypatch.setattr(config_store, "_pg_write", lambda data: store.__setitem__("data", data))
+
+    def fake_pg_save(update):
+        current = config_store._merge(store["data"])
+        current.update(update)
+        current = config_store._normalize_config_for_save(current)
+        store["data"] = current
+        return current
+
+    monkeypatch.setattr(config_store, "_pg_save_config", fake_pg_save)
 
     cfg.save_config({"github_token": "t", "repos": ["org/a"]})
     assert store["data"]["github_token"] == "t"
@@ -87,6 +97,73 @@ def test_postgres_backend_dispatch(cfg, monkeypatch):
 
     cfg.add_repo("org/b")
     assert set(cfg.get_repos()) == {"org/a", "org/b"}
+
+
+def test_postgres_save_config_merges_under_row_lock(monkeypatch):
+    import config_store
+
+    store = {"data": {"github_token": "existing"}}
+    events = []
+
+    class FakeTransaction:
+        def __enter__(self):
+            events.append("transaction-enter")
+
+        def __exit__(self, exc_type, exc, tb):
+            events.append("transaction-exit")
+            return False
+
+    class FakeCursor:
+        def __enter__(self):
+            events.append("cursor-enter")
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            events.append("cursor-exit")
+            return False
+
+        def execute(self, sql, params=None):
+            normalized = " ".join(sql.lower().split())
+            events.append(normalized)
+            if normalized.startswith("update app_settings"):
+                store["data"] = json.loads(params[0])
+
+        def fetchone(self):
+            return (store["data"],)
+
+    class FakeConn:
+        def __enter__(self):
+            events.append("conn-enter")
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            events.append("conn-exit")
+            return False
+
+        def transaction(self):
+            return FakeTransaction()
+
+        def cursor(self):
+            return FakeCursor()
+
+    class FakeDb:
+        @staticmethod
+        def connect():
+            return FakeConn()
+
+    monkeypatch.setitem(sys.modules, "db", FakeDb)
+
+    saved = config_store._pg_save_config({"webhook_secret": "new"})
+
+    assert saved["github_token"] == "existing"
+    assert saved["webhook_secret"] == "new"
+    assert store["data"]["github_token"] == "existing"
+    assert store["data"]["webhook_secret"] == "new"
+    assert any("select data from app_settings where id = 1 for update" == event for event in events)
+    assert events.index("transaction-enter") < events.index(
+        "select data from app_settings where id = 1 for update"
+    )
+    assert events.index("update app_settings set data = %s where id = 1") < events.index("transaction-exit")
 
 
 def test_save_and_load_roundtrip(cfg):
