@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { api } from '../lib/api.js'
 import { useMediaQuery } from '../lib/useMediaQuery.js'
-
-const SEV_COLORS = { critical: '#EF4444', high: '#F97316', medium: '#EAB308', low: '#6366F1' }
+import { severityColor, severityLabel } from '../lib/severity.js'
 
 export default function AssessmentPage() {
   const isMobile = useMediaQuery('(max-width: 860px)')
@@ -395,7 +394,7 @@ function AssessmentResult({ result }) {
           >
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {result.vulnerabilities.map((v, i) => {
-                const color = SEV_COLORS[v.severity] || 'var(--text-2)'
+                const color = severityColor(v.severity)
                 return (
                   <div key={i} style={{
                     border: `1px solid ${color}33`, borderLeft: `3px solid ${color}`,
@@ -408,7 +407,7 @@ function AssessmentResult({ result }) {
                       <span style={{
                         fontSize: 10, fontWeight: 600, letterSpacing: '0.05em',
                         color, background: `${color}20`, padding: '2px 6px', borderRadius: 4,
-                      }}>{v.severity.toUpperCase()}</span>
+                      }}>{severityLabel(v.severity)}</span>
                       <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--text)' }}>{v.title}</span>
                     </div>
                     <div style={{ fontSize: 13, color: 'var(--text)', marginBottom: 6, lineHeight: 1.5 }}>{v.description}</div>

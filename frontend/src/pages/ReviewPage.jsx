@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { api } from '../lib/api.js'
 import { useMediaQuery } from '../lib/useMediaQuery.js'
+import { severityColor, severityLabel } from '../lib/severity.js'
 
 // Map a stored history record to the live result shape the panel renders.
 // (History persists `past_decisions`; a fresh run returns `past_decisions_applied`.)
@@ -730,8 +731,7 @@ function AgentResultCard({ agent }) {
 }
 
 function IssueCard({ issue, selected, onToggle, readOnly = false, extra = '' }) {
-  const sevColors = { critical: '#EF4444', high: '#F97316', medium: '#EAB308', low: '#6366F1' }
-  const color = sevColors[issue.severity] || 'var(--text-2)'
+  const color = severityColor(issue.severity)
   return (
     <div style={{
       border: `1px solid ${color}33`, borderLeft: `3px solid ${color}`,
@@ -746,7 +746,7 @@ function IssueCard({ issue, selected, onToggle, readOnly = false, extra = '' }) 
         <span style={{
           fontSize: 10, fontWeight: 600, letterSpacing: '0.05em',
           color, background: `${color}20`, padding: '2px 6px', borderRadius: 4,
-        }}>{issue.severity.toUpperCase()}</span>
+        }}>{severityLabel(issue.severity)}</span>
         <code style={{ fontSize: 12, color: 'var(--text-2)' }}>{issue.file}</code>
         {issue.past_decision_ref && (
           <span style={{ fontSize: 11, color: 'var(--accent)', marginLeft: 'auto' }}>

@@ -412,8 +412,10 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
                 return path
         return ""
 
-    for line in text.splitlines():
+    lines = text.splitlines()
+    for idx, line in enumerate(lines):
         ll = line.lower()
+        local_text = "\n".join(lines[max(0, idx - 2):idx + 3]).lower()
         if _LOG_RE.search(ll) and any(term in ll for term in all_phi_terms):
             add(
                 "phi_logging",
@@ -444,7 +446,7 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
                 file=evidence_for(["api", "client", "service"]),
                 bucket="encryption_gaps",
             )
-        if _ROUTE_RE.search(ll) and any(term in ll for term in all_phi_terms) and not _AUTH_RE.search(lower_text):
+        if _ROUTE_RE.search(ll) and any(term in ll for term in all_phi_terms) and not _AUTH_RE.search(local_text):
             add(
                 "access_control",
                 "high" if mode == "review" else "medium",
@@ -454,7 +456,7 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
                 file=evidence_for(["api", "route", "controller"]),
                 bucket="access_control_gaps",
             )
-        if any(term in ll for term in all_phi_terms) and any(word in ll for word in ("update", "delete", "create", "write")) and not _AUDIT_RE.search(lower_text):
+        if any(term in ll for term in all_phi_terms) and any(word in ll for word in ("update", "delete", "create", "write")) and not _AUDIT_RE.search(local_text):
             add(
                 "audit_trail",
                 "medium",
@@ -484,7 +486,7 @@ def _scan_text(text: str, file_paths: Iterable[str], policy: dict, *, mode: str)
                 file=evidence_for(["hl7", "integration", "listener", "socket", "client"]),
                 bucket="hl7_transport_gaps",
             )
-        if (_HL7_MESSAGE_RE.search(line) or _HL7_SEGMENT_RE.search(line)) and not _HL7_VALIDATION_RE.search(lower_text):
+        if (_HL7_MESSAGE_RE.search(line) or _HL7_SEGMENT_RE.search(line)) and not _HL7_VALIDATION_RE.search(local_text):
             add(
                 "hl7_validation",
                 "medium",

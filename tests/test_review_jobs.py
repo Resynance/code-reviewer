@@ -1,6 +1,6 @@
 """Tests for core/review_jobs.py queue transitions."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import sys
 
 import pytest
@@ -31,6 +31,32 @@ def test_claim_next_job_marks_running(jobs):
     assert claimed["status"] == "running"
     assert claimed["claimed_by"] == "mac"
     assert claimed["started_at"]
+
+
+def test_claim_next_job_reclaims_stale_running_job(jobs, monkeypatch):
+    monkeypatch.setenv("REVIEW_JOB_RUNNING_TIMEOUT_SECONDS", "60")
+    first = jobs.create_job({"repo": "org/a"}, job_type="review", executor="local_queue")
+    claimed = jobs.claim_next_job(job_types=["review"], executor="local_queue", worker_id="mac-1")
+    assert claimed["id"] == first["id"]
+
+    stale = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    data = jobs._file_read()
+    data[0]["started_at"] = stale
+    data[0]["updated_at"] = stale
+    jobs._file_write(data)
+
+    reclaimed = jobs.claim_next_job(job_types=["review"], executor="local_queue", worker_id="mac-2")
+    assert reclaimed["id"] == first["id"]
+    assert reclaimed["status"] == "running"
+    assert reclaimed["claimed_by"] == "mac-2"
+
+
+def test_claim_next_job_does_not_reclaim_fresh_running_job(jobs, monkeypatch):
+    monkeypatch.setenv("REVIEW_JOB_RUNNING_TIMEOUT_SECONDS", "3600")
+    jobs.create_job({"repo": "org/a"}, job_type="review", executor="local_queue")
+    jobs.claim_next_job(job_types=["review"], executor="local_queue", worker_id="mac-1")
+
+    assert jobs.claim_next_job(job_types=["review"], executor="local_queue", worker_id="mac-2") is None
 
 
 def test_update_job_marks_completed(jobs):
@@ -99,3 +125,63 @@ def test_pg_create_auto_ensures_queue_schema(monkeypatch):
     assert "alter table public.review_jobs" in calls[1][0].lower()
     assert "create index if not exists review_jobs_queue_idx" in calls[2][0].lower()
     assert "insert into review_jobs (job_type, executor, request)" in calls[3][0].lower()
+
+
+def test_pg_claim_next_considers_stale_running_jobs(monkeypatch):
+    monkeypatch.setenv("REVIEW_STORE_BACKEND", "postgres")
+    monkeypatch.setenv("REVIEW_JOB_RUNNING_TIMEOUT_SECONDS", "60")
+    monkeypatch.setattr(review_jobs, "_PG_SCHEMA_READY", True)
+
+    now = datetime.now(timezone.utc)
+    calls = []
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql, params=None):
+            calls.append((sql, params))
+
+        def fetchone(self):
+            return (
+                "123",
+                "review",
+                "local_queue",
+                "running",
+                {"repo": "org/a"},
+                None,
+                None,
+                "mac",
+                now,
+                None,
+                now,
+                now,
+            )
+
+    class FakeConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    class FakeDb:
+        @staticmethod
+        def connect():
+            return FakeConn()
+
+    monkeypatch.setitem(sys.modules, "db", FakeDb)
+
+    job = review_jobs.claim_next_job(job_types=["review"], executor="local_queue", worker_id="mac")
+
+    assert job["id"] == "123"
+    sql, params = calls[0]
+    assert "status = 'running'" in sql
+    assert "updated_at <= now()" in sql
+    assert params == [60, "local_queue", ["review"], "mac"]
