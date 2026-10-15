@@ -280,8 +280,14 @@ class AssessmentEngine:
                 params={"recursive": "1"},
             )
             r.raise_for_status()
+            tree_payload = r.json()
+            if tree_payload.get("truncated"):
+                raise RuntimeError(
+                    "GitHub returned a truncated repository tree; refusing to run "
+                    "an incomplete assessment or compliance scan."
+                )
             all_blobs = [
-                item for item in r.json().get("tree", [])
+                item for item in tree_payload.get("tree", [])
                 if item.get("type") == "blob"
             ]
 
