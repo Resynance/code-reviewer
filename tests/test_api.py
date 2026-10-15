@@ -406,6 +406,30 @@ def test_review_enqueues_and_runs(client, monkeypatch):
     assert polled["status"] == "done" and polled["result"]["pr_number"] == 7
 
 
+def test_review_run_marks_job_error_when_history_save_fails(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+
+    class FakeEngine:
+        def review(self, req):
+            return ReviewResult(pr_number=req.pr_number, summary="ok", approved=True,
+                                confidence=0.8, issues=[], suggestions=[], past_decisions_applied=[],
+                                compliance_review={"enabled": req.compliance})
+
+    def fail_save(record):
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr(main, "get_engine", lambda: FakeEngine())
+    monkeypatch.setattr(main.review_store, "save_review", fail_save)
+
+    job = tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+x"}).json()
+    run = tc.post(f"/api/review/{job['id']}/run").json()
+
+    assert run["status"] == "error"
+    assert "store down" in run["error"]
+    assert tc.get("/api/reviews").json()["count"] == 0
+
+
 def test_review_local_queue_skips_inline_run_and_can_complete_via_worker(client, monkeypatch):
     tc, main = client
     tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
@@ -448,6 +472,40 @@ def test_review_local_queue_skips_inline_run_and_can_complete_via_worker(client,
     hist = tc.get("/api/reviews", params={"repo": "org/a"}).json()
     assert hist["count"] == 1
     assert hist["reviews"][0]["source"] == "local_worker"
+
+
+def test_worker_complete_fails_job_when_review_history_save_fails(client, monkeypatch):
+    tc, main = client
+    tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
+
+    def fail_save(record):
+        raise RuntimeError("store down")
+
+    job = tc.post("/api/review", json={"pr_number": 7, "repo": "org/a", "title": "t", "diff": "+x"}).json()
+    tc.post("/worker/llm/claim", headers={"X-Worker-Secret": "secret"}, json={"worker_id": "mac-mini"})
+    monkeypatch.setattr(main.review_store, "save_review", fail_save)
+
+    resp = tc.post(
+        f"/worker/llm/{job['id']}/complete",
+        headers={"X-Worker-Secret": "secret"},
+        json={"result": {
+            "pr_number": 7,
+            "summary": "queued ok",
+            "approved": True,
+            "confidence": 0.75,
+            "issues": [],
+            "suggestions": [],
+            "past_decisions_applied": [],
+            "compliance_review": {"enabled": False},
+            "model": "local/model",
+        }},
+    )
+
+    assert resp.status_code == 502
+    polled = tc.get(f"/api/review/{job['id']}").json()
+    assert polled["status"] == "error"
+    assert "Failed to persist result: store down" == polled["error"]
+    assert tc.get("/api/reviews").json()["count"] == 0
 
 
 def test_review_rejects_agentic_mode_when_not_local_queue(client, monkeypatch):
@@ -894,6 +952,25 @@ def test_assessment_enqueues_and_runs(client, monkeypatch):
 
     polled = tc.get(f"/api/assessments/{job['id']}").json()
     assert polled["status"] == "done" and polled["result"]["repo"] == "org/a"
+
+
+def test_assessment_run_marks_job_error_when_history_save_fails(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    tc.put("/api/settings", json={"github_token": "t", "repos": ["org/a"]})
+    monkeypatch.setattr(main, "AssessmentEngine", _fake_assessment_engine())
+
+    def fail_save(record):
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr(main.assessment_store, "save_assessment", fail_save)
+
+    job = tc.post("/api/assessments", json={"repo": "org/a"}).json()
+    run = tc.post(f"/api/assessments/{job['id']}/run").json()
+
+    assert run["status"] == "error"
+    assert "store down" in run["error"]
+    assert tc.get("/api/assessments", params={"repo": "org/a"}).json()["count"] == 0
 
 
 def test_assessment_rejects_unconfigured_repo(client, monkeypatch):

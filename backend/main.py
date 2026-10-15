@@ -426,42 +426,36 @@ def _summarize_job(job: dict) -> dict:
 
 def _save_review_payload(request_payload: dict, result_payload: dict, source: str):
     """Persist a review payload without requiring a live ReviewResult object."""
-    try:
-        result_payload = _normalize_result_payload(result_payload)
-        review_store.save_review({
-            "repo": request_payload.get("repo"),
-            "pr_number": result_payload.get("pr_number", request_payload.get("pr_number")),
-            "title": request_payload.get("title"),
-            "author": request_payload.get("author", "unknown"),
-            "approved": result_payload.get("approved"),
-            "confidence": result_payload.get("confidence"),
-            "summary": result_payload.get("summary"),
-            "issues": result_payload.get("issues") or [],
-            "suggestions": result_payload.get("suggestions") or [],
-            "past_decisions": result_payload.get("past_decisions_applied") or [],
-            "compliance_review": result_payload.get("compliance_review") or {},
-            "source": source,
-            "model": result_payload.get("model"),
-        })
-    except Exception:
-        pass
+    result_payload = _normalize_result_payload(result_payload)
+    review_store.save_review({
+        "repo": request_payload.get("repo"),
+        "pr_number": result_payload.get("pr_number", request_payload.get("pr_number")),
+        "title": request_payload.get("title"),
+        "author": request_payload.get("author", "unknown"),
+        "approved": result_payload.get("approved"),
+        "confidence": result_payload.get("confidence"),
+        "summary": result_payload.get("summary"),
+        "issues": result_payload.get("issues") or [],
+        "suggestions": result_payload.get("suggestions") or [],
+        "past_decisions": result_payload.get("past_decisions_applied") or [],
+        "compliance_review": result_payload.get("compliance_review") or {},
+        "source": source,
+        "model": result_payload.get("model"),
+    })
 
 
 def _save_assessment_payload(result_payload: dict):
-    try:
-        result_payload = _normalize_result_payload(result_payload)
-        assessment_store.save_assessment({
-            "repo": result_payload.get("repo"),
-            "summary": result_payload.get("summary"),
-            "purpose": result_payload.get("purpose"),
-            "tech_stack": result_payload.get("tech_stack") or [],
-            "key_components": result_payload.get("key_components") or [],
-            "vulnerabilities": result_payload.get("vulnerabilities") or [],
-            "compliance_review": result_payload.get("compliance_review") or {},
-            "model": result_payload.get("model"),
-        })
-    except Exception:
-        logger.warning("Failed to persist worker assessment for %s", result_payload.get("repo"), exc_info=True)
+    result_payload = _normalize_result_payload(result_payload)
+    assessment_store.save_assessment({
+        "repo": result_payload.get("repo"),
+        "summary": result_payload.get("summary"),
+        "purpose": result_payload.get("purpose"),
+        "tech_stack": result_payload.get("tech_stack") or [],
+        "key_components": result_payload.get("key_components") or [],
+        "vulnerabilities": result_payload.get("vulnerabilities") or [],
+        "compliance_review": result_payload.get("compliance_review") or {},
+        "model": result_payload.get("model"),
+    })
 
 
 def _persist_local_job_result(job: dict, result_payload: dict):
@@ -634,25 +628,22 @@ def get_review_job(job_id: str):
 
 
 def _save_review(request, result, source):
-    """Persist a review run (best-effort — never fail the review on a save error)."""
-    try:
-        review_store.save_review({
-            "repo": request.repo,
-            "pr_number": request.pr_number,
-            "title": request.title,
-            "author": request.author,
-            "approved": result.approved,
-            "confidence": result.confidence,
-            "summary": result.summary,
-            "issues": result.issues,
-            "suggestions": result.suggestions,
-            "past_decisions": result.past_decisions_applied,
-            "compliance_review": result.compliance_review,
-            "source": source,
-            "model": result.model,
-        })
-    except Exception:
-        pass
+    """Persist a review run before reporting the job as successful."""
+    review_store.save_review({
+        "repo": request.repo,
+        "pr_number": request.pr_number,
+        "title": request.title,
+        "author": request.author,
+        "approved": result.approved,
+        "confidence": result.confidence,
+        "summary": result.summary,
+        "issues": result.issues,
+        "suggestions": result.suggestions,
+        "past_decisions": result.past_decisions_applied,
+        "compliance_review": result.compliance_review,
+        "source": source,
+        "model": result.model,
+    })
 
 
 @app.get("/api/reviews")
@@ -928,19 +919,16 @@ def _execute_assessment(body: AssessmentRequestBody) -> dict:
         compliance=body.compliance,
     )
     result = engine.assess(request)
-    try:
-        assessment_store.save_assessment({
-            "repo": result.repo,
-            "summary": result.summary,
-            "purpose": result.purpose,
-            "tech_stack": result.tech_stack,
-            "key_components": result.key_components,
-            "vulnerabilities": result.vulnerabilities,
-            "compliance_review": result.compliance_review,
-            "model": result.model,
-        })
-    except Exception:
-        logger.warning("Failed to persist assessment for %s", result.repo, exc_info=True)
+    assessment_store.save_assessment({
+        "repo": result.repo,
+        "summary": result.summary,
+        "purpose": result.purpose,
+        "tech_stack": result.tech_stack,
+        "key_components": result.key_components,
+        "vulnerabilities": result.vulnerabilities,
+        "compliance_review": result.compliance_review,
+        "model": result.model,
+    })
     return {
         "repo": result.repo,
         "summary": result.summary,
@@ -1155,7 +1143,12 @@ def complete_llm_job(
     if job.get("job_type") == "compliance_followup":
         return review_jobs.update_job(job_id, status="done", result=body.result)
     normalized = _normalize_result_payload(body.result)
-    _persist_local_job_result(job, normalized)
+    try:
+        _persist_local_job_result(job, normalized)
+    except Exception as e:
+        logger.warning("Failed to persist local worker result for %s", job_id, exc_info=True)
+        review_jobs.update_job(job_id, status="error", error=f"Failed to persist result: {e}")
+        raise HTTPException(status_code=502, detail="Failed to persist worker result")
     return review_jobs.update_job(job_id, status="done", result=normalized)
 
 
