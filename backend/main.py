@@ -711,6 +711,12 @@ def get_assessment_job(job_id: str):
     job = review_jobs.get_job(job_id)
     if not job or job.get("job_type") != "assessment":
         raise HTTPException(status_code=404, detail="Assessment job not found")
+    req = job.get("request") or {}
+    result = job.get("result") or {}
+    repo = req.get("repo") or result.get("repo")
+    if not repo:
+        raise HTTPException(status_code=400, detail="Assessment job has no repo")
+    _token_for(repo)
     if job.get("result"):
         job = dict(job)
         job["result"] = _normalize_result_payload(job["result"])
@@ -720,7 +726,21 @@ def get_assessment_job(job_id: str):
 @app.get("/api/assessments")
 def list_assessments_history(repo: Optional[str] = None, limit: int = Query(default=20, ge=1, le=100)):
     """Return saved assessments, newest first."""
+    if repo:
+        _token_for(repo)
     items = assessment_store.list_assessments(repo=repo, limit=limit)
+    if not repo:
+        allowed = []
+        for item in items:
+            item_repo = item.get("repo")
+            if not item_repo:
+                continue
+            try:
+                _token_for(item_repo)
+            except HTTPException:
+                continue
+            allowed.append(item)
+        items = allowed
     return {"assessments": [_normalize_result_payload(item) for item in items], "count": len(items)}
 
 
