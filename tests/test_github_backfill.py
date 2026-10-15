@@ -7,10 +7,11 @@ import github_backfill as gb
 
 
 class FakeResp:
-    def __init__(self, status_code, json_data=None, text=""):
+    def __init__(self, status_code, json_data=None, text="", headers=None):
         self.status_code = status_code
         self._json = json_data
         self.text = text
+        self.headers = headers or {}
 
     def json(self):
         return self._json
@@ -212,6 +213,22 @@ def test_fetch_pr_builds_diff_from_files_on_406(monkeypatch):
     assert "+y" in data["diff"]
     assert "no textual diff available" in data["diff"]  # binary file
     assert data["files_changed"] == ["a.py", "big.bin"]
+
+
+def test_fetch_pr_rejects_partial_file_fallback_on_406(monkeypatch):
+    meta = FakeResp(200, {"number": 1, "title": "huge", "body": "",
+                          "user": {"login": "d"}, "base": {"ref": "main"}})
+    diff406 = FakeResp(406, {"message": "Sorry, the diff exceeded the maximum number of files (300)."}, "")
+    files = {
+        1: FakeResp(
+            200,
+            [{"filename": "a.py", "status": "modified", "patch": "@@ -1 +1 @@\n-x\n+y"}],
+            headers={"link": '<https://api.github.com/repos/org/repo/pulls/1/files?page=2>; rel="next"'},
+        ),
+    }
+    monkeypatch.setattr(httpx, "Client", lambda **kw: RouteClient(meta, diff406, files))
+    with pytest.raises(RuntimeError, match="partial diff"):
+        gb.fetch_pr("org/repo", 1, token="t", max_file_pages=1)
 
 
 def test_fetch_pr_missing_token():
