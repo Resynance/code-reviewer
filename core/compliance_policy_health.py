@@ -89,7 +89,7 @@ class PolicyHealthAnalyzer:
             files,
             include_test_docs_findings=bool(self.policy.get("include_test_docs_findings")),
         )
-        manifest_packages = self._extract_manifest_packages(files)
+        manifest_packages = self._extract_manifest_packages(scanned_files)
         code_vendors = self._extract_code_vendors(scanned_files)
         all_vendors = {*manifest_packages, *code_vendors}
 

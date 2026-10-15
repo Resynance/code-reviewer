@@ -104,6 +104,25 @@ def test_ignores_docs_and_tests_when_policy_excludes_them():
     assert any(f["category"] == "signal_policy" for f in result["findings"])
 
 
+def test_manifest_vendors_respect_docs_and_tests_filter():
+    files = {
+        "tests/fixtures/package.json": '{"dependencies": {"segment": "^1.0"}}',
+        "src/main.py": "pass",
+    }
+    policy = {"disallowed_vendors": ["segment"]}
+
+    result = health.analyze_policy_health("acme/app", [], files, policy)
+    assert result["vendors"]["disallowed_hits"] == []
+
+    included = health.analyze_policy_health(
+        "acme/app",
+        [],
+        files,
+        {**policy, "include_test_docs_findings": True},
+    )
+    assert included["vendors"]["disallowed_hits"] == ["segment"]
+
+
 def test_generic_auth_audit_and_transport_markers_satisfy_example_signals():
     files = {
         "backend/main.py": (
