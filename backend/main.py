@@ -506,7 +506,8 @@ def _compliance_issue_body(analysis: dict, analysis_id: int) -> str:
     if findings:
         lines.extend(["", "## Policy Health Findings"])
         for item in findings[:10]:
-            lines.append(f"- [{item.get('severity', 'info')}] {item.get('title', 'Finding')}: {item.get('recommendation') or item.get('evidence') or ''}".rstrip())
+            recommendation = item.get("recommendation") or "Review the saved analysis details in ReviewBot."
+            lines.append(f"- [{item.get('severity', 'info')}] {item.get('title', 'Finding')}: {recommendation}".rstrip())
     blind_spots = coverage.get("blind_spots") or []
     if blind_spots:
         lines.extend(["", "## Coverage Blind Spots"])
@@ -518,14 +519,7 @@ def _compliance_issue_body(analysis: dict, analysis_id: int) -> str:
             lines.append(f"- [{item.get('severity', 'info')}] {item.get('reason', item.get('type', 'Suggestion'))}")
     lines.extend([
         "",
-        "## Raw Analysis",
-        "```json",
-        json.dumps({
-            "health": health,
-            "coverage": coverage,
-            "suggestions": suggestions,
-        }, indent=2),
-        "```",
+        "Detailed evidence and raw analysis are retained in ReviewBot under the saved analysis ID above.",
     ])
     return "\n".join(lines)
 

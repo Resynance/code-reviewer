@@ -254,9 +254,21 @@ def test_create_compliance_issue(configured_repo):
         lambda analysis_id: {
             "id": analysis_id,
             "repo": "acme/app",
-            "health": {"score": 85, "findings": [{"severity": "high", "title": "Missing encryption", "recommendation": "Add TLS"}]},
+            "health": {
+                "score": 85,
+                "findings": [{
+                    "severity": "high",
+                    "title": "Missing encryption",
+                    "recommendation": "Add TLS",
+                    "evidence": "src/config.py: API_TOKEN=super-secret",
+                }],
+            },
             "coverage": {"coverage_score": 70, "blind_spots": [{"severity": "medium", "category": "audit_trail", "suggestion": "Add audit logging"}]},
-            "suggestions": [{"severity": "low", "reason": "Add vendor to approved list"}],
+            "suggestions": [{
+                "severity": "low",
+                "reason": "Add vendor to approved list",
+                "evidence": "package.json: \"secret-sdk\": \"1.0.0\"",
+            }],
             "created_at": "2024-01-01T00:00:00Z",
         },
     )
@@ -276,6 +288,10 @@ def test_create_compliance_issue(configured_repo):
     assert seen["repo"] == "acme/app"
     assert "Compliance follow-up for acme/app" in seen["title"]
     assert "Policy Health Findings" in seen["body"]
+    assert "Raw Analysis" not in seen["body"]
+    assert "super-secret" not in seen["body"]
+    assert "secret-sdk" not in seen["body"]
+    assert "Detailed evidence and raw analysis are retained in ReviewBot" in seen["body"]
 
 
 def test_create_compliance_issue_enqueues_local_followup(configured_repo):
