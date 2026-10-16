@@ -648,6 +648,29 @@ def test_github_token_use_requires_configured_repo(client):
     assert "not configured" in resp.json()["detail"]
 
 
+def test_github_token_multi_token_unknown_owner_fails_closed(client, monkeypatch):
+    tc, main = client
+    config_store.save_config({
+        "github_tokens": [
+            {"username": "alice", "orgs": ["acme"], "token": "tok_alice"},
+            {"username": "bob", "orgs": ["globex"], "token": "tok_bob"},
+        ],
+        "repos": ["unknown/private"],
+    })
+    called = False
+
+    def fake_post_comment(repo, pr_number, body, token):
+        nonlocal called
+        called = True
+        return "https://github.com/unknown/private/pull/5#c1"
+
+    monkeypatch.setattr(main, "post_pr_comment", fake_post_comment)
+    resp = tc.post("/api/pr-comment", json={"repo": "unknown/private", "pr_number": 5, "body": "hi"})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "GitHub token not configured"
+    assert called is False
+
+
 def test_issue_requires_token(client):
     tc, _ = client
     assert tc.post("/api/issue", json={"repo": "org/a", "title": "t", "body": "b"}).status_code == 400

@@ -268,15 +268,15 @@ def get_github_token() -> str:
 def get_token_for(owner: str) -> "str | None":
     """Return the best token for a given GitHub owner (username or org).
 
-    Matches by username first, then by org membership. Falls back to the
-    first token if no explicit match (handles single-token deployments and
-    repos whose owner wasn't seen at token-add time).
+    Matches by username first, then by org membership. Single-token
+    deployments keep their legacy catch-all behavior, but multi-token setups
+    must fail closed instead of silently using another owner's token.
     """
     tokens = get_github_tokens()
     for entry in tokens:
         if owner == entry.get("username") or owner in entry.get("orgs", []):
             return entry["token"]
-    if tokens:
+    if len(tokens) == 1:
         return tokens[0]["token"]
     # Legacy fallback
     return load_config().get("github_token") or os.getenv("GITHUB_TOKEN", "") or None

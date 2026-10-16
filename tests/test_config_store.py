@@ -303,10 +303,17 @@ def test_get_token_for_matches_org(cfg):
     assert cfg.get_token_for("startup") == "tok_alice"
 
 
-def test_get_token_for_falls_back_to_first(cfg):
+def test_get_token_for_single_token_falls_back_to_first(cfg):
     cfg.add_github_token("alice", ["acme"], "tok_alice")
-    # "unknown-org" not in any token's list → first token
+    # Single-token deployments remain catch-all for collaborator repos whose
+    # owner was not captured when the token was added.
     assert cfg.get_token_for("unknown-org") == "tok_alice"
+
+
+def test_get_token_for_multi_token_unknown_owner_fails_closed(cfg):
+    cfg.add_github_token("alice", ["acme"], "tok_alice")
+    cfg.add_github_token("bob", ["globex"], "tok_bob")
+    assert cfg.get_token_for("unknown-org") is None
 
 
 def test_get_token_for_returns_none_when_empty(cfg):
