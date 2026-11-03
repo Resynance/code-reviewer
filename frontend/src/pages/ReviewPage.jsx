@@ -94,6 +94,12 @@ export default function ReviewPage() {
     else setForm(f => ({ ...f, [k]: v }))
   }
 
+  const setManualRepo = (repo) => {
+    currentRepoRef.current = repo
+    setForm(f => ({ ...f, repo }))
+    setPrError(null)
+  }
+
   // Load configured repos and model slots on mount.
   useEffect(() => {
     api.listRepos().then(r => {
@@ -146,7 +152,11 @@ export default function ReviewPage() {
     setResult(null)
     setSavedAt(null)
     setError(null)
-    if (!number) return
+    if (!number) {
+      setLoadingPr(false)
+      setPrError(null)
+      return
+    }
     setLoadingPr(true); setPrError(null)
     try {
       const data = await api.repoPr(repo, number)
@@ -244,7 +254,7 @@ export default function ReviewPage() {
               {repos.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
           ) : (
-            <input value={form.repo} onChange={e => set('repo', e.target.value)} style={inputStyle} placeholder="owner/repo" />
+            <input value={form.repo} onChange={e => setManualRepo(e.target.value)} style={inputStyle} placeholder="owner/repo" />
           )}
         </Field>
         <Field label="PR Number" >
