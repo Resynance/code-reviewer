@@ -214,6 +214,17 @@ def test_balance_unconfigured(client):
     assert tc.get("/api/balance").json() == {"configured": False}
 
 
+def test_balance_requires_admin_when_auth_enabled(client, monkeypatch):
+    tc, _ = client
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", AUTH_SECRET)
+    monkeypatch.setenv("ALLOWED_EMAILS", "admin@co.com,user@co.com")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+
+    resp = tc.get("/api/balance", headers=_auth_headers("user@co.com"))
+
+    assert resp.status_code == 403
+
+
 def test_review_inline_accepts_saved_llm_api_key(client, monkeypatch):
     tc, main = client
     tc.put("/api/settings", json={"llm_api_key": "local-llm"})
