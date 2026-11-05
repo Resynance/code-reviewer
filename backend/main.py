@@ -1345,7 +1345,7 @@ def repo_pr(repo: str, number: int):
         raise HTTPException(status_code=502, detail=str(e))
 
 
-@app.get("/api/balance")
+@app.get("/api/balance", dependencies=[Depends(require_admin)])
 async def get_balance():
     """Return the remaining credit balance for the configured OpenRouter key."""
     key = os.getenv("OPENROUTER_API_KEY")
