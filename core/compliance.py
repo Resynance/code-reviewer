@@ -106,7 +106,17 @@ def normalize_policies(raw) -> dict:
 def policy_for_repo(policies: dict, repo: str) -> dict:
     normalized = normalize_policies(policies)
     merged = copy.deepcopy(normalized["default"])
+    repo_key = (repo or "").strip().lower()
     repo_policy = normalized["repos"].get(repo, {})
+    if not repo_policy and repo_key:
+        repo_policy = next(
+            (
+                policy
+                for configured_repo, policy in normalized["repos"].items()
+                if configured_repo.strip().lower() == repo_key
+            ),
+            {},
+        )
     for key, value in repo_policy.items():
         merged[key] = value
     return _normalize_policy(merged)

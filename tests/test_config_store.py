@@ -369,6 +369,19 @@ def test_get_compliance_policy_merges_repo_override(cfg):
     assert policy["notes"] == "repo note"
 
 
+def test_get_compliance_policy_matches_repo_case_insensitively(cfg):
+    cfg.save_config({
+        "compliance_policies": {
+            "default": {"enabled": False, "notes": "default note"},
+            "repos": {"org/a": {"enabled": True, "notes": "repo note"}},
+        }
+    })
+    policy = cfg.get_compliance_policy("Org/A")
+    assert policy["enabled"] is True
+    assert policy["notes"] == "repo note"
+    assert cfg.repo_requires_compliance_review("ORG/A") is True
+
+
 def test_get_compliance_policy_uses_default_when_repo_missing(cfg):
     cfg.save_config({"compliance_policies": {"default": {"enabled": True, "disallowed_vendors": ["segment"]}, "repos": {}}})
     policy = cfg.get_compliance_policy("org/missing")

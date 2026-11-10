@@ -406,6 +406,28 @@ def test_review_enqueues_and_runs(client, monkeypatch):
     assert polled["status"] == "done" and polled["result"]["pr_number"] == 7
 
 
+def test_review_defaults_compliance_policy_case_insensitively(client, monkeypatch):
+    tc, main = client
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    tc.put("/api/settings", json={
+        "compliance_policies": {"default": {"enabled": False}, "repos": {"org/a": {"enabled": True}}},
+    })
+
+    class FakeEngine:
+        def review(self, req):
+            return ReviewResult(pr_number=req.pr_number, summary="ok", approved=True,
+                                confidence=0.8, issues=[], suggestions=[], past_decisions_applied=[],
+                                compliance_review={"enabled": req.compliance, "hipaa_relevant": req.compliance})
+
+    monkeypatch.setattr(main, "get_engine", lambda: FakeEngine())
+
+    job = tc.post("/api/review", json={"pr_number": 7, "repo": "Org/A", "title": "t", "diff": "+x"}).json()
+    run = tc.post(f"/api/review/{job['id']}/run").json()
+
+    assert run["status"] == "done"
+    assert run["result"]["compliance_review"]["enabled"] is True
+
+
 def test_review_local_queue_skips_inline_run_and_can_complete_via_worker(client, monkeypatch):
     tc, main = client
     tc.put("/api/settings", json={"llm_execution_mode": "local_queue", "llm_worker_secret": "secret"})
