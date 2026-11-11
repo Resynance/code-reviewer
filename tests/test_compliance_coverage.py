@@ -47,6 +47,48 @@ def test_counts_deterministic_and_llm_findings_by_category():
     assert not result["blind_spots"]
 
 
+def test_counts_gap_only_items_as_llm_findings():
+    reviews = [
+        _review({
+            "hipaa_findings": [],
+            "access_control_gaps": [
+                {"summary": "Patient route has no auth", "details": "@app.get('/patients')", "file": "api.py"},
+            ],
+        }),
+    ]
+    result = coverage.analyze_coverage("acme/app", reviews, [])
+
+    assert result["llm_count"] == 1
+    assert result["deterministic_count"] == 0
+    assert result["categories"]["access_control"]["llm"] == 1
+    assert result["blind_spots"][0]["category"] == "access_control"
+
+
+def test_does_not_double_count_gap_items_already_in_findings():
+    reviews = [
+        _review({
+            "hipaa_findings": [
+                {
+                    "category": "access_control",
+                    "title": "Patient route has no auth",
+                    "evidence": "@app.get('/patients')",
+                    "file": "api.py",
+                    "source": "deterministic",
+                },
+            ],
+            "access_control_gaps": [
+                {"summary": "Patient route has no auth", "details": "@app.get('/patients')", "file": "api.py"},
+            ],
+        }),
+    ]
+    result = coverage.analyze_coverage("acme/app", reviews, [])
+
+    assert result["deterministic_count"] == 1
+    assert result["llm_count"] == 0
+    assert result["categories"]["access_control"]["total"] == 1
+    assert not result["blind_spots"]
+
+
 def test_includes_assessments_in_analysis():
     assessments = [
         _review({
