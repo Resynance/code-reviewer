@@ -31,6 +31,18 @@ _MEANINGFUL_CATEGORIES = {
     "hl7_manual_review",
 }
 
+_GAP_CATEGORY_BY_KEY = {
+    "phi_exposure_risk": "phi_logging",
+    "encryption_gaps": "encryption",
+    "access_control_gaps": "access_control",
+    "audit_trail_gaps": "audit_trail",
+    "minimum_necessary_gaps": "manual_review",
+    "third_party_baa_risks": "third_party_baa",
+    "hl7_interface_gaps": "hl7_manual_review",
+    "hl7_message_integrity_gaps": "hl7_validation",
+    "hl7_transport_gaps": "hl7_transport",
+}
+
 
 class ComplianceCoverageAnalyzer:
     """Aggregate compliance findings and detect deterministic scanner blind spots."""
@@ -109,11 +121,46 @@ class ComplianceCoverageAnalyzer:
 
     def _findings_from(self, compliance_review: dict) -> list[dict]:
         findings = []
+        seen_finding_keys = set()
         for key in ("hipaa_findings", "hl7_findings"):
             for item in compliance_review.get(key) or []:
                 if isinstance(item, dict):
                     findings.append(item)
+                    seen_finding_keys.add(self._finding_key(item))
+        # LLM compliance output also has structured gap buckets. Gap entries can
+        # be the only place a risk is recorded, so include gap-only items while
+        # avoiding duplicate deterministic/LLM findings already counted above.
+        for key, category in _GAP_CATEGORY_BY_KEY.items():
+            for item in compliance_review.get(key) or []:
+                if not isinstance(item, dict):
+                    continue
+                finding = self._finding_from_gap(item, category)
+                if not finding:
+                    continue
+                if self._finding_key(finding) in seen_finding_keys:
+                    continue
+                findings.append(finding)
+                seen_finding_keys.add(self._finding_key(finding))
         return findings
+
+    def _finding_from_gap(self, item: dict, category: str) -> dict | None:
+        title = str(item.get("summary") or "").strip()
+        evidence = str(item.get("details") or title).strip()
+        if not title and not evidence:
+            return None
+        return {
+            "category": category,
+            "title": title or evidence,
+            "evidence": evidence or title,
+            "file": str(item.get("file") or "").strip(),
+            "source": str(item.get("source") or "llm").strip().lower() or "llm",
+        }
+
+    def _finding_key(self, item: dict) -> tuple[str, str, str]:
+        title = str(item.get("title") or item.get("summary") or "").strip()
+        evidence = str(item.get("evidence") or item.get("details") or title).strip()
+        file = str(item.get("file") or "").strip()
+        return title, evidence, file
 
     def _normalize_category(self, category: str) -> str:
         category = (category or "general").lower().strip()
