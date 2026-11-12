@@ -99,7 +99,13 @@ export default function ReviewPage() {
     api.listRepos().then(r => {
       const list = r.repos || []
       setRepos(list)
-      if (list.length && !currentRepoRef.current) selectRepo(list[0])
+      if (list.length && !currentRepoRef.current) {
+        const defaultRepo = list[0]
+        currentRepoRef.current = defaultRepo
+        // Initial defaulting should not wipe fields the user may have typed
+        // while the repo list was still loading.
+        setForm(f => (f.repo ? f : { ...f, repo: defaultRepo }))
+      }
     }).catch(() => {})
 
     api.getSettings().then(s => {
